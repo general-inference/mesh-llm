@@ -23,7 +23,11 @@ items = [json.loads(line) for line in open(os.environ["PROMPTS"]) if line.strip(
 items = [item for item in items if SPLIT == "all" or item["split"] == SPLIT]
 
 
-def group(category):
+def group(item):
+    """A prompt set may name its own groups (the agent set uses context bands)."""
+    if item.get("group"):
+        return item["group"]
+    category = item["category"]
     return "code" if category in ("code", "coding") else "math" if category == "math" else "prose"
 
 
@@ -72,21 +76,25 @@ once(items[0]["prompt"], 0)
 results = []
 for k, item in enumerate(items):
     result = once(item["prompt"], 1234 + k)
-    result.update(id=item["id"], category=item["category"], group=group(item["category"]))
+    result.update(id=item["id"], category=item.get("category", ""), group=group(item))
     results.append(result)
     if (k + 1) % 20 == 0:
         print(f"{ARM} {k + 1}/{len(items)}", flush=True)
 
 groups = {}
-for name in ["prose", "code", "math", "all"]:
+names = list(dict.fromkeys(r["group"] for r in results))
+for name in sorted(names, key=lambda n: ["prose", "code", "math"].index(n) if n in ("prose", "code", "math") else 9) + ["all"]:
     rows = [r for r in results if name == "all" or r["group"] == name]
     if not rows:
         continue
     decode_s = sum(r["dec_s"] for r in rows)
     tokens = sum(r["dec_tokens"] for r in rows)
     drafted = sum(r["draft"] for r in rows)
+    ttfts = sorted(r["ttft_ms"] for r in rows if r["ttft_ms"] is not None)
     groups[name] = {"n": len(rows), "tok_s": tokens / decode_s if decode_s else None, "dec_tokens": tokens,
-                    "dec_s": decode_s, "accept": sum(r["accepted"] for r in rows) / drafted if drafted else None}
+                    "dec_s": decode_s, "accept": sum(r["accepted"] for r in rows) / drafted if drafted else None,
+                    "ttft_ms_p50": ttfts[len(ttfts) // 2] if ttfts else None,
+                    "prompt_tokens_mean": sum(r["prompt"] or 0 for r in rows) / len(rows)}
     print(f"{ARM:18s} T={TEMP} {SPLIT:6s} {name:5s} n={len(rows):3d} decode {groups[name]['tok_s'] or 0:6.1f} tok/s"
           f"  accept {groups[name]['accept'] or 0:.2f}", flush=True)
 

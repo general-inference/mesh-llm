@@ -23,7 +23,6 @@ import urllib.parse
 import urllib.request
 
 EXPERIMENT = os.environ.get("DFLASH_BENCH_EXPERIMENT", "mesh-llm DFlash defaults — decode speed by commit")
-GROUPS = ("prose", "code", "math", "all")
 ARM_LABELS = {"off": "speculation off", "default": "shipped default"}
 
 
@@ -113,11 +112,19 @@ def fmt(value):
     return "—" if value is None else f"{value:.1f}"
 
 
-def arm_label(arm):
+def split_arm(arm):
+    """(workload, base arm, sampled) for an arm name such as agent_default or d7 or off_t07."""
     sampled = arm.endswith("_t07")
     base = arm.removesuffix("_t07")
+    workload = "agent" if base.startswith("agent_") else "spec-prompts"
+    return workload, base.removeprefix("agent_"), sampled
+
+
+def arm_label(arm):
+    workload, base, sampled = split_arm(arm)
     label = ARM_LABELS.get(base) or f"fixed DFlash block {base.removeprefix('d')}"
-    return label + (" · sampled T=0.7" if sampled else " · greedy")
+    prefix = "agent transcripts · " if workload == "agent" else ""
+    return prefix + label + (" · sampled T=0.7" if sampled else " · greedy")
 
 
 def record(state, matrix, logs, label, here, repo_url, table_md):
@@ -160,19 +167,20 @@ def record(state, matrix, logs, label, here, repo_url, table_md):
             key = f"{rev}:{job['model']}:{job['machine']}:{arm}"
             if key in existing:
                 continue
-            base = arm.removesuffix("_t07")
-            off = arms.get("off_t07" if arm.endswith("_t07") else "off") or {}
+            workload, base, sampled = split_arm(arm)
+            off = arms.get(("agent_" if workload == "agent" else "") + ("off_t07" if sampled else "off")) or {}
             groups, off_groups = result.get("groups") or {}, off.get("groups") or {}
             metrics = {"commit_time_unix": commit["unix"],
                        "gpu_clock_mhz": gpu.get(arm, {}).get("clock_mhz"),
                        "gpu_temp_c": gpu.get(arm, {}).get("temp_c")}
-            for g in GROUPS:
+            for g in groups:
                 tok_s = (groups.get(g) or {}).get("tok_s")
                 metrics[f"decode_tok_s_{g}"] = tok_s
                 metrics[f"acceptance_{g}"] = (groups.get(g) or {}).get("accept")
                 before = (off_groups.get(g) or {}).get("tok_s")
                 if tok_s and before and base != "off":
                     metrics[f"speedup_vs_off_{g}"] = tok_s / before
+                metrics[f"ttft_ms_p50_{g}"] = (groups.get(g) or {}).get("ttft_ms_p50")
             fixed = re.fullmatch(r"d(\d+)", base)
             uses_draft = bool(fixed) or (base == "default" and entry["default"])
             run_id, _ = mlflow.create(experiment, f"{model['name']} · {job['machine']} · {arm_label(arm)}", {
@@ -180,10 +188,12 @@ def record(state, matrix, logs, label, here, repo_url, table_md):
                 "hardware.node": job["node"], "eval.execution_state": "error" if "error" in result else "completed"})
             mlflow.log(run_id, params={
                 "model": model["name"], "machine": job["machine"], "backend": machine["backend"],
-                "node": job["node"], "arm": base, "temperature": result.get("temp", 0.7 if arm.endswith("_t07") else 0),
+                "node": job["node"], "arm": base, "workload": workload,
+                "temperature": result.get("temp", 0.7 if sampled else 0),
                 "fixed_block": fixed.group(1) if fixed else "", "default_speculation": entry["default"],
                 "target_sha256": model["target"]["sha256"], "draft": draft["url"].split("/resolve/")[0] if uses_draft else "",
-                "draft_sha256": draft["sha256"] if uses_draft else "", "prompt_split": matrix["prompt_split"],
+                "draft_sha256": draft["sha256"] if uses_draft else "",
+                "prompts": "agent-transcripts" if workload == "agent" else f"spec-prompts/{matrix['prompt_split']}",
                 "error": result.get("error", "")}, metrics=metrics)
             mlflow.finish(run_id, "FAILED" if "error" in result else "FINISHED")
             created += 1
@@ -212,17 +222,18 @@ def compare(rev_a, rev_b):
             metrics = {m["key"]: m["value"] for m in run["data"].get("metrics", [])}
             if "arm" in params:
                 sampled = params["temperature"] not in ("0", "0.0")
-                rows[(params["model"], params["machine"], params["arm"], sampled)] = metrics
+                workload = params.get("workload", "spec-prompts")
+                rows[(params["model"], params["machine"], workload, params["arm"], sampled)] = metrics
         return rows
 
     a, b = load(rev_a), load(rev_b)
     if not a or not b:
         raise SystemExit(f"no runs for {rev_a[:9] if not a else rev_b[:9]} in '{EXPERIMENT}'")
     print(f"Decode tok/s, all prompts: {rev_a[:9]} → {rev_b[:9]}\n")
-    print("| Model | Machine | Arm | " + f"{rev_a[:9]} | {rev_b[:9]} | Change | Speedup {rev_a[:9]} → {rev_b[:9]} |")
-    print("|---|---|---|---|---|---|---|")
+    print("| Model | Machine | Workload | Arm | " + f"{rev_a[:9]} | {rev_b[:9]} | Change | Speedup {rev_a[:9]} → {rev_b[:9]} |")
+    print("|---|---|---|---|---|---|---|---|")
     for key in sorted(set(a) | set(b)):
-        model, machine, arm, sampled = key
+        model, machine, workload, arm, sampled = key
         if arm not in ("off", "default"):
             continue
         before = a.get(key, {}).get("decode_tok_s_all")
@@ -231,4 +242,4 @@ def compare(rev_a, rev_b):
         speedup = " → ".join(f"{s:.2f}×" if s else "—" for s in (
             a.get(key, {}).get("speedup_vs_off_all"), b.get(key, {}).get("speedup_vs_off_all"))) if arm != "off" else ""
         name = ARM_LABELS[arm] + (", sampled" if sampled else "")
-        print(f"| {model} | {machine} | {name} | {fmt(before)} | {fmt(after)} | {change} | {speedup} |")
+        print(f"| {model} | {machine} | {workload} | {name} | {fmt(before)} | {fmt(after)} | {change} | {speedup} |")

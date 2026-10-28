@@ -67,6 +67,7 @@ def plan(args):
                 "BENCH_DRAFT_FILE": draft["url"].rsplit("/", 1)[1],
                 "BENCH_DEFAULT_DRAFT_FILE": draft["url"].rsplit("/", 1)[1] if entry["default"] else "",
                 "BENCH_FIXED_BLOCKS": " ".join(str(k) for k in machine["fixed_blocks"]),
+                "BENCH_AGENT": "1" if matrix.get("agent_transcripts") else "0",
             }
             spec = {"spec": {
                 "name": f"DFlash defaults · {model['name']} · {label} · {node} @ {rev[:9]}",
@@ -193,6 +194,22 @@ def table(args):
                 rows.append(f"| {label}{suffix} | {model['name']} | {workload} | {fmt(before)} | "
                             f"{fmt(rate(arms, fixed_arm, group)) if fixed_arm else '—'} | "
                             f"{'**' + shown + '**' if bold else shown} | {'**' + gain + '**' if bold else gain} |")
+    agent_rows = ["| Machine | Model | History | Before | All together | Gain |", "|---|---|---|---|---|---|"]
+    for model in matrix["models"]:
+        for label in model["machines"]:
+            arms = collected.get(f"{model['id']}@{label}")
+            if not arms:
+                continue
+            groups = ((arms.get("agent_off") or {}).get("groups") or {})
+            for band in [g for g in groups if g != "all"] + ["all"]:
+                before, after = rate(arms, "agent_off", band), rate(arms, "agent_default", band)
+                gain = f"{after / before:.2f}×" if before and after else "—"
+                if band == "all":
+                    agent_rows.append(f"| {label} | {model['name']} | **All** | {fmt(before)} | **{fmt(after)}** | **{gain}** |")
+                else:
+                    agent_rows.append(f"| {label} | {model['name']} | {band} | {fmt(before)} | {fmt(after)} | {gain} |")
+    if len(agent_rows) > 2:
+        rows += ["", "Coding-agent transcripts (real OpenHands histories, 64K context, greedy):", ""] + agent_rows
     out = Path(args.out)
     (out / "results.json").write_text(json.dumps({"rev": state["rev"], "jobs": state["jobs"], "arms": collected},
                                                  indent=1))

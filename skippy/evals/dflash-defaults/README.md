@@ -37,6 +37,21 @@ its nodes; the M3 Ultra runs its four jobs one after another.
    tokens after the first divided by total time from first to last token. It prints a
    `DFLASH_BENCH` JSON line, which `bench.py table` reads from the job log.
 
+## Agent workload
+
+When `agent_transcripts` is true in `matrix.json`, each job also runs `agent_off` and
+`agent_default` over `skippy/evals/agent-transcripts`. That set holds 32 real OpenHands
+coding-agent histories from nebius/SWE-rebench-openhands-trajectories (CC-BY-4.0): system
+prompt, reasoning, tool calls and tool output, cut before an assistant turn. They come in
+four bands of history length (4–8K, 8–16K, 16–32K and 32–48K tokens), and the model writes
+the next turn.
+
+These arms serve with a 64K context, so they show whether DFlash still pays off with long
+histories, and whether time to first token changes. The table gets a second section by
+history band, and MLflow records these runs with `workload=agent`. James's AgentX traces
+carry only token counts, not text, so they can't measure speculation; this set
+complements them.
+
 ## Reading the table
 
 - **Before** is the `off` arm, **All together** the `default` arm, and **Gain** their ratio
@@ -61,7 +76,8 @@ experiment, "mesh-llm DFlash defaults — decode speed by commit":
 - **A child run per model, machine and arm**, for example
   `Qwen3.5-9B · Spark · shipped default · greedy`. Its metrics are `decode_tok_s_*`,
   `acceptance_*`, `speedup_vs_off_*` (against the same job's off arm), `gpu_clock_mhz`,
-  `gpu_temp_c` and `commit_time_unix`.
+  `gpu_temp_c`, `ttft_ms_p50_*` and `commit_time_unix`, and its params include `workload`
+  (`spec-prompts` or `agent`).
 
 Every run carries `mesh_llm.commit`, `mesh_llm.commit_short`, `mesh_llm.commit_time`,
 `mesh_llm.label` and MLflow's own `mlflow.source.git.commit`. To compare commits in the UI,

@@ -3,7 +3,8 @@
 #
 # Arms, in order: speculation off, the shipped default (no speculation config), then
 # each fixed DFlash block in BENCH_FIXED_BLOCKS with adaptive sizing off, all greedy;
-# then off and the default again at temperature 0.7.
+# then off and the default again at temperature 0.7. When BENCH_AGENT is 1, off and the
+# default run once more over real coding-agent transcripts at 64K context (agent_*).
 #
 # Inputs (environment, set by bench.py):
 #   BENCH_TARGET_URL / _SHA256 / _BYTES / _FILE   target GGUF, pinned to a revision
@@ -12,6 +13,7 @@
 #   BENCH_DRAFT_URL / _SHA256 / _BYTES / _FILE   draft for the fixed arms, or empty
 #   BENCH_FIXED_BLOCKS         space-separated draft lengths, e.g. "5 7"
 #   BENCH_SPLIT                spec-prompts split (default: report)
+#   BENCH_AGENT                1 to add the agent-transcript arms
 set -euo pipefail
 
 cd mesh-llm
@@ -19,6 +21,7 @@ HERE="$PWD/skippy/evals/dflash-defaults"
 ART="${JIANYANG_ARTIFACT_DIR:?}"
 SPLIT="${BENCH_SPLIT:-report}"
 PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl"
+CTX=8192
 
 # The jy model store can hand back a damaged copy of a large file, so every job
 # downloads its own weights and checks them, and the default draft lands in a
@@ -73,7 +76,7 @@ fi
 serve() { # arm port extra-args... ; starts the server in the background
   local arm="$1" port="$2"; shift 2
   env ${ARM_ENV:-} "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless "$@" \
-    serve --model "$TARGET" --ctx-size 8192 >"$ART/serve-$arm.log" 2>&1 &
+    serve --model "$TARGET" --ctx-size "$CTX" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!
 }
 
@@ -137,5 +140,11 @@ if [ -n "$DRAFT" ]; then
 fi
 MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
 MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
+if [ "${BENCH_AGENT:-0}" = 1 ]; then
+  # Transcripts reach 48K tokens of history; the server must hold them plus the reply.
+  PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" SPLIT=all CTX=65536
+  ARM_ENV= run_arm agent_off --no-draft --speculative-strategy disabled
+  ARM_ENV= run_arm agent_default
+fi
 
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

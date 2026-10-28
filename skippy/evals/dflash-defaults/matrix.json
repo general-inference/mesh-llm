@@ -155,5 +155,6 @@
         }
       }
     }
-  ]
+  ],
+  "agent_transcripts": true
 }

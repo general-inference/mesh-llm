@@ -6,6 +6,8 @@ The adapter owns Mesh configuration precedence, validation, speculative selectio
 
 Resolver tests live beside the implementation. Host hook/receipt integration stays in the host runtime. `test-support` disables the implicit home-directory hash cache in dependent host tests; explicit `MESH_LLM_HASH_CACHE_DIR` remains supported.
 
+For a known target, `speculative.strategy = "dflash"` without a draft path selects its pinned catalog drafter even when native MTP is available. The host downloads and verifies the drafter in the background, reserves its weights and rollback state, and attaches it on a later model load when cached and fitting. Until then it serves without speculation. An explicit draft path overrides the catalog; unknown targets still require one. `auto` retains its native-MTP precedence.
+
 `package` applies Mesh digest-cache policy to Skippy full-package and metadata-only identity verification. Schema probing and verification remain in Skippy; the host resolves remote package references before calling the adapter.
 
 `package::inspect_local_stage_package` applies the same Mesh cache policy to Skippy inspection; the host resolves remote references once before invoking it.

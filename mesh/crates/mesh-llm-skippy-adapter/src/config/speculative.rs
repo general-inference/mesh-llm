@@ -52,8 +52,14 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.draft_selection_policy.as_deref()),
         Some("auto"),
     );
+    let strategy = pick_string_owned(
+        model_config.and_then(|config| config.strategy.as_deref()),
+        global_config.and_then(|config| config.strategy.as_deref()),
+        Some("auto"),
+    );
     if draft_model_path.is_none()
         && draft_selection_policy == "auto"
+        && strategy != DFLASH_STRATEGY
         && !matches!(spec_default, Some(BoolOrAuto::Bool(false)))
     {
         draft_model_path = discover_sibling_draft_model(model_path);
@@ -63,11 +69,6 @@ pub(super) fn resolve_speculative_config(
         || draft_model_path
             .as_ref()
             .is_some_and(|path| path.is_file() && direct_gguf_supports_native_mtp(path));
-    let strategy = pick_string_owned(
-        model_config.and_then(|config| config.strategy.as_deref()),
-        global_config.and_then(|config| config.strategy.as_deref()),
-        Some("auto"),
-    );
     let (strategy, mut native_mtp_enabled) = resolve_native_mtp_strategy(
         strategy,
         auto_defaults_enabled,

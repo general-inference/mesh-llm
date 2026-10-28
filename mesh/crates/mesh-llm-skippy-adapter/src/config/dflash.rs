@@ -2,8 +2,8 @@
 //!
 //! A DFlash draft reads target hidden states, so it is not an ordinary draft
 //! model: the architecture pairing check would always reject it. It is chosen
-//! explicitly with `speculative.strategy = "dflash"` and a draft, or by default
-//! under `auto` when the target is one of the known pairings in
+//! explicitly with `speculative.strategy = "dflash"` and an optional draft,
+//! or by default under `auto` when the target is one of the known pairings in
 //! [`super::dflash_catalog`] and nothing else in the configuration speaks for
 //! speculation. A DFlash draft named as an ordinary draft under `auto` still
 //! fails pairing.
@@ -65,8 +65,17 @@ pub(super) fn choose_dflash_draft(
     explicit: &DFlashSelection<'_>,
     default: &DFlashDefaultSelection<'_>,
 ) -> Result<Option<(PathBuf, Option<&'static DFlashPairing>)>> {
-    if let Some(path) = select_dflash_draft(explicit)? {
-        return Ok(Some((path.to_path_buf(), None)));
+    if explicit.strategy == DFLASH_STRATEGY {
+        if explicit.mode == "disabled" || explicit.draft_model_path.is_some() {
+            return select_dflash_draft(explicit)
+                .map(|draft| draft.map(|path| (path.to_path_buf(), None)));
+        }
+        let pairing = catalog_pairing(default).ok_or_else(|| {
+            anyhow::anyhow!(
+                "skippy speculative.strategy = \"dflash\" requires a draft_model for a target without a catalog pairing"
+            )
+        })?;
+        return Ok(Some((pairing.draft.cache_path(), Some(pairing))));
     }
     if explicit.strategy != "auto"
         || explicit.mode != "auto"
@@ -78,13 +87,16 @@ pub(super) fn choose_dflash_draft(
     {
         return Ok(None);
     }
-    let pairing = match default.target_meta {
+    Ok(catalog_pairing(default).map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
+}
+
+fn catalog_pairing(default: &DFlashDefaultSelection<'_>) -> Option<&'static DFlashPairing> {
+    match default.target_meta {
         Some(meta) => pairing_for_target(meta),
         None => scan_gguf_compact_meta(default.model_path)
             .as_ref()
             .and_then(pairing_for_target),
-    };
-    Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
+    }
 }
 
 /// A configured cap wins; otherwise the backend default.

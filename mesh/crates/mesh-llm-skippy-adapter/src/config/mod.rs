@@ -1,5 +1,7 @@
 mod dflash;
 mod dflash_catalog;
+#[cfg(test)]
+mod dflash_tests;
 mod request_defaults;
 mod resolution;
 mod speculative;

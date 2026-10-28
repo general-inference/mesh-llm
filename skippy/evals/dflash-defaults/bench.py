@@ -51,7 +51,7 @@ def plan(args):
                 continue
             machine = matrix["machines"][label]
             # Spread a machine kind's jobs over its nodes so they run in parallel.
-            node = machine["nodes"][next_node[label] % len(machine["nodes"])]
+            node = args.node or machine["nodes"][next_node[label] % len(machine["nodes"])]
             next_node[label] += 1
             draft = matrix["drafts"][entry["draft"]]
             env = {
@@ -260,6 +260,7 @@ def main():
     parser.add_argument("--out", default="dflash-bench-out", help="where specs, state and the table go")
     parser.add_argument("--poll", type=int, default=300, help="seconds between status checks in `run`")
     parser.add_argument("--label", help="free-form name for this commit in MLflow, e.g. main or a PR")
+    parser.add_argument("--node", help="run every planned job on this node instead of the matrix's")
     args = parser.parse_args()
     commands = {"plan": plan, "submit": submit, "status": status, "table": table, "record": record,
                 "run": run, "compare": compare}

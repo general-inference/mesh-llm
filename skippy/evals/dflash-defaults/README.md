@@ -10,6 +10,8 @@ cd skippy/evals/dflash-defaults
 ./bench.py submit --only qwen3.5-9b       # or one model, then later:
 ./bench.py status
 ./bench.py table                          # writes dflash-bench-out/table.md and results.json
+./bench.py record --label main            # store this commit's runs in MLflow
+./bench.py compare <commit-a> <commit-b>  # per-model change between two recorded commits
 ```
 
 `--machines Spark,M6` limits machines. `--rev` must be pushed to
@@ -47,3 +49,29 @@ its nodes; the M3 Ultra runs its four jobs one after another.
 Runs on different nodes of the same kind aren't interchangeable: one Spark ran a baseline
 25% slow under thermal throttling. Compare rows only within a job, and check the `gpu:`
 lines in the log when a baseline looks off.
+
+## MLflow
+
+`run` records automatically when `MLFLOW_TRACKING_URI` is set, using
+`MLFLOW_TRACKING_USERNAME`/`PASSWORD` or `MLFLOW_TRACKING_TOKEN`. Everything goes into one
+experiment, "mesh-llm DFlash defaults — decode speed by commit":
+
+- **A parent run per measured commit**, named `mesh-llm @ <sha> · <subject>`. It holds
+  `table.md`, `matrix.json` and the jy job IDs.
+- **A child run per model, machine and arm**, for example
+  `Qwen3.5-9B · Spark · shipped default · greedy`. Its metrics are `decode_tok_s_*`,
+  `acceptance_*`, `speedup_vs_off_*` (against the same job's off arm), `gpu_clock_mhz`,
+  `gpu_temp_c` and `commit_time_unix`.
+
+Every run carries `mesh_llm.commit`, `mesh_llm.commit_short`, `mesh_llm.commit_time`,
+`mesh_llm.label` and MLflow's own `mlflow.source.git.commit`. To compare commits in the UI,
+filter on these:
+
+```text
+tags.mesh_llm.commit_short IN ('f19b54a88', '<other>') AND params.arm = 'default'
+```
+
+To see a trend, chart `decode_tok_s_all` against `commit_time_unix` as a scatter plot. Runs
+are keyed by `gi.key` (commit, model, machine, arm), so recording again only adds what is
+missing. `bench.py compare` prints the same comparison as a table.
+

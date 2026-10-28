@@ -5,7 +5,9 @@
     bench.py submit [same]        submit one jy job per (model, machine) and record them
     bench.py status [--out DIR]   show each job's state
     bench.py table  [--out DIR]   read results back from the job logs and print the table
-    bench.py run    [same]        submit, wait for every job, then print the table
+    bench.py record [--out DIR] [--label NAME]   store the results in MLflow (recorder.py)
+    bench.py run    [same]        submit, wait, print the table, and record it when MLflow is set up
+    bench.py compare REV_A REV_B  per-model change in decode speed between two recorded commits
 
 Jobs build mesh-llm at REV and run skippy/evals/dflash-defaults/run.sh from that
 checkout, so REV must contain this directory and be pushed to the repository URL.
@@ -13,6 +15,7 @@ checkout, so REV must contain this directory and be pushed to the repository URL
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -130,15 +133,22 @@ def status(args):
         print(f"{job['key']:32s} {job['job_id']}  {statuses(state)[job['job_id']]}")
 
 
-def results(job_id):
+def job_log(job_id):
+    """Each arm's DFLASH_BENCH summary and the GPU state recorded just before it."""
     log = subprocess.run(["jy", "logs", job_id], capture_output=True, text=True).stdout
-    arms = {}
+    arms, gpu = {}, {}
     for line in log.splitlines():
         line = line.removeprefix("[out] ")
         if line.startswith("DFLASH_BENCH "):
             arm = json.loads(line[len("DFLASH_BENCH "):])
             arms[arm["arm"]] = arm
-    return arms
+        elif match := re.match(r"gpu: (\S+) (\d+) MHz, (\d+),", line):
+            gpu[match.group(1)] = {"clock_mhz": int(match.group(2)), "temp_c": int(match.group(3))}
+    return arms, gpu
+
+
+def results(job_id):
+    return job_log(job_id)[0]
 
 
 def rate(arms, arm, group):
@@ -190,6 +200,22 @@ def table(args):
     (out / "table.md").write_text(text)
     print(f"mesh-llm @ {state['rev'][:9]}; decode tok/s on the held-out spec-prompts split.\n")
     print(text)
+    return text
+
+
+def record(args):
+    import recorder
+    state = json.loads(state_path(args).read_text())
+    text = table(args)
+    logs = {job["job_id"]: job_log(job["job_id"]) for job in state["jobs"]}
+    recorder.record(state, load_matrix(), logs, args.label or args.rev, HERE, REPO_URL, text)
+
+
+def compare(args):
+    import recorder
+    if len(args.revs) != 2:
+        sys.exit("compare needs two commits")
+    recorder.compare(git_rev(args.revs[0]), git_rev(args.revs[1]))
 
 
 def run(args):
@@ -201,19 +227,26 @@ def run(args):
         if not pending:
             break
         time.sleep(args.poll)
-    table(args)
+    if os.environ.get("MLFLOW_TRACKING_URI"):
+        record(args)
+    else:
+        table(args)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["plan", "submit", "status", "table", "run"])
+    parser.add_argument("command", choices=["plan", "submit", "status", "table", "record", "run", "compare"])
+    parser.add_argument("revs", nargs="*", help="for compare: two mesh-llm commits")
     parser.add_argument("--rev", default="HEAD", help="mesh-llm commit to build and measure (pushed)")
     parser.add_argument("--only", help="comma-separated model ids from matrix.json")
     parser.add_argument("--machines", help="comma-separated machine labels from matrix.json")
     parser.add_argument("--out", default="dflash-bench-out", help="where specs, state and the table go")
     parser.add_argument("--poll", type=int, default=300, help="seconds between status checks in `run`")
+    parser.add_argument("--label", help="free-form name for this commit in MLflow, e.g. main or a PR")
     args = parser.parse_args()
-    {"plan": plan, "submit": submit, "status": status, "table": table, "run": run}[args.command](args)
+    commands = {"plan": plan, "submit": submit, "status": status, "table": table, "record": record,
+                "run": run, "compare": compare}
+    commands[args.command](args)
 
 
 if __name__ == "__main__":

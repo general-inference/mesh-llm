@@ -46,6 +46,13 @@ pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result
     Ok(Some(path))
 }
 
+/// Whether this host runtime can attach a DFlash draft at all: native Windows
+/// builds export no draft-context API, so a draft resolved there could never
+/// be opened.
+pub(super) fn dflash_draft_runtime_supported() -> bool {
+    cfg!(not(target_os = "windows"))
+}
+
 /// What else the resolver decided that keeps a known DFlash pairing from
 /// being the default.
 pub(super) struct DFlashDefaultSelection<'a> {
@@ -53,20 +60,25 @@ pub(super) struct DFlashDefaultSelection<'a> {
     pub(super) native_mtp_enabled: bool,
     pub(super) has_ngram_settings: bool,
     pub(super) package_declares_speculation: bool,
+    /// Whether the host runtime can attach an external draft context.
+    pub(super) runtime_can_host_dflash_draft: bool,
     pub(super) target_meta: Option<&'a GgufCompactMeta>,
     pub(super) model_path: &'a Path,
 }
 
 /// The DFlash draft to attach and, when it was chosen by default, its known
 /// pairing. An explicit DFlash draft wins; otherwise a known target defaults
-/// to its draft unless the configuration, the package, or another proposer
-/// already decides.
+/// to its draft unless the configuration, the package, another proposer, or a
+/// runtime that cannot host one already decides.
 pub(super) fn choose_dflash_draft(
     explicit: &DFlashSelection<'_>,
     default: &DFlashDefaultSelection<'_>,
 ) -> Result<Option<(PathBuf, Option<&'static DFlashPairing>)>> {
     if let Some(path) = select_dflash_draft(explicit)? {
         return Ok(Some((path.to_path_buf(), None)));
+    }
+    if !default.runtime_can_host_dflash_draft {
+        return Ok(None);
     }
     if explicit.strategy != "auto"
         || explicit.mode != "auto"
@@ -140,7 +152,7 @@ pub(super) fn dflash_decode_config(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::temp_model_file_with_architecture;
+    use super::super::test_support::{target_meta, temp_model_file_with_architecture};
     use super::*;
 
     fn selection<'a>(strategy: &'a str, path: Option<&'a Path>) -> DFlashSelection<'a> {
@@ -176,6 +188,45 @@ mod tests {
 
         assert!(select_dflash_draft(&selection("dflash", None)).is_err());
         assert!(select_dflash_draft(&selection("dflash", Some(&ordinary))).is_err());
+    }
+
+    fn default_selection<'a>(
+        target: Option<&'a GgufCompactMeta>,
+        model_path: &'a Path,
+    ) -> DFlashDefaultSelection<'a> {
+        DFlashDefaultSelection {
+            auto_defaults_enabled: true,
+            native_mtp_enabled: false,
+            has_ngram_settings: false,
+            package_declares_speculation: false,
+            runtime_can_host_dflash_draft: true,
+            target_meta: target,
+            model_path,
+        }
+    }
+
+    #[test]
+    fn a_runtime_that_cannot_host_a_draft_gets_no_default_dflash() {
+        let meta = target_meta("qwen35", 32, 4096, 0);
+        let mut default = default_selection(Some(&meta), Path::new("/m/target.gguf"));
+        default.runtime_can_host_dflash_draft = false;
+        let explicit = selection("auto", None);
+
+        assert_eq!(choose_dflash_draft(&explicit, &default).unwrap(), None);
+    }
+
+    #[test]
+    fn explicit_dflash_still_resolves_without_a_hosting_runtime() {
+        let dflash_file = temp_model_file_with_architecture("dflash");
+        let meta = target_meta("qwen35", 32, 4096, 0);
+        let mut default = default_selection(Some(&meta), Path::new("/m/target.gguf"));
+        default.runtime_can_host_dflash_draft = false;
+        let explicit = selection("dflash", Some(dflash_file.path()));
+
+        assert_eq!(
+            choose_dflash_draft(&explicit, &default).unwrap(),
+            Some((dflash_file.path().to_path_buf(), None))
+        );
     }
 
     #[test]

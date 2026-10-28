@@ -1,25 +1,50 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
-Subject: [PATCH] skippy: experimental verify-overhead knobs from #2318
- (measurement only)
+Subject: [PATCH] skippy: size recurrent rollback for speculative verify
 
-SKIPPY_RS_SEQ sizes recurrent rollback snapshots for in-place verify;
+Recurrent and hybrid targets verify a speculative window in place only when
+the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
+verify falls back to a host copy. skippy_runtime_config gains
+recurrent_rollback_tokens so the caller can size n_rs_seq from its attached
+speculative plan instead of raising it for every model: each snapshot is
+another copy of the recurrent state per sequence. 0 keeps the default of 2,
+and SKIPPY_RS_SEQ still overrides it.
+
+Sampled verify also gets cheaper: a sampling chain retired by sampled verify
+stays retired until the session resets, upstream's per-sequence
+backend-sampling output limit is restored, and
 SKIPPY_VERIFY_KEEP_BACKEND_SAMPLER keeps the backend sampler attached across
-sampled verify; restores upstream's per-sequence backend-sampling output limit.
+sampled verify.
 ---
+ include/skippy/runtime.h     | 4 ++++
  src/llama-context.cpp        | 7 ++++---
- src/skippy/model_loading.cpp | 3 ++-
+ src/skippy/model_loading.cpp | 8 +++++++-
  src/skippy/sampling.cpp      | 7 +++++--
  src/skippy/session.cpp       | 1 +
  src/skippy/verification.cpp  | 3 ++-
- 5 files changed, 14 insertions(+), 7 deletions(-)
+ 6 files changed, 23 insertions(+), 7 deletions(-)
 
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 799bdca2d..3364318fe 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -117,6 +117,10 @@ struct skippy_runtime_config {
+     int32_t main_gpu;
+     /** @brief How to split the model across multiple GPUs (mirrors upstream `llama_split_mode`). SKIPPY_TRISTATE_AUTO (-1) preserves llama.cpp's derived default; 0=none, 1=layer, 2=row, 3=tensor. */
+     int32_t split_mode;
++
++    // Speculative-decoding controls resolved from the attached plan.
++    /** @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either. */
++    uint32_t recurrent_rollback_tokens;
+ };
+ 
+ /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 2c6149d30..4665d7791 100644
+index 4d198295f..b5b6d0670 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2041,9 +2041,10 @@ int llama_context::decode(
+@@ -2019,9 +2019,10 @@ int llama_context::decode(
                  // are limited to one output row; a sampler on some other
                  // sequence of this context must not reject a multi-output
                  // batch (e.g. speculative verification) for this one.
@@ -34,21 +59,26 @@ index 2c6149d30..4665d7791 100644
                  }
              }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 60a27669f..32bc991d5 100644
+index 60a27669f..17f9918b7 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -733,7 +733,8 @@ enum skippy_status skippy_finish_model_open(
+@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
 -        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, 2);
-+        // Experiment: snapshot depth for in-place speculative rollback.
-+        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, skippy_env_u32("SKIPPY_RS_SEQ", 2, 2, 64));
++        // Rollback snapshots for in-place speculative verify: a window of N
++        // tokens needs N, or verify falls back to a host copy. Each snapshot
++        // is another copy of the recurrent state per sequence, so the caller
++        // sizes it from its speculative plan. SKIPPY_RS_SEQ overrides it.
++        const uint32_t planned_rs_seq = config != nullptr ? config->recurrent_rollback_tokens : 0;
++        const uint32_t default_rs_seq = std::min<uint32_t>(std::max<uint32_t>(planned_rs_seq, 2), 64);
++        params.n_rs_seq = std::max<uint32_t>(params.n_rs_seq, skippy_env_u32("SKIPPY_RS_SEQ", default_rs_seq, 2, 64));
          params.kv_unified = true;
      }
      // Multi-lane activation exports rely on the shared KV pool's batch order.
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index cff146149..a971fa342 100644
+index 806f3b23b..ed23a33c1 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -1,3 +1,4 @@
@@ -70,17 +100,17 @@ index cff146149..a971fa342 100644
      session->grammar_lazy = false;
      session->sampling_backend_enabled = false;
 -    session->sampling_backend_retired = false;
-+    // Experiment: a chain retired by sampled verification stays retired until
++    // A chain retired by sampled verification stays retired until
 +    // the session is reset, so speculative repair does not re-attach a backend
 +    // sampler that the next verify window must detach (two reserves per window).
      session->sampling_config = {};
      session->sampling_config_valid = false;
      session->chat_sampling_metadata.clear();
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 9f9887091..d4bc35de6 100644
+index 1136d8fe5..1e0603dc4 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -410,6 +410,7 @@ enum skippy_status skippy_session_reset(
+@@ -409,6 +409,7 @@ enum skippy_status skippy_session_reset(
              skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
      if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
          skippy_clear_chat_sampling(session);
@@ -102,3 +132,6 @@ index 576171e79..c4f8d4dcf 100644
          // Backend (in-graph) sampling permits at most one output row per
          // sequence per decode, but sampled verification must output every row
          // of the window, so llama_decode would reject the batch outright.
+-- 
+2.54.0 (Apple Git-157)
+

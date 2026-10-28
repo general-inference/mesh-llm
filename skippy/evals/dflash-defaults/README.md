@@ -79,8 +79,14 @@ experiment, "mesh-llm DFlash defaults — decode speed by commit":
   `gpu_temp_c`, `ttft_ms_p50_*` and `commit_time_unix`, and its params include `workload`
   (`spec-prompts` or `agent`).
 
-The experiment page is the dashboard. Its description is rewritten after each recording
-with three sections:
+Each recorded commit's parent run gets `dashboard.html`, a self-contained page that MLflow
+shows inline: headline gains per model, an off → shipped-default dumbbell per model and
+machine, diverging heatmaps of gain by workload and by agent history length, the trend
+across recorded commits, and the PR table. It is static SVG with no scripts or network
+fetches, and follows the dataviz palette in light and dark mode. `dashboard.py` renders it.
+
+The experiment page links to the latest dashboard. Its description is rewritten after each
+recording with three sections:
 
 - the latest commit's table, as in the PR;
 - the shipped default's change from the previous recorded commit;

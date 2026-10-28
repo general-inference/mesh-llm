@@ -13,6 +13,8 @@ MLFLOW_TRACKING_USERNAME/PASSWORD or MLFLOW_TRACKING_TOKEN.
 """
 
 import base64
+
+import dashboard
 import hashlib
 import json
 import os
@@ -209,7 +211,14 @@ def record(state, matrix, logs, label, here, repo_url, table_md):
     mlflow.log(parent_id, tags={"mlflow.note.content": f"## mesh-llm {rev[:9]} · {commit['subject']}\n\n"
                                                        f"{table_md.strip()}"})
     mlflow.finish(parent_id, "FINISHED" if verified else "FAILED")
-    publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix)
+    page = dashboard.render({
+        "short": rev[:9], "label": label, "subject": commit["subject"], "time": commit["time"],
+        "models": [model["name"] for model in matrix["models"]], "machines": list(matrix["machines"]),
+        "rows": dashboard_rows(state, matrix, logs),
+        "history": commit_history(mlflow, experiment, recorded_parents(mlflow, experiment))})
+    mlflow.upload(parent_artifacts, "dashboard.html", page)
+    dashboard_link = f"{mlflow.uri}/#/experiments/{experiment}/runs/{parent_id}/artifactPath/dashboard.html"
+    publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix, dashboard_link)
     print(f"MLflow: {created} new runs for {rev[:9]} in '{EXPERIMENT}' "
           f"({len(stored)}/{expected} read back) — {mlflow.uri}/#/experiments/{experiment}/runs/{parent_id}")
 
@@ -257,17 +266,57 @@ def compare(rev_a, rev_b, matrix):
     print(compare_table(mlflow, mlflow.experiment_id(), rev_a, rev_b, matrix))
 
 
-def publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix):
+def dashboard_rows(state, matrix, logs):
+    """One row per job that ran, in matrix order, with tok/s per group for each arm."""
+    def groups(arms, arm):
+        return {g: v.get("tok_s") for g, v in ((arms.get(arm) or {}).get("groups") or {}).items() if v.get("tok_s")}
+    by_key = {job["key"]: job for job in state["jobs"]}
+    rows = []
+    for model in matrix["models"]:
+        for label, entry in model["machines"].items():
+            job = by_key.get(f"{model['id']}@{label}")
+            if "skip" in entry or not job:
+                continue
+            arms = logs[job["job_id"]][0]
+            fixed = [arm for arm in arms if re.fullmatch(r"d\d+", arm) and groups(arms, arm).get("all")]
+            best = max(fixed, key=lambda arm: groups(arms, arm)["all"], default=None)
+            rows.append({"model": model["name"], "machine": label, "default_on": entry["default"],
+                         "off": groups(arms, "off"), "default": groups(arms, "default"),
+                         "fixed": groups(arms, best) if best else None,
+                         "off_t07": groups(arms, "off_t07"), "default_t07": groups(arms, "default_t07"),
+                         "agent_off": groups(arms, "agent_off"), "agent_default": groups(arms, "agent_default")})
+    return rows
+
+
+def commit_history(mlflow, experiment, parents):
+    """Shipped-default tok/s (all prompts, greedy) per model and machine for each recorded commit."""
+    history = []
+    for run in sorted(parents, key=lambda run: tag(run, "mesh_llm.commit_time") or "")[-20:]:
+        rev = tag(run, "mesh_llm.commit")
+        values = {f"{model}|{machine}": metrics.get("decode_tok_s_all")
+                  for (model, machine, workload, arm, sampled), metrics in load_commit(mlflow, experiment, rev).items()
+                  if workload == "spec-prompts" and arm == "default" and not sampled}
+        history.append({"short": tag(run, "mesh_llm.commit_short"), "label": tag(run, "mesh_llm.label"), "values": values})
+    return history
+
+
+def recorded_parents(mlflow, experiment):
+    return [run for run in mlflow.search(experiment, "tags.`eval.program` = 'dflash-defaults'")
+            if (tag(run, "gi.key") or "").endswith(":dflash-defaults")]
+
+
+def publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix, dashboard_link=None):
     """Writes the latest commit's table, its change from the previous commit and an index of
     recorded commits into the experiment description, which MLflow shows as Markdown."""
-    parents = [run for run in mlflow.search(experiment, "tags.`eval.program` = 'dflash-defaults'")
-               if (tag(run, "gi.key") or "").endswith(":dflash-defaults")]
+    parents = recorded_parents(mlflow, experiment)
     parents.sort(key=lambda run: tag(run, "mesh_llm.commit_time") or "", reverse=True)
     link = lambda run_id: f"{mlflow.uri}/#/experiments/{experiment}/runs/{run_id}"
     previous = next((run for run in parents if tag(run, "mesh_llm.commit") != rev
                      and (tag(run, "mesh_llm.commit_time") or "") <= commit["time"]), None)
     sections = [
         f"## Latest: {label} · mesh-llm [{rev[:9]}]({link(parent_id)}) · {commit['subject']}",
+        *([f"**[Open the visual dashboard for {rev[:9]}]({dashboard_link})** (charts, heatmaps and trend)"]
+          if dashboard_link else []),
         f"Committed {commit['time'][:10]}. Decode tok/s on held-out prompts, one request at a time. "
         "Before = speculation off. +DFlash = best fixed draft length. All together = the shipped default "
         "with no speculation config. Gain = All together ÷ Before, both from the same job.",

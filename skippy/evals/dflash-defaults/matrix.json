@@ -1,0 +1,159 @@
+{
+  "prompt_split": "report",
+  "machines": {
+    "Spark": {
+      "backend": "cuda",
+      "nodes": [
+        "spark-000280",
+        "spark-000265",
+        "spark-000468",
+        "spark-000499"
+      ],
+      "placeholder_package": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
+      "fixed_blocks": [
+        5,
+        7
+      ]
+    },
+    "M3 Ultra": {
+      "backend": "metal",
+      "nodes": [
+        "macstudio-4f19n3"
+      ],
+      "placeholder_package": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+      "fixed_blocks": [
+        4,
+        6
+      ]
+    },
+    "M6": {
+      "backend": "metal",
+      "nodes": [
+        "macmini-2x4jx1"
+      ],
+      "placeholder_package": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5",
+      "fixed_blocks": [
+        4,
+        6
+      ]
+    }
+  },
+  "drafts": {
+    "qwen3.5-9b": {
+      "url": "https://huggingface.co/AtomicChat/Qwen3.5-9B-DFlash-GGUF/resolve/c7c69923d77a9aa0004b410d3a7a3dbb64591d41/Qwen3.5-9B-DFlash.Q8_0.gguf",
+      "sha256": "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
+      "bytes": 1383768224
+    },
+    "qwen3.6-27b": {
+      "url": "https://huggingface.co/AtomicChat/Qwen3.6-27B-DFlash-GGUF/resolve/a3d4fb1eff6f268cbbdf808042f6902cc17f5458/Qwen3.6-27B-DFlash.Q8_0.gguf",
+      "sha256": "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
+      "bytes": 1849481472
+    },
+    "qwen3.6-35b-a3b-dflash2": {
+      "url": "https://huggingface.co/aminya/Qwen3.6-35B-A3B-DFlash2-GGUF/resolve/1e26e3499d865b9d2fc55e019d65b3f0e8ab6846/Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf",
+      "sha256": "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44",
+      "bytes": 570468544
+    },
+    "qwen3.6-35b-a3b-dflash": {
+      "url": "https://huggingface.co/Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp/resolve/2aa57b642f211d2639083954c5b66d9c1ee503fc/Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
+      "sha256": "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
+      "bytes": 421060800
+    },
+    "qwen3-coder-next": {
+      "url": "https://huggingface.co/AtomicChat/Qwen3-Coder-Next-DFlash-GGUF/resolve/f5b4c9d2511678f75a41b3d3de5d9e379dd88768/Qwen3-Coder-Next-DFlash.Q8_0.gguf",
+      "sha256": "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
+      "bytes": 509674720
+    }
+  },
+  "models": [
+    {
+      "id": "qwen3.5-9b",
+      "name": "Qwen3.5-9B",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "bytes": 5680522464
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.5-9b",
+          "default": true
+        },
+        "M3 Ultra": {
+          "draft": "qwen3.5-9b",
+          "default": true
+        },
+        "M6": {
+          "draft": "qwen3.5-9b",
+          "default": true
+        }
+      }
+    },
+    {
+      "id": "qwen3.6-27b",
+      "name": "Qwen3.6-27B",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/82d411acf4a06cfb8d9b073a5211bf410bfc29bf/Qwen3.6-27B-Q4_K_M.gguf",
+        "sha256": "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
+        "bytes": 16817244384
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.6-27b",
+          "default": true
+        },
+        "M3 Ultra": {
+          "draft": "qwen3.6-27b",
+          "default": true
+        },
+        "M6": {
+          "skip": "Doesn't fit in 24 GB"
+        }
+      }
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "name": "Qwen3.6-35B-A3B",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61",
+        "bytes": 22134528992
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.6-35b-a3b-dflash2",
+          "default": true
+        },
+        "M3 Ultra": {
+          "draft": "qwen3.6-35b-a3b-dflash",
+          "default": true
+        },
+        "M6": {
+          "skip": "Doesn't fit in 24 GB"
+        }
+      }
+    },
+    {
+      "id": "qwen3-coder-next",
+      "name": "Qwen3-Coder-Next",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/ce09c67b53bc8739eef83fe67b2f5d293c270632/Qwen3-Coder-Next-Q4_K_M.gguf",
+        "sha256": "9e6032d2f3b50a60f17ce8bf5a1d85c71af9b53b89c7978020ae7c660f29b090",
+        "bytes": 48528320544
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3-coder-next",
+          "default": false
+        },
+        "M3 Ultra": {
+          "draft": "qwen3-coder-next",
+          "default": true
+        },
+        "M6": {
+          "skip": "Doesn't fit in 24 GB"
+        }
+      }
+    }
+  ]
+}

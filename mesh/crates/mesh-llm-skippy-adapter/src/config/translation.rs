@@ -224,6 +224,7 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
+            recurrent_rollback_tokens: 0,
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
@@ -404,12 +405,15 @@ impl ResolvedSkippyConfig {
             },
             speculative_window: self.speculative_window_for_embedded(mode),
             adaptive_speculative_window: mode == "draft",
-            draft_n_gpu_layers: if mode == "draft" || self.speculative.native_mtp_enabled {
+            draft_n_gpu_layers: if mode == "draft"
+                || self.speculative.native_mtp_enabled
+                || self.speculative.decode.dflash.is_some()
+            {
                 self.speculative.draft_n_gpu_layers
             } else {
                 None
             },
-            speculative: self.speculative_decode_config(),
+            speculative: self.speculative_decode_config(staged)?,
             native_mtp_enabled: self.speculative.native_mtp_enabled,
             native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
                 self.speculative.draft_model_path.clone()
@@ -526,7 +530,26 @@ impl ResolvedSkippyConfig {
 }
 
 impl ResolvedSkippyConfig {
-    fn speculative_decode_config(&self) -> SpeculativeDecodeConfig {
-        self.speculative.decode.clone()
+    /// A DFlash draft reads hidden states from every target layer it was
+    /// trained on, so it needs the complete target on this node. A split
+    /// target serves without it unless an explicit DFlash pairing fails
+    /// closed. A default draft that was never fetched is dropped too.
+    fn speculative_decode_config(&self, staged: bool) -> Result<SpeculativeDecodeConfig> {
+        let mut decode = self.speculative.decode.clone();
+        let default_draft_missing = self.speculative.default_dflash.is_some()
+            && decode
+                .dflash
+                .as_ref()
+                .is_some_and(|dflash| !dflash.draft_model_path.is_file());
+        if (staged || default_draft_missing) && decode.dflash.take().is_some() {
+            if staged
+                && self.speculative.default_dflash.is_none()
+                && self.speculative.pairing_fault == "fail_closed"
+            {
+                bail!("skippy DFlash drafts require the complete target model on one node");
+            }
+            decode.effective_strategy = "disabled".to_string();
+        }
+        Ok(decode)
     }
 }

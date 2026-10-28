@@ -1,3 +1,5 @@
+mod dflash;
+mod dflash_catalog;
 mod request_defaults;
 mod resolution;
 mod speculative;
@@ -29,6 +31,7 @@ mod hardware_tests;
 #[cfg(test)]
 mod hardware_translation_tests;
 
+pub use dflash_catalog::{DFlashDraftSource, DFlashPairing, DFlashTarget};
 #[cfg(test)]
 pub(crate) use resolution::resolve_skippy_config;
 pub use resolution::{

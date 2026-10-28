@@ -79,6 +79,15 @@ experiment, "mesh-llm DFlash defaults — decode speed by commit":
   `gpu_temp_c`, `ttft_ms_p50_*` and `commit_time_unix`, and its params include `workload`
   (`spec-prompts` or `agent`).
 
+The experiment page is the dashboard. Its description is rewritten after each recording
+with three sections:
+
+- the latest commit's table, as in the PR;
+- the shipped default's change from the previous recorded commit;
+- an index of recorded commits linking to their runs.
+
+Each commit's parent run shows its own table the same way.
+
 Every run carries `mesh_llm.commit`, `mesh_llm.commit_short`, `mesh_llm.commit_time`,
 `mesh_llm.label` and MLflow's own `mlflow.source.git.commit`. To compare commits in the UI,
 filter on these:

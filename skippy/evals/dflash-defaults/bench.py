@@ -232,7 +232,7 @@ def compare(args):
     import recorder
     if len(args.revs) != 2:
         sys.exit("compare needs two commits")
-    recorder.compare(git_rev(args.revs[0]), git_rev(args.revs[1]))
+    recorder.compare(git_rev(args.revs[0]), git_rev(args.revs[1]), load_matrix())
 
 
 def run(args):

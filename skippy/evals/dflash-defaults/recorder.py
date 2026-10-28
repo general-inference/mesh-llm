@@ -206,40 +206,84 @@ def record(state, matrix, logs, label, here, repo_url, table_md):
     mlflow.upload(parent_artifacts, "table.md", table_md)
     mlflow.upload(parent_artifacts, "matrix.json", matrix_text)
     mlflow.upload(parent_artifacts, "jobs.json", json.dumps(state, indent=1))
+    mlflow.log(parent_id, tags={"mlflow.note.content": f"## mesh-llm {rev[:9]} · {commit['subject']}\n\n"
+                                                       f"{table_md.strip()}"})
     mlflow.finish(parent_id, "FINISHED" if verified else "FAILED")
+    publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix)
     print(f"MLflow: {created} new runs for {rev[:9]} in '{EXPERIMENT}' "
           f"({len(stored)}/{expected} read back) — {mlflow.uri}/#/experiments/{experiment}/runs/{parent_id}")
 
 
-def compare(rev_a, rev_b):
-    mlflow = MLflow()
-    experiment = mlflow.experiment_id()
+def load_commit(mlflow, experiment, rev):
+    rows = {}
+    for run in mlflow.search(experiment, f"tags.`mesh_llm.commit` = '{rev}'"):
+        params = {p["key"]: p["value"] for p in run["data"].get("params", [])}
+        metrics = {m["key"]: m["value"] for m in run["data"].get("metrics", [])}
+        if "arm" in params:
+            sampled = params["temperature"] not in ("0", "0.0")
+            rows[(params["model"], params["machine"], params.get("workload", "spec-prompts"), params["arm"],
+                  sampled)] = metrics
+    return rows
 
-    def load(rev):
-        rows = {}
-        for run in mlflow.search(experiment, f"tags.`mesh_llm.commit` = '{rev}'"):
-            params = {p["key"]: p["value"] for p in run["data"].get("params", [])}
-            metrics = {m["key"]: m["value"] for m in run["data"].get("metrics", [])}
-            if "arm" in params:
-                sampled = params["temperature"] not in ("0", "0.0")
-                workload = params.get("workload", "spec-prompts")
-                rows[(params["model"], params["machine"], workload, params["arm"], sampled)] = metrics
-        return rows
 
-    a, b = load(rev_a), load(rev_b)
+def compare_table(mlflow, experiment, rev_a, rev_b, matrix):
+    """The shipped default's decode speed and gain per model, machine and workload, A against B,
+    in the matrix's model and machine order so it reads like the main table."""
+    models = [model["name"] for model in matrix["models"]]
+    machines = list(matrix["machines"])
+    rank = lambda name, names: names.index(name) if name in names else len(names)
+    a, b = load_commit(mlflow, experiment, rev_a), load_commit(mlflow, experiment, rev_b)
     if not a or not b:
         raise SystemExit(f"no runs for {rev_a[:9] if not a else rev_b[:9]} in '{EXPERIMENT}'")
-    print(f"Decode tok/s, all prompts: {rev_a[:9]} → {rev_b[:9]}\n")
-    print("| Model | Machine | Workload | Arm | " + f"{rev_a[:9]} | {rev_b[:9]} | Change | Speedup {rev_a[:9]} → {rev_b[:9]} |")
-    print("|---|---|---|---|---|---|---|---|")
-    for key in sorted(set(a) | set(b)):
-        model, machine, workload, arm, sampled = key
-        if arm not in ("off", "default"):
+    lines = [f"| Machine | Model | Workload | {rev_a[:9]} | {rev_b[:9]} | Change | Gain vs off |",
+             "|---|---|---|---|---|---|---|"]
+    for model, machine, workload, arm, sampled in sorted(
+            set(a) | set(b), key=lambda k: (rank(k[0], models), rank(k[1], machines), k[2] == "agent", k[4])):
+        if arm != "default":
             continue
-        before = a.get(key, {}).get("decode_tok_s_all")
-        after = b.get(key, {}).get("decode_tok_s_all")
+        key = (model, machine, workload, arm, sampled)
+        before, after = a.get(key, {}).get("decode_tok_s_all"), b.get(key, {}).get("decode_tok_s_all")
         change = f"{100 * (after / before - 1):+.1f}%" if before and after else "—"
-        speedup = " → ".join(f"{s:.2f}×" if s else "—" for s in (
-            a.get(key, {}).get("speedup_vs_off_all"), b.get(key, {}).get("speedup_vs_off_all"))) if arm != "off" else ""
-        name = ARM_LABELS[arm] + (", sampled" if sampled else "")
-        print(f"| {model} | {machine} | {workload} | {name} | {fmt(before)} | {fmt(after)} | {change} | {speedup} |")
+        gains = [m.get(key, {}).get("speedup_vs_off_all") for m in (a, b)]
+        gain = " → ".join(f"{g:.2f}×" if g else "—" for g in gains)
+        name = ("agent transcripts" if workload == "agent" else "all prompts") + (", sampled" if sampled else "")
+        lines.append(f"| {machine} | {model} | {name} | {fmt(before)} | {fmt(after)} | **{change}** | {gain} |")
+    return "\n".join(lines) + "\n"
+
+
+def compare(rev_a, rev_b, matrix):
+    mlflow = MLflow()
+    print(f"Shipped default, decode tok/s: {rev_a[:9]} → {rev_b[:9]}\n")
+    print(compare_table(mlflow, mlflow.experiment_id(), rev_a, rev_b, matrix))
+
+
+def publish_dashboard(mlflow, experiment, rev, label, commit, parent_id, table_md, matrix):
+    """Writes the latest commit's table, its change from the previous commit and an index of
+    recorded commits into the experiment description, which MLflow shows as Markdown."""
+    parents = [run for run in mlflow.search(experiment, "tags.`eval.program` = 'dflash-defaults'")
+               if (tag(run, "gi.key") or "").endswith(":dflash-defaults")]
+    parents.sort(key=lambda run: tag(run, "mesh_llm.commit_time") or "", reverse=True)
+    link = lambda run_id: f"{mlflow.uri}/#/experiments/{experiment}/runs/{run_id}"
+    previous = next((run for run in parents if tag(run, "mesh_llm.commit") != rev
+                     and (tag(run, "mesh_llm.commit_time") or "") <= commit["time"]), None)
+    sections = [
+        f"## Latest: {label} · mesh-llm [{rev[:9]}]({link(parent_id)}) · {commit['subject']}",
+        f"Committed {commit['time'][:10]}. Decode tok/s on held-out prompts, one request at a time. "
+        "Before = speculation off. +DFlash = best fixed draft length. All together = the shipped default "
+        "with no speculation config. Gain = All together ÷ Before, both from the same job.",
+        table_md.strip(),
+    ]
+    if previous:
+        prev = tag(previous, "mesh_llm.commit")
+        sections += [f"## Change from [{prev[:9]}]({link(previous['info']['run_id'])}) "
+                     f"({tag(previous, 'mesh_llm.label')})",
+                     compare_table(mlflow, experiment, prev, rev, matrix).strip()]
+    index = ["| Commit | Label | Committed | Verified |", "|---|---|---|---|"]
+    for run in parents[:15]:
+        index.append(f"| [{tag(run, 'mesh_llm.commit_short')}]({link(run['info']['run_id'])}) | "
+                     f"{tag(run, 'mesh_llm.label')} | {(tag(run, 'mesh_llm.commit_time') or '')[:10]} | "
+                     f"{tag(run, 'eval.verification_state') or '—'} |")
+    sections += ["## Recorded commits", "\n".join(index)]
+    note = "\n\n".join(sections)
+    mlflow.call("POST", "/api/2.0/mlflow/experiments/set-experiment-tag",
+                {"experiment_id": experiment, "key": "mlflow.note.content", "value": note})

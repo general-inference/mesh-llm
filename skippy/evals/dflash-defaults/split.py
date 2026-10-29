@@ -7,7 +7,7 @@
     split.py table  [--out DIR]
 
 Each formation builds REV on every member, serves split_matrix.json's layer package
-across N machines (one coordinator, N-1 joiners) and measures single-stream decode on
+across N machines (one coordinator, N-1 joiners; joiners copy the package from the coordinator) and measures single-stream decode on
 the held-out spec-prompts split. The arm is fixed for a formation because joiners hold
 an invite to the coordinator's mesh, so changing speculation means re-forming the split.
 Uses the signed-in jy session for the formation API.

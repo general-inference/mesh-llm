@@ -28,40 +28,35 @@ done
 [ -n "$BIN" ] || { echo "no release host build" >&2; exit 1; }
 export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
 
-# The shared store is slow to load from and has returned damaged copies of large files,
-# so every member serves from its own verified copy in a private Hugging Face cache.
+# Every member serves from its own verified copy in a private Hugging Face cache. The
+# shared model store returns I/O errors on writes this large, so the coordinator downloads
+# the package once (or already holds it) and the joiners copy it from the coordinator.
 export HF_HOME="$HOME/.cache/split-bench-hf"
 export HF_HUB_OFFLINE=1
 REPO_DIR="models--${SPLIT_REPO//\//--}"
 LOCAL="$HF_HOME/hub/$REPO_DIR/snapshots/$SPLIT_REV"
-SHARED="${JIANYANG_STORE_HF:-/nonexistent}/hub/$REPO_DIR/snapshots/$SPLIT_REV"
 mkdir -p "$LOCAL"
-if [ ! -f "$LOCAL/.verified" ]; then
-  T0=$(date +%s)
-  if [ -f "$SHARED/model-package.json" ]; then
-    echo "staging $SPLIT_REPO@${SPLIT_REV:0:9} from the shared store"
-    rsync -rL --partial "$SHARED/" "$LOCAL/" || { echo "copy from $SHARED failed" >&2; exit 1; }
-  else
-    # Not on the shared store: fetch only the files the package manifest names.
-    echo "downloading $SPLIT_REPO@${SPLIT_REV:0:9} from Hugging Face"
-    BASE="https://huggingface.co/$SPLIT_REPO/resolve/$SPLIT_REV"
-    curl -fsSL --retry 5 -o "$LOCAL/model-package.json" "$BASE/model-package.json" || exit 1
-    python3 -c 'import json,sys; [print(e["path"]) for e in json.load(open(sys.argv[1]))["artifact_catalog"]["entries"]]' \
-      "$LOCAL/model-package.json" | while read -r path; do
-      mkdir -p "$LOCAL/$(dirname "$path")"
-      curl -fsSL --retry 10 -C - -o "$LOCAL/$path" "$BASE/$path" || { echo "fetch failed: $path" >&2; exit 1; }
-    done || exit 1
-  fi
-  SNAP="$LOCAL" python3 - <<'PY' || { echo "staged package failed verification" >&2; exit 1; }
+PKG_PORT=9446
+LEAD="${JIANYANG_LEADER_HOST:-}"
+
+# Fetch every file the manifest names from BASE (Hugging Face, or the coordinator on the
+# LAN), then check each against the manifest's SHA-256 before trusting the copy.
+fetch_package() {
+  local base="$1"
+  curl -fsSL --retry 5 -o "$LOCAL/model-package.json" "$base/model-package.json" || return 1
+  python3 -c 'import json,sys; [print(e["path"]) for e in json.load(open(sys.argv[1]))["artifact_catalog"]["entries"]]' \
+    "$LOCAL/model-package.json" | while read -r path; do
+    mkdir -p "$LOCAL/$(dirname "$path")"
+    curl -fsSL --retry 10 -C - -o "$LOCAL/$path" "$base/$path" || { echo "fetch failed: $path" >&2; exit 1; }
+  done || return 1
+  SNAP="$LOCAL" python3 - <<'PY' || { echo "staged package failed verification" >&2; return 1; }
 import hashlib, json, os, sys
 snap = os.environ["SNAP"]
-manifest = json.load(open(os.path.join(snap, "model-package.json")))
 bad = []
-for entry in manifest["artifact_catalog"]["entries"]:
-    path = os.path.join(snap, entry["path"])
+for entry in json.load(open(os.path.join(snap, "model-package.json")))["artifact_catalog"]["entries"]:
     h = hashlib.sha256()
     try:
-        with open(path, "rb") as f:
+        with open(os.path.join(snap, entry["path"]), "rb") as f:
             for chunk in iter(lambda: f.read(8 << 20), b""):
                 h.update(chunk)
     except OSError:
@@ -72,7 +67,28 @@ if bad:
     print("bad files:", bad); sys.exit(1)
 PY
   touch "$LOCAL/.verified"
+}
+
+if [ ! -f "$LOCAL/.verified" ]; then
+  T0=$(date +%s)
+  if [ "$ROLE" = joiner ] && [ -n "$LEAD" ]; then
+    # The coordinator holds a verified copy and serves it on the LAN; one internet download
+    # per package instead of one per machine.
+    for _ in $(seq 1 360); do
+      curl -sf -m 5 -o /dev/null "http://$LEAD:$PKG_PORT/.verified" && break
+      sleep 10
+    done
+    echo "copying $SPLIT_REPO@${SPLIT_REV:0:9} from the coordinator at $LEAD"
+    fetch_package "http://$LEAD:$PKG_PORT" || exit 1
+  else
+    echo "downloading $SPLIT_REPO@${SPLIT_REV:0:9} from Hugging Face"
+    fetch_package "https://huggingface.co/$SPLIT_REPO/resolve/$SPLIT_REV" || exit 1
+  fi
   echo "package staged and verified in $(( $(date +%s) - T0 ))s"
+fi
+if [ "$ROLE" = coordinator ]; then
+  python3 -m http.server "$PKG_PORT" --directory "$LOCAL" >"$ART/package-server.log" 2>&1 &
+  PKG_SERVER=$!
 fi
 
 case "${SPLIT_ARM:?}" in
@@ -117,7 +133,7 @@ fi
 "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
   --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7842 >"$LOG" 2>&1 &
 SERVE=$!
-trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
+trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" "${PKG_SERVER:-0}" 2>/dev/null || true' EXIT
 
 MODEL_ID=""
 for i in $(seq 1 360); do

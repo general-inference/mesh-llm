@@ -364,6 +364,12 @@ pub fn find_layer_package(model_query: &str) -> Option<String> {
 /// only when the package manifest exists. Repo naming is intentionally ignored.
 pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
     let (repo, revision) = parse_exact_huggingface_repo(model_query)?;
+    if let Some(revision) = revision.as_deref()
+        && cached_layer_package_snapshot(&crate::huggingface_hub_cache_dir(), &repo, revision)
+            .is_some()
+    {
+        return Some(format_hf_package_ref(&repo, Some(revision)));
+    }
     let revision_ref = revision.as_deref().unwrap_or("main");
     match hf_model_repo_has_file(&repo, revision_ref, "model-package.json") {
         Ok(true) => Some(format_hf_package_ref(&repo, revision.as_deref())),
@@ -387,6 +393,25 @@ fn parse_exact_huggingface_repo(input: &str) -> Option<(String, Option<String>)>
     let (repo, revision, selector) = skippy_model_resolver::parse_huggingface_repo_ref(input)
         .or_else(|| skippy_model_resolver::parse_huggingface_repo_url(input))?;
     selector.is_none().then_some((repo, revision))
+}
+
+/// A pinned revision whose snapshot is already in the local Hugging Face cache
+/// with a package manifest is a layer package without asking the Hub. Revisions
+/// that exist only locally, or offline nodes, would otherwise fall through to
+/// GGUF file resolution and serve one package artifact as a whole model.
+fn cached_layer_package_snapshot(hub_cache: &Path, repo: &str, revision: &str) -> Option<PathBuf> {
+    let mut components = Path::new(revision).components();
+    let (Some(Component::Normal(_)), None) = (components.next(), components.next()) else {
+        return None;
+    };
+    let snapshot = hub_cache
+        .join(format!("models--{}", repo.replace('/', "--")))
+        .join("snapshots")
+        .join(revision);
+    snapshot
+        .join("model-package.json")
+        .is_file()
+        .then_some(snapshot)
 }
 
 fn format_hf_package_ref(repo: &str, revision: Option<&str>) -> String {

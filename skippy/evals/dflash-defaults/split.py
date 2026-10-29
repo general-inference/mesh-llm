@@ -112,6 +112,12 @@ def submit(args):
                     raise
                 print(f"{f['key']}: machines busy, retrying in 2 minutes", flush=True)
                 time.sleep(120)
+            except urllib.error.URLError as error:
+                # A long wait outlives brief network outages.
+                if not args.wait:
+                    raise
+                print(f"{f['key']}: {error.reason}, retrying in 2 minutes", flush=True)
+                time.sleep(120)
         formation = reply.get("formation", reply)
         print(f"{f['key']:44s} {formation.get('id')}  {formation.get('status')}")
         state["formations"].append({k: f[k] for k in ("key", "stages", "arm", "delay")} | {"id": formation.get("id")})

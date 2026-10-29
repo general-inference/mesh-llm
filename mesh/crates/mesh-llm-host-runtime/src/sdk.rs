@@ -27,6 +27,7 @@ mod embedded_memberships;
 mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;
+pub mod thinking;
 
 pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;

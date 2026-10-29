@@ -43,6 +43,11 @@ impl Serialize for PublicationState {
 }
 
 pub enum RuntimeControlRequest {
+    ThinkingControls {
+        model: String,
+        resp:
+            tokio::sync::oneshot::Sender<Option<skippy_inference_api::thinking::ThinkingControls>>,
+    },
     Join {
         invite_token: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,

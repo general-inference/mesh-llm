@@ -420,6 +420,15 @@ pub(super) async fn run_auto_handle_control_request(
     use super::{IntentSource, ModelIntent};
 
     match cmd {
+        api::RuntimeControlRequest::ThinkingControls { model, resp } => {
+            let controls = super::runtime_registry::runtime_registry_thinking_controls(
+                ctx.runtime_instance_registry,
+                &model,
+            )
+            .await;
+            let _ = resp.send(controls);
+            false
+        }
         api::RuntimeControlRequest::Join { invite_token, resp } => {
             let result = tokio::select! {
                 biased;

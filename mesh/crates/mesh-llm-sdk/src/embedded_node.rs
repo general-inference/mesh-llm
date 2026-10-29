@@ -59,6 +59,23 @@ impl MeshNode {
         self.handle.status().await
     }
 
+    /// Queries this node's loaded model by its exact serving ID, without HTTP.
+    ///
+    /// Returns its render-only probe summary. `None` means absent, unprobed, or
+    /// different observations across loaded instances, rather than thinking off.
+    /// Efforts are specific to the model's selected template; the observations
+    /// do not guarantee that generation obeys them. Queries reflect the current
+    /// load and do not retain observations after unload or reload.
+    ///
+    /// # Errors
+    /// Returns an error when the runtime is shutting down or unavailable.
+    pub async fn thinking_controls(
+        &self,
+        serving_id: &str,
+    ) -> anyhow::Result<Option<crate::thinking::ThinkingControls>> {
+        self.handle.thinking_controls(serving_id).await
+    }
+
     pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
         self.handle.join_token(token).await
     }

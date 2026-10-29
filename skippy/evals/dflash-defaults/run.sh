@@ -39,9 +39,12 @@ done
 export MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes"
 [ -d "$MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR" ] || { echo "no packaged runtime" >&2; exit 1; }
 
-sha_ok() {
-  if command -v sha256sum >/dev/null 2>&1; then echo "$1  $2" | sha256sum -c --quiet 2>/dev/null
-  else echo "$1  $2" | shasum -a 256 -c --quiet 2>/dev/null; fi
+sha_ok() { # sha256 path
+  # Compare digests directly: macOS 26's sha256sum rejects a check list on stdin.
+  [ -f "$2" ] || return 1
+  local got
+  got=$( (sha256sum "$2" 2>/dev/null || shasum -a 256 "$2") | cut -d' ' -f1)
+  [ "$got" = "$1" ]
 }
 size_of() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
 fetch() { # url sha256 bytes path

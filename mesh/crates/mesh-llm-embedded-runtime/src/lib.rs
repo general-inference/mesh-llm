@@ -48,6 +48,10 @@ pub mod thinking {
     pub use mesh_llm_host_runtime::sdk::thinking::{ThinkingControls, ThinkingToggle};
 }
 
+pub mod inference {
+    pub use mesh_llm_host_runtime::sdk::inference::*;
+}
+
 pub mod native_runtime {
     pub use mesh_llm_host_runtime::sdk::native_runtime::*;
 }

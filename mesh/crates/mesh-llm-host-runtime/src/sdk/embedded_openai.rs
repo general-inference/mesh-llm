@@ -26,6 +26,8 @@ pub struct EmbeddedSseEvent {
 }
 
 pub struct EmbeddedOpenAiStream {
+    request_id: Option<String>,
+    shutdown: Option<tokio::sync::watch::Receiver<bool>>,
     status_code: u16,
     content_type: Option<String>,
     body: Body,
@@ -33,8 +35,33 @@ pub struct EmbeddedOpenAiStream {
 }
 
 impl EmbeddedOpenAiStream {
+    pub(super) fn from_response(response: Response<Body>) -> Self {
+        Self {
+            request_id: response
+                .headers()
+                .get("request-id")
+                .or_else(|| response.headers().get("x-request-id"))
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+            shutdown: None,
+            status_code: response.status().as_u16(),
+            content_type: response_content_type(&response),
+            body: response.into_body(),
+            decoder: SseDecoder::default(),
+        }
+    }
+
+    pub(super) fn with_shutdown(mut self, shutdown: tokio::sync::watch::Receiver<bool>) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
     pub fn status_code(&self) -> u16 {
         self.status_code
+    }
+
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
     }
 
     pub fn content_type(&self) -> Option<&str> {
@@ -62,6 +89,25 @@ impl EmbeddedOpenAiStream {
     }
 
     pub async fn next_event(&mut self) -> Result<Option<EmbeddedSseEvent>> {
+        let Some(mut shutdown) = self.shutdown.clone() else {
+            return self.read_event().await;
+        };
+        let result = if *shutdown.borrow_and_update() {
+            Err(anyhow::anyhow!("embedded runtime is shutting down"))
+        } else {
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => Err(anyhow::anyhow!("embedded runtime is shutting down")),
+                result = self.read_event() => result,
+            }
+        };
+        if result.is_err() {
+            self.body = Body::empty();
+        }
+        result
+    }
+
+    async fn read_event(&mut self) -> Result<Option<EmbeddedSseEvent>> {
         loop {
             if let Some(event) = self.decoder.pop() {
                 return Ok(Some(event));
@@ -114,14 +160,7 @@ impl EmbeddedServingController {
         body_json: String,
     ) -> Result<EmbeddedOpenAiStream> {
         let response = self.openai_response(path, body_json).await?;
-        let status_code = response.status().as_u16();
-        let content_type = response_content_type(&response);
-        Ok(EmbeddedOpenAiStream {
-            status_code,
-            content_type,
-            body: response.into_body(),
-            decoder: SseDecoder::default(),
-        })
+        Ok(EmbeddedOpenAiStream::from_response(response))
     }
 
     async fn openai_response(&self, path: &str, body_json: String) -> Result<Response<Body>> {

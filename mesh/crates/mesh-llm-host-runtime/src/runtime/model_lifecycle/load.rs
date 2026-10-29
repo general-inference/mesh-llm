@@ -346,6 +346,7 @@ async fn finish_runtime_model_load(
         ctx.runtime_instance_registry,
         ctx.node,
         RuntimeModelRegistration {
+            inference_router: handle.inference_router(),
             primary_model_name: ctx.primary_model_name,
             model_name: &loaded_name,
             instance_id: &instance_id,

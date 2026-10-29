@@ -39,6 +39,15 @@ The raw `OpenAiClient::request` and `OpenAiClient::stream` methods preserve
 OpenAI-compatible request bodies, including tools and response-format fields.
 A serve-only node rejects `openai_client()` at the SDK boundary.
 
+For a locally loaded model, `node.inference_client()` provides in-process streaming
+without an HTTP connection or another model load. It works in serve-only mode as
+well as combined mode. Use the exact serving ID and the SDK's
+`inference::ChatCompletionRequest`; the client enables streaming automatically.
+The returned stream exposes status and `next_event()`. Drop it to cancel a request.
+Each request resolves the node's current loaded instance, and shutdown interrupts
+pending dispatch and stream reads. This local path uses the model's existing
+frontend, guardrails and lifecycle observers; it does not route to remote peers.
+
 **Migration:** The old `MeshClient` re-export and `node` feature are removed from
 this facade. Migrate callers to `MeshNode`; the embedded node owns mesh join,
 local HTTP routing, and shutdown. This changes the SDK API but not mesh wire

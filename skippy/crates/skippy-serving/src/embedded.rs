@@ -346,6 +346,7 @@ impl Drop for SkippyRuntimeHandle {
 }
 
 pub struct EmbeddedServerHandle {
+    router: Option<Router>,
     status: Arc<Mutex<ServerHandleState>>,
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<()>>>,
@@ -364,6 +365,11 @@ struct ServerHandleState {
 }
 
 impl EmbeddedServerHandle {
+    /// The same frontend used by this server, for in-process inference.
+    pub fn inference_router(&self) -> Option<Router> {
+        self.router.clone()
+    }
+
     pub fn status(&self) -> EmbeddedServerStatus {
         let status = self.status.lock().expect("server status lock poisoned");
         EmbeddedServerStatus {
@@ -431,6 +437,7 @@ pub fn start_openai_backend_with_tokenizer(
 }
 
 fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServerHandle {
+    let inference_router = router.clone();
     let status = Arc::new(Mutex::new(ServerHandleState {
         name: "openai-backend",
         bind_addr,
@@ -462,6 +469,7 @@ fn spawn_openai_backend(bind_addr: SocketAddr, router: Router) -> EmbeddedServer
         result
     });
     EmbeddedServerHandle {
+        router: Some(inference_router),
         status,
         shutdown: Some(shutdown_tx),
         task: Some(task),
@@ -545,6 +553,7 @@ pub fn start_binary_stage(options: BinaryStageOptions) -> EmbeddedServerHandle {
         result
     });
     EmbeddedServerHandle {
+        router: None,
         status,
         shutdown: Some(shutdown_tx),
         task: Some(task),
@@ -593,6 +602,7 @@ where
         result
     });
     EmbeddedServerHandle {
+        router: None,
         status,
         shutdown: Some(shutdown_tx),
         task: Some(task),
@@ -1008,21 +1018,26 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn optional_observer_reaches_frontend_router_and_legacy_path_stays_available() {
+    async fn optional_observer_reaches_native_frontend_and_legacy_path_stays_available() {
         let observer = Arc::new(RecordingObserver::default());
-        let observed_response = openai_backend_router_with_lifecycle_observer(
+        let server = start_openai_backend_with_lifecycle_observer(
+            "127.0.0.1:0".parse().unwrap(),
             Arc::new(ModelsBackend),
             Some(Arc::clone(&observer) as Arc<dyn InferenceLifecycleObserver>),
-        )
-        .oneshot(
-            Request::builder()
-                .uri("/v1/models")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("router response");
+        );
+        let observed_response = server
+            .inference_router()
+            .expect("native frontend")
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
         assert_eq!(observed_response.status(), StatusCode::OK);
+        server.abort();
         assert!(
             observer
                 .0

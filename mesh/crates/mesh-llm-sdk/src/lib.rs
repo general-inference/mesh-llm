@@ -6,6 +6,12 @@ pub mod embedded_node;
 #[cfg(feature = "serving")]
 pub mod live_transcription;
 
+#[cfg(feature = "serving")]
+pub mod inference {
+    pub use mesh_llm_embedded_runtime::inference::*;
+    pub use mesh_llm_embedded_runtime::{EmbeddedOpenAiStream, EmbeddedSseEvent};
+}
+
 /// The loaded chat template's observed controls, queried directly from the node.
 ///
 /// ```no_run

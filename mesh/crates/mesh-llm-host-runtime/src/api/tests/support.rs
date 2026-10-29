@@ -1016,6 +1016,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
         );
         inner.runtime_data_producer.publish_llama_slots_snapshot(
             runtime_data::RuntimeLlamaSlotsSnapshot {
+                speculative_strategy: None,
                 status: runtime_data::RuntimeLlamaEndpointStatus::Ready,
                 model: Some("collector-model".into()),
                 instance_id: Some("runtime-1".into()),

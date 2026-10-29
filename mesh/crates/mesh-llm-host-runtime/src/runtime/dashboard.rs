@@ -537,6 +537,7 @@ pub(super) fn publish_runtime_llama_unavailable(
         return;
     };
     producer.publish_llama_slots_snapshot(crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+        speculative_strategy: None,
         status: crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable,
         model: Some(model_name.to_string()),
         instance_id: instance_id.map(str::to_string),

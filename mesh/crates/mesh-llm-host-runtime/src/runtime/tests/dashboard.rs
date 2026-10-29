@@ -161,6 +161,7 @@ async fn dashboard_snapshot_provider_uses_per_model_runtime_slot_snapshots() {
         },
     ]));
     producer.publish_llama_slots_snapshot(crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+        speculative_strategy: None,
         status: crate::runtime_data::RuntimeLlamaEndpointStatus::Ready,
         model: Some("model-a".to_string()),
         instance_id: None,
@@ -181,6 +182,7 @@ async fn dashboard_snapshot_provider_uses_per_model_runtime_slot_snapshots() {
         ],
     });
     producer.publish_llama_slots_snapshot(crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+        speculative_strategy: None,
         status: crate::runtime_data::RuntimeLlamaEndpointStatus::Ready,
         model: Some("model-b".to_string()),
         instance_id: None,

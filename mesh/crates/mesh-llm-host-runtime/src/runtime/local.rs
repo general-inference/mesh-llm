@@ -181,6 +181,8 @@ impl LocalRuntimeModelHandle {
                 let captured_unix_ms =
                     unix_nanos_to_unix_ms(status.sessions_captured_at_unix_nanos).unwrap_or(now);
                 Some(RuntimeLlamaSlotsSnapshot {
+                    speculative_strategy: matches!(status.state, skippy::SkippyModelState::Ready)
+                        .then(|| model.speculative_strategy().to_owned()),
                     status: RuntimeLlamaEndpointStatus::Ready,
                     model: Some(model_name.to_string()),
                     instance_id: instance_id.map(str::to_string),

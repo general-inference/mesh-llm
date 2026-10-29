@@ -50,6 +50,7 @@ pub struct LoadedModelBackend {
     /// these; the host only carries them to `/v1/models`. See
     /// [`skippy_serving::thinking_probe`] for what they can and cannot claim.
     pub thinking: Option<ThinkingControls>,
+    pub speculative_strategy: String,
     telemetry: Telemetry,
 }
 
@@ -127,6 +128,7 @@ impl ModelLoadRequest {
         let binding = embedded_openai_backend(args).context("construct Skippy OpenAI backend")?;
         // Skippy owns the probe; the host only carries the observation through.
         let thinking = binding.thinking.clone();
+        let speculative_strategy = binding.speculative_strategy;
         let backend = match self.guardrails {
             Some(guardrails) => guardrails.wrap_backend_with_telemetry(
                 binding.backend,
@@ -141,6 +143,7 @@ impl ModelLoadRequest {
             config,
             prediction_return_listener,
             thinking,
+            speculative_strategy,
             telemetry,
         })
     }

@@ -1,0 +1,41 @@
+{
+ "source": {
+  "dataset": "nebius/SWE-rebench-openhands-trajectories",
+  "revision": "35455389ab51bf5e2306bfd436ef72d0f98bf882",
+  "file": "trajectories.parquet",
+  "sha256": "14048dd1fcd22ce094b6e85f8a38f223a9ef1327031aaaad052804870212efa1",
+  "license": "CC-BY-4.0"
+ },
+ "attribution": "Nebius, SWE-rebench-OpenHands-Trajectories (CC-BY-4.0); trajectories collected with Qwen3-Coder-480B-A35B-Instruct and OpenHands v0.54.0.",
+ "selection": "Each prompt is one real OpenHands history, cut just before an assistant turn and rendered\nas text, followed by a request for the agent's next message. Selection does not depend on\nany engine: trajectories are taken in SHA-256 order of their ID, at most one per\nrepository. Each fills the first unfilled history band it can reach, cut at its first\nassistant turn whose history estimate lands inside the band.",
+ "bands": [
+  {
+   "name": "4-8K",
+   "min_est_tokens": 4000,
+   "max_est_tokens": 8000,
+   "count": 8
+  },
+  {
+   "name": "8-16K",
+   "min_est_tokens": 8000,
+   "max_est_tokens": 16000,
+   "count": 8
+  },
+  {
+   "name": "16-32K",
+   "min_est_tokens": 16000,
+   "max_est_tokens": 32000,
+   "count": 8
+  },
+  {
+   "name": "32-48K",
+   "min_est_tokens": 32000,
+   "max_est_tokens": 48000,
+   "count": 8
+  }
+ ],
+ "chars_per_token_estimate": 3.6,
+ "items": 32,
+ "file_sha256": "f79301f89122993c2b54e752c5db142d08749aa43700e4515cf29750dd17c3c3",
+ "builder_sha256": "542fa6bde071119b7fc2e7add7ee26357ca352a06d23d15d923f592dadb32e97"
+}

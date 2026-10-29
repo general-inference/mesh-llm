@@ -15,6 +15,8 @@ Uses the signed-in jy session for the formation API.
 
 import argparse
 import json
+import time
+import urllib.error
 import os
 import re
 import subprocess
@@ -100,7 +102,16 @@ def submit(args):
     path = Path(args.out) / "split-state.json"
     state = json.loads(path.read_text()) if path.exists() else {"formations": []}
     for f in formations:
-        reply = api("POST", "/v1/formations", {"spec": f["spec"], "idempotency_key": f["key"]})
+        while True:
+            try:
+                reply = api("POST", "/v1/formations", {"spec": f["spec"], "idempotency_key": f["key"]})
+                break
+            except urllib.error.HTTPError as error:
+                # A formation needs all its machines free at once; wait for them if asked.
+                if error.code != 409 or not args.wait:
+                    raise
+                print(f"{f['key']}: machines busy, retrying in 2 minutes", flush=True)
+                time.sleep(120)
         formation = reply.get("formation", reply)
         print(f"{f['key']:44s} {formation.get('id')}  {formation.get('status')}")
         state["formations"].append({k: f[k] for k in ("key", "stages", "arm", "delay")} | {"id": formation.get("id")})
@@ -172,6 +183,7 @@ def main():
     parser.add_argument("--delays", default="0,20")
     parser.add_argument("--out", default="split-bench-out")
     parser.add_argument("--matrix", default="split_matrix.json", help="model and nodes to split across")
+    parser.add_argument("--wait", action="store_true", help="retry while the nodes are busy")
     args = parser.parse_args()
     {"plan": plan, "submit": submit, "status": status, "table": table}[args.command](args)
 

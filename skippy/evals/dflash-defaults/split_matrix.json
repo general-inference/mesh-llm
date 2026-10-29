@@ -21,6 +21,6 @@
   "note": "glm5-next is served with --allow-uncertified-split. The revision is a local package on the coordinator, rebuilt from meshllm d1b3be77 with headers renamed glm5next -> glm5-next to match Unsloth a38483c8; it is not on Hugging Face, so the first node must hold it. Joiners copy it from the coordinator over the LAN.",
   "cuts": {
     "2": "23",
-    "4": "11,23,34"
+    "4": "11,23,35"
   }
 }

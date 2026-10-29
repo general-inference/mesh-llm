@@ -13,6 +13,7 @@
 #   BENCH_DRAFT_URL / _SHA256 / _BYTES / _FILE   draft for the fixed arms, or empty
 #   BENCH_FIXED_BLOCKS         space-separated draft lengths, e.g. "5 7"
 #   BENCH_SPLIT                spec-prompts split (default: report)
+#   (when the default does not serve the draft, a "dflash" arm runs it with adaptive blocks)
 #   BENCH_AGENT                1 to add the agent-transcript arms, only to run just them
 set -euo pipefail
 
@@ -147,6 +148,12 @@ if [ "${BENCH_AGENT:-0}" != only ]; then
       ARM_ENV="SKIPPY_DFLASH_ADAPTIVE=0" run_arm "d$k" --config "$(fixed_config "$k")"
     done
   fi
+  # When the default serves something other than this draft (native MTP, or nothing),
+  # measure the draft as it would ship: adaptive blocks up to the largest fixed one.
+  if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
+    DFLASH_CAP=$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)
+    ARM_ENV= run_arm dflash --config "$(fixed_config "$DFLASH_CAP")"
+  fi
   MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
   MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
 fi
@@ -155,6 +162,10 @@ if [ "${BENCH_AGENT:-0}" != 0 ]; then
   PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" SPLIT=all CTX=65536
   ARM_ENV= run_arm agent_off --no-draft --speculative-strategy disabled
   ARM_ENV= run_arm agent_default
+  if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
+    DFLASH_CAP=$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)
+    ARM_ENV= run_arm agent_dflash --config "$(fixed_config "$DFLASH_CAP")"
+  fi
 fi
 
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

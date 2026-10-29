@@ -5,12 +5,14 @@
 # Inputs (environment, set by split.py):
 #   JIANYANG_ROLE              coordinator | joiner
 #   JIANYANG_LEADER_HOST       the coordinator's LAN address (formation rendezvous)
-#   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face
+#   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face, or
+#   SPLIT_GGUF / _SHA256       a single GGUF already on every member, relative to $HOME
 #   SPLIT_STAGES               how many machines the split must span before measuring
 #   SPLIT_ARM                  off | default | ngram (speculation for this formation)
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
+#   SPLIT_CUT                  layer boundaries for an even cut, e.g. "32" or "16,32,48"
 set -uo pipefail
 
 cd mesh-llm
@@ -69,7 +71,14 @@ PY
   touch "$LOCAL/.verified"
 }
 
-if [ ! -f "$LOCAL/.verified" ]; then
+if [ -n "${SPLIT_GGUF:-}" ]; then
+  # A whole GGUF each member already holds: check it, and skip package staging.
+  MODEL_FILE="$HOME/$SPLIT_GGUF"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "${SPLIT_GGUF_SHA256:?}  $MODEL_FILE" | sha256sum -c --quiet || { echo "$MODEL_FILE failed verification" >&2; exit 1; }
+  fi
+  echo "serving the verified GGUF $MODEL_FILE"
+elif [ ! -f "$LOCAL/.verified" ]; then
   T0=$(date +%s)
   if [ "$ROLE" = joiner ] && [ -n "$LEAD" ]; then
     # The coordinator holds a verified copy and serves it on the LAN; one internet download
@@ -86,7 +95,7 @@ if [ ! -f "$LOCAL/.verified" ]; then
   fi
   echo "package staged and verified in $(( $(date +%s) - T0 ))s"
 fi
-if [ "$ROLE" = coordinator ]; then
+if [ "$ROLE" = coordinator ] && [ -z "${SPLIT_GGUF:-}" ]; then
   python3 -m http.server "$PKG_PORT" --directory "$LOCAL" >"$ART/package-server.log" 2>&1 &
   PKG_SERVER=$!
 fi
@@ -98,9 +107,17 @@ case "${SPLIT_ARM:?}" in
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
-MODEL="$SPLIT_REPO@$SPLIT_REV"
-SPLIT_FLAGS="--split"
-[ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="--split --allow-uncertified-split"
+# Capacity-only placement packs a model that fits one node onto that node (63 of 64
+# layers), which measures a split that barely exists. An explicit cut levels the
+# stages; --auto-balance is what honours it, and its re-cut loop has nothing to fix on
+# identical machines. The layout is logged before and after measuring to show if it did.
+if [ -n "${SPLIT_CUT:-}" ]; then
+  export MESH_LLM_AUTO_BALANCE_INITIAL_CUT="$SPLIT_CUT"
+  BALANCE_FLAGS="--auto-balance"
+fi
+MODEL="${MODEL_FILE:-$SPLIT_REPO@$SPLIT_REV}"
+SPLIT_FLAGS="--split ${BALANCE_FLAGS:-}"
+[ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="$SPLIT_FLAGS --allow-uncertified-split"
 LOG="$ART/$ROLE.log"
 
 if [ "$ROLE" = joiner ]; then
@@ -133,7 +150,9 @@ fi
 "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
   --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7842 >"$LOG" 2>&1 &
 SERVE=$!
-trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" "${PKG_SERVER:-0}" 2>/dev/null || true' EXIT
+# Only kill what was started: `kill 0` would signal this whole process group, the
+# script included, and turn a finished run into a failed job.
+trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" ${PKG_SERVER:+"$PKG_SERVER"} 2>/dev/null || true' EXIT
 
 MODEL_ID=""
 for i in $(seq 1 360); do
@@ -158,5 +177,9 @@ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,
 ARM="$SPLIT_ARM" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
-echo "SPLIT_LAYOUT {\"stages\": $SPLIT_STAGES, \"spans\": \"$SPANS\", \"wire_delay_ms\": ${SPLIT_WIRE_DELAY_MS:-0}}"
+SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '
+import json, sys
+st = (json.load(sys.stdin).get("runtime") or {}).get("stages") or []
+print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sorted(st, key=lambda s: s["stage_index"])))' 2>/dev/null || true)
+echo "SPLIT_LAYOUT {\"stages\": $SPLIT_STAGES, \"spans\": \"$SPANS\", \"spans_after\": \"$SPANS_AFTER\", \"wire_delay_ms\": ${SPLIT_WIRE_DELAY_MS:-0}}"
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

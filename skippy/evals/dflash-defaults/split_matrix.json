@@ -17,5 +17,9 @@
   "lanes": 1,
   "ctx": 8192,
   "allow_uncertified": true,
-  "note": "glm5next is not in split-certified.json; served with --allow-uncertified-split, and checked by requiring identical greedy output across split sizes. The coordinator (first node) holds the package on local disk and serves it to joiners on the LAN; the shared store returns I/O errors on large writes."
+  "note": "glm5next is not in split-certified.json; served with --allow-uncertified-split, and checked by requiring identical greedy output across split sizes. The coordinator (first node) holds the package on local disk and serves it to joiners on the LAN; the shared store returns I/O errors on large writes.",
+  "cuts": {
+    "2": "23",
+    "4": "11,23,34"
+  }
 }

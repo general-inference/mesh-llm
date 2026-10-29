@@ -6,6 +6,21 @@ pub mod embedded_node;
 #[cfg(feature = "serving")]
 pub mod live_transcription;
 
+/// The loaded chat template's observed controls, queried directly from the node.
+///
+/// ```no_run
+/// use mesh_llm_sdk::{MeshNode, thinking::ThinkingControls};
+///
+/// async fn controls(node: &MeshNode, serving_id: &str)
+///     -> anyhow::Result<Option<ThinkingControls>> {
+///     node.thinking_controls(serving_id).await
+/// }
+/// ```
+#[cfg(feature = "serving")]
+pub mod thinking {
+    pub use mesh_llm_embedded_runtime::thinking::{ThinkingControls, ThinkingToggle};
+}
+
 #[cfg(feature = "serving")]
 pub use embedded_node::{
     MeshMembershipConfig, MeshMembershipStatus, MeshNode, MeshNodeBuilder, MeshNodeStatus,

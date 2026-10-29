@@ -9,17 +9,24 @@ use super::{
 };
 use crate::{mesh, models};
 use anyhow::Result;
+use skippy_inference_api::thinking::ThinkingControls;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 pub(super) type RuntimeInstanceRegistry =
-    Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
+    Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, RuntimeInstanceMetadata>>>>;
+
+pub(super) struct RuntimeInstanceMetadata {
+    context_length: Option<u32>,
+    thinking: Option<ThinkingControls>,
+}
 
 pub(super) struct RuntimeModelRegistration<'a> {
     pub primary_model_name: &'a str,
     pub model_name: &'a str,
     pub instance_id: &'a str,
     pub context_length: Option<u32>,
+    pub thinking: Option<&'a ThinkingControls>,
     pub capabilities: models::ModelCapabilities,
     pub workload_class: mesh::ModelWorkloadClass,
 }
@@ -83,6 +90,7 @@ pub(super) async fn register_runtime_instance(
         model_name,
         instance_id,
         context_length,
+        thinking,
         capabilities,
         workload_class,
     } = registration;
@@ -91,7 +99,13 @@ pub(super) async fn register_runtime_instance(
         let instances = guard.entry(model_name.to_string()).or_default();
         let previous_context = runtime_registry_model_context(instances);
         let was_empty = instances.is_empty();
-        instances.insert(instance_id.to_string(), context_length);
+        instances.insert(
+            instance_id.to_string(),
+            RuntimeInstanceMetadata {
+                context_length,
+                thinking: thinking.cloned(),
+            },
+        );
         let next_context = runtime_registry_model_context(instances);
         (was_empty, previous_context != next_context, next_context)
     };
@@ -169,7 +183,170 @@ pub(super) async fn runtime_registry_has_model(
 }
 
 pub(super) fn runtime_registry_model_context(
-    instances: &BTreeMap<String, Option<u32>>,
+    instances: &BTreeMap<String, RuntimeInstanceMetadata>,
 ) -> Option<u32> {
-    instances.values().filter_map(|context| *context).max()
+    instances
+        .values()
+        .filter_map(|instance| instance.context_length)
+        .max()
+}
+
+pub(super) async fn runtime_registry_thinking_controls(
+    registry: &RuntimeInstanceRegistry,
+    model_name: &str,
+) -> Option<ThinkingControls> {
+    let guard = registry.lock().await;
+    let instances = guard.get(model_name)?;
+    let controls = instances.values().next()?.thinking.as_ref()?;
+    // A model ID can route to several profiles. Only offer a control when the
+    // same observations cover every instance that could receive the request.
+    instances
+        .values()
+        .all(|instance| instance.thinking.as_ref() == Some(controls))
+        .then(|| controls.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skippy_inference_api::thinking::ThinkingToggle;
+
+    fn observed(efforts: &[&str]) -> RuntimeInstanceMetadata {
+        RuntimeInstanceMetadata {
+            context_length: Some(8192),
+            thinking: Some(ThinkingControls {
+                toggle: ThinkingToggle::Observed,
+                reasoning_parser: Some(true),
+                efforts: efforts.iter().map(|effort| (*effort).into()).collect(),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn thinking_controls_follow_the_current_model_and_node() {
+        let first = observed(&["high", "low"]);
+        let expected = first.thinking.clone();
+        let registry = Arc::new(tokio::sync::Mutex::new(HashMap::from([
+            ("first".into(), BTreeMap::from([("one".into(), first)])),
+            (
+                "second".into(),
+                BTreeMap::from([("two".into(), observed(&["max"]))]),
+            ),
+            (
+                "unprobed".into(),
+                BTreeMap::from([(
+                    "three".into(),
+                    RuntimeInstanceMetadata {
+                        context_length: None,
+                        thinking: None,
+                    },
+                )]),
+            ),
+        ])));
+        assert_eq!(
+            runtime_registry_thinking_controls(&registry, "first").await,
+            expected
+        );
+        let second = runtime_registry_thinking_controls(&registry, "second")
+            .await
+            .unwrap();
+        assert_eq!(second.efforts, ["max"]);
+        assert!(
+            runtime_registry_thinking_controls(&registry, "unprobed")
+                .await
+                .is_none()
+        );
+        assert!(
+            runtime_registry_thinking_controls(&registry, "missing")
+                .await
+                .is_none()
+        );
+        let other_node = Arc::default();
+        assert!(
+            runtime_registry_thinking_controls(&other_node, "first")
+                .await
+                .is_none()
+        );
+
+        registry
+            .lock()
+            .await
+            .get_mut("first")
+            .unwrap()
+            .insert("one".into(), observed(&["medium"]));
+        let reloaded = runtime_registry_thinking_controls(&registry, "first")
+            .await
+            .unwrap();
+        assert_eq!(reloaded.efforts, ["medium"]);
+        registry
+            .lock()
+            .await
+            .get_mut("first")
+            .unwrap()
+            .get_mut("one")
+            .unwrap()
+            .thinking = None;
+        assert!(
+            runtime_registry_thinking_controls(&registry, "first")
+                .await
+                .is_none()
+        );
+        registry.lock().await.remove("second");
+        assert!(
+            runtime_registry_thinking_controls(&registry, "second")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn thinking_controls_require_agreement_across_loaded_instances() {
+        let registry = Arc::new(tokio::sync::Mutex::new(HashMap::from([(
+            "model".into(),
+            BTreeMap::from([
+                ("one".into(), observed(&["low", "high"])),
+                ("two".into(), observed(&["low", "high"])),
+            ]),
+        )])));
+        assert!(
+            runtime_registry_thinking_controls(&registry, "model")
+                .await
+                .is_some()
+        );
+        registry
+            .lock()
+            .await
+            .get_mut("model")
+            .unwrap()
+            .insert("two".into(), observed(&["max"]));
+        assert!(
+            runtime_registry_thinking_controls(&registry, "model")
+                .await
+                .is_none()
+        );
+        registry
+            .lock()
+            .await
+            .get_mut("model")
+            .unwrap()
+            .get_mut("two")
+            .unwrap()
+            .thinking = None;
+        assert!(
+            runtime_registry_thinking_controls(&registry, "model")
+                .await
+                .is_none()
+        );
+        registry
+            .lock()
+            .await
+            .get_mut("model")
+            .unwrap()
+            .remove("two");
+        assert!(
+            runtime_registry_thinking_controls(&registry, "model")
+                .await
+                .is_some()
+        );
+    }
 }

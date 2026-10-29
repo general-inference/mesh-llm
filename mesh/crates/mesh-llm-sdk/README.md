@@ -105,6 +105,32 @@ transport, plugins or owner control, and it shares the node's payment
 settings. Its allowlist is its own, but owner and certificate revocations in
 the node's trust store apply to it too.
 
+## Thinking controls
+
+Query a locally loaded model's thinking controls directly through the embedded
+runtime, without HTTP. Pass its exact serving ID, rather than a model reference
+or display name:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, thinking::ThinkingControls};
+
+async fn controls(node: &MeshNode, serving_id: &str)
+    -> anyhow::Result<Option<ThinkingControls>> {
+    node.thinking_controls(serving_id).await
+}
+```
+
+The summary preserves Skippy's `toggle` observation (`Observed`, `NotObserved`,
+or `Unknown`), optional `reasoning_parser` evidence, and model-specific `efforts`
+in probe order. These are render-only observations of the selected chat template;
+they do not guarantee that generation obeys the controls. An effort list is the
+bounded set the probe observed, not every level a model might understand.
+
+`None` means the model is not loaded here, has not been probed, or its loaded
+instances have different observations; it does not mean thinking is off. Queries
+reflect subsequent loads and unloads. Remote models are not queried, and an
+unavailable or shutting-down runtime returns an error.
+
 ## Live transcription
 
 A node serving a speech-recognition model (Whisper) transcribes live audio.

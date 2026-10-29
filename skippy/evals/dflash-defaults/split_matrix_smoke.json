@@ -1,0 +1,18 @@
+{
+  "id": "qwen3.8-27b-smoke",
+  "name": "Qwen3.8-27B UD-Q4_K_XL (split smoke)",
+  "repo": "meshllm/Qwen3.8-27B-UD-Q4_K_XL-layers",
+  "revision": "4f0de892fe0a1fe5c4a25fdbd1e1e5340e95d123",
+  "nodes": [
+    "spark-000280",
+    "spark-000468",
+    "spark-000499",
+    "spark-000907"
+  ],
+  "lanes": 1,
+  "ctx": 8192,
+  "cuts": {
+    "2": "32",
+    "4": "16,32,48"
+  }
+}

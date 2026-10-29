@@ -1,0 +1,33 @@
+From 24e7a0deac50b3b2774f399d7b51f136a1efe883 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 29 Oct 2026 18:38:47 +1300
+Subject: [PATCH] perf(metal): hoist masked value test in vector attention
+
+---
+ ggml/src/ggml-metal/kernels/fa_vec_common.metal | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/ggml/src/ggml-metal/kernels/fa_vec_common.metal b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+index 705d276d0..62a36b81a 100644
+--- a/ggml/src/ggml-metal/kernels/fa_vec_common.metal
++++ b/ggml/src/ggml-metal/kernels/fa_vec_common.metal
+@@ -484,11 +484,11 @@ kernel void kernel_flash_attn_ext_vec(
+                     pv4 += ty*NS20/4 + tx;
+ 
+                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+-                        FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+-                            const v4_t v_elem = pv4[cc*NE*NS20/4 + ii*NL];
+-                            FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+-                                const float weight = ss[qq*C + cc*NE + ty];
+-                                if (weight != 0.0f) {
++                        FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
++                            const float weight = ss[qq*C + cc*NE + ty];
++                            if (weight != 0.0f) {
++                                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
++                                    const v4_t v_elem = pv4[cc*NE*NS20/4 + ii*NL];
+                                     lo[qq][ii] += o4_t(float4(v_elem)*float4(weight));
+                                 }
+                             }
+-- 
+2.56.0
+

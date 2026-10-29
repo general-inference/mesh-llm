@@ -164,6 +164,8 @@ print(name if d.get("llama_ready") and len(st) >= int(os.environ["STAGES"]) else
   [ -n "$MODEL_ID" ] && break
   [ $((i % 6)) -eq 0 ] && echo "waiting for $SPLIT_STAGES stages — $((i * 10))s"
   kill -0 "$SERVE" 2>/dev/null || { echo "coordinator died while forming" >&2; exit 1; }
+  # A failed launch leaves the node up in standby, so the wait would only time out.
+  grep -qE 'model launch failed|Failed to start model' "$LOG" && { echo "the model failed to launch" >&2; exit 1; }
   sleep 10
 done
 [ -n "$MODEL_ID" ] || { echo "the split never reached $SPLIT_STAGES stages" >&2; exit 1; }

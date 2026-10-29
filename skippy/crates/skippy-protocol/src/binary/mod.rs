@@ -237,6 +237,8 @@ mod tests {
             kv_lookup_hits: 1,
             dflash_feature_rows_missing: 37,
             dflash_draft_context_resets: 2,
+            verify_rollbacks_in_place: 11,
+            verify_rollbacks_checkpointed: 3,
             ..StageReplyStats::default()
         };
         let reply = StageReply {
@@ -276,7 +278,7 @@ mod tests {
         let mut with_reset = Vec::new();
         send_reply_predicted_tokens_with_stats(&mut with_reset, &[1], stats).unwrap();
 
-        assert_eq!(with_reset.len(), with_zero.len() + 16);
+        assert_eq!(with_reset.len(), with_zero.len() + 32);
         assert_eq!(recv_reply(Cursor::new(with_reset)).unwrap().stats, stats);
     }
 

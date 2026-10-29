@@ -42,6 +42,7 @@ def once(prompt, seed):
     pieces = 0
     usage = timings = None
     parts = []
+    data = ""
     with urllib.request.urlopen(request, timeout=900) as response:
         for raw in response:
             line = raw.decode().strip()
@@ -51,6 +52,8 @@ def once(prompt, seed):
             if data == "[DONE]":
                 break
             event = json.loads(data)
+            if event.get("error") and not EMPTY_REPLIES:
+                EMPTY_REPLIES.append(json.dumps(event)[:600])
             usage = event.get("usage") or usage
             timings = event.get("timings") or timings
             for choice in event.get("choices") or []:
@@ -62,6 +65,8 @@ def once(prompt, seed):
                     last = now
                     pieces += 1
                     parts.append(piece)
+    if not pieces and not EMPTY_REPLIES:
+        EMPTY_REPLIES.append(f"no content; last data: {data[:600]}")
     out = (usage or {}).get("completion_tokens") or pieces
     decode_s = (last - first) if first and last and last > first else 0.0
     t = timings or {}
@@ -72,6 +77,8 @@ def once(prompt, seed):
             "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12]}
 
 
+# The first reply that carried an error or no content, so a failed arm says why.
+EMPTY_REPLIES = []
 once(items[0]["prompt"], 0)
 results = []
 for k, item in enumerate(items):
@@ -100,4 +107,6 @@ for name in sorted(names, key=lambda n: ["prose", "code", "math"].index(n) if n 
 
 with open(os.path.join(ART, "arms.jsonl"), "a") as f:
     f.write(json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups, "results": results}) + "\n")
+if EMPTY_REPLIES:
+    print(f"{ARM}: first empty reply: {EMPTY_REPLIES[0]}", flush=True)
 print("DFLASH_BENCH " + json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups}), flush=True)

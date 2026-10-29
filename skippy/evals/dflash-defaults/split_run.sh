@@ -205,6 +205,8 @@ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,
 ARM="$SPLIT_ARM" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
+# Errors from this node's serve log, so a failed arm explains itself in the job output.
+grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '
 import json, sys
 st = (json.load(sys.stdin).get("runtime") or {}).get("stages") or []

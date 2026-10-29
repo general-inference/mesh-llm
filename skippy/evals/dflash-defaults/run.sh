@@ -47,6 +47,8 @@ size_of() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0
 fetch() { # url sha256 bytes path
   local url="$1" sha="$2" bytes="$3" path="$4"
   if ! sha_ok "$sha" "$path"; then
+    # A full-size file that fails the check is corrupt, not partial; resuming keeps it.
+    [ "$(size_of "$path")" = "$bytes" ] && rm -f "$path"
     for _ in 1 2 3 4 5 6; do
       [ "$(size_of "$path")" = "$bytes" ] && break
       curl -fL --retry 10 -C - -sS -o "$path" "$url" || true

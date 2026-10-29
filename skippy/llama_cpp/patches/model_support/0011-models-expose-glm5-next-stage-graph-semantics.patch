@@ -32,21 +32,23 @@ loaded reference, and the same fixture checks that every trunk layer
 publishes a finite, distinct input row per token. Stage contexts of the
 45-layer contract fixture, cut at 23 and at 11/23/34, request each
 drafter target layer they run (6, 15, 25, 34, 43) and must keep its
-input in the realized stage graph; the fixture generator now writes glm5-next's
+input in the realized stage graph; rejected verify windows on the plain glm5-next fixture,
+held in place and through host checkpoints, must commit what
+one-at-a-time decode commits; the fixture generator now writes glm5-next's
 per-layer KV head counts over the NextN block.
 ---
- src/CMakeLists.txt                          |  11 ++
+ src/CMakeLists.txt                          |  12 ++
  src/models/glm5-next.cpp                    |  63 ++++++---
  src/skippy/tests/graph_build_inputs.cpp     | 136 ++++++++++++++++++++
  src/skippy/tests/graph_contract_cases.cmake |  17 +++
  tests/test-llama-archs.cpp                  |   9 +-
- 5 files changed, 219 insertions(+), 17 deletions(-)
+ 5 files changed, 220 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 417be82de..dcc1693bc 100644
+index fc4edd932..e16f9b404 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -248,6 +248,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -249,6 +249,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
          "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
@@ -64,6 +66,14 @@ index 417be82de..dcc1693bc 100644
      set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
+@@ -428,6 +439,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+             FIXTURES_REQUIRED verify-rollback-${arch})
+     endfunction()
+     add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
++    add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     target_include_directories(skippy-sampling-history PRIVATE .)
+     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
 index a1b722950..fd2e5d8dd 100644
 --- a/src/models/glm5-next.cpp

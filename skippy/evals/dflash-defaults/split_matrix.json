@@ -1,0 +1,21 @@
+{
+  "id": "glm-5.3-flash",
+  "name": "GLM-5.3-Flash UD-Q4_K_XL",
+  "repo": "meshllm/GLM-5.3-Flash-UD-Q4_K_XL-layers",
+  "revision": "d1b3be770eacf2cfef13e62866fefc2f3917616f",
+  "draft": {
+    "repo": "Anbeeld/GLM-5.3-Flash-DFlash2-GGUF",
+    "revision": "f3569acb7f9cee95e66d24442d75536eb00ab842",
+    "file": "GLM-5.3-Flash-DFlash2-Q8_0.gguf"
+  },
+  "nodes": [
+    "spark-000280",
+    "spark-000468",
+    "spark-000499",
+    "spark-000907"
+  ],
+  "lanes": 1,
+  "ctx": 8192,
+  "allow_uncertified": true,
+  "note": "glm5next is not in split-certified.json; served with --allow-uncertified-split, and checked by requiring identical greedy output across split sizes."
+}

@@ -127,11 +127,11 @@
       "machines": {
         "Spark": {
           "draft": "qwen3.8-27b-dflash2",
-          "default": false
+          "default": true
         },
         "M3 Ultra": {
           "draft": "qwen3.8-27b-dflash2",
-          "default": false
+          "default": true
         },
         "M6": {
           "skip": "Doesn't fit in 24 GB"

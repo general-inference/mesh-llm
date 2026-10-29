@@ -41,6 +41,7 @@ pub struct RuntimeLlamaSlotSnapshot {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RuntimeLlamaSlotsSnapshot {
+    pub speculative_strategy: Option<String>,
     pub status: RuntimeLlamaEndpointStatus,
     pub model: Option<String>,
     pub instance_id: Option<String>,
@@ -125,6 +126,8 @@ pub struct RuntimeLlamaMetricSamplePayload {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RuntimeLlamaSlotsPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speculative_strategy: Option<String>,
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -241,6 +244,9 @@ fn build_runtime_llama_snapshot_payload(
                 .collect(),
         },
         RuntimeLlamaSlotsPayload {
+            speculative_strategy: (snapshot.slots.status == RuntimeLlamaEndpointStatus::Ready)
+                .then_some(snapshot.slots.speculative_strategy)
+                .flatten(),
             status: runtime_llama_endpoint_status(snapshot.slots.status),
             model: snapshot.slots.model,
             instance_id: snapshot.slots.instance_id,
@@ -333,6 +339,7 @@ mod tests {
                 }],
             },
             slots: RuntimeLlamaSlotsSnapshot {
+                speculative_strategy: Some("dflash".into()),
                 status: RuntimeLlamaEndpointStatus::Ready,
                 model: Some("example".into()),
                 instance_id: Some("instance-b".into()),
@@ -393,5 +400,56 @@ mod tests {
         assert_eq!(json["instances"][0]["metrics"], json["metrics"]);
         assert_eq!(json["instances"][0]["slots"], json["slots"]);
         assert_eq!(json["instances"][0]["items"], json["items"]);
+        assert_eq!(json["slots"]["speculative_strategy"], "dflash");
+    }
+
+    #[test]
+    fn speculation_observations_belong_to_ready_instances() {
+        let snapshot = |status, strategy: Option<&str>| RuntimeLlamaRuntimeSnapshot {
+            slots: RuntimeLlamaSlotsSnapshot {
+                status,
+                speculative_strategy: strategy.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let payload = build_runtime_llama_payload(
+            snapshot(RuntimeLlamaEndpointStatus::Ready, Some("dflash")),
+            BTreeMap::from([
+                (
+                    "a".into(),
+                    snapshot(RuntimeLlamaEndpointStatus::Ready, Some("native-mtp")),
+                ),
+                (
+                    "b".into(),
+                    snapshot(RuntimeLlamaEndpointStatus::Unavailable, Some("dflash")),
+                ),
+                (
+                    "c".into(),
+                    snapshot(RuntimeLlamaEndpointStatus::Ready, None),
+                ),
+                (
+                    "d".into(),
+                    snapshot(RuntimeLlamaEndpointStatus::Ready, Some("disabled")),
+                ),
+            ]),
+        );
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["slots"]["speculative_strategy"], "dflash");
+        assert_eq!(
+            value["instances"][0]["slots"]["speculative_strategy"],
+            "native-mtp"
+        );
+        for index in [1, 2] {
+            assert!(
+                value["instances"][index]["slots"]
+                    .get("speculative_strategy")
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            value["instances"][3]["slots"]["speculative_strategy"],
+            "disabled"
+        );
     }
 }

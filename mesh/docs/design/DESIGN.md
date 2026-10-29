@@ -547,3 +547,17 @@ The host tunnel manager retains peer admission, stage authorization, endpoint
 selection and the five-minute first-response timeout policy. Model routing and
 HTTP request handling remain outside the transport crate. This is the first
 transport extraction; endpoint/discovery composition remains in the host.
+
+### Observed speculative decoding strategy
+
+`GET /api/runtime/llama` reports `slots.speculative_strategy` per loaded model
+instance. Skippy produces this value from the backend that successfully attached
+its draft and prepared its serving sessions; Mesh carries it through the runtime
+snapshot. Values include `disabled`, `native-mtp`, `draft-model`, `dflash`,
+`ngram-cache`, `ngram-suffix`, `native-mtp+ngram-cache`, and
+`native-mtp+ngram-suffix`. An absent value means the backend has no observation;
+it does not mean speculation is disabled. An unavailable snapshot omits the value.
+
+The field describes the loaded strategy. Admission, batching, constraints, and
+adaptive speculation can suppress drafting for an individual request. It is not a
+per-request activity counter and does not attest draft acceptance or speedup.

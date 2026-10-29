@@ -316,6 +316,7 @@ impl SkippyModelHandle {
             backend: loaded.backend,
             config: loaded.config,
             thinking: loaded.thinking,
+            speculative_strategy: loaded.speculative_strategy,
             openai_guardrails,
             started_at_unix_nanos: now_unix_nanos(),
             status: Arc::new(Mutex::new(HandleState {

@@ -1364,6 +1364,7 @@ pub(crate) mod tests {
         });
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Ready,
             model: Some("Qwen3-8B".to_string()),
             instance_id: None,
@@ -1407,6 +1408,7 @@ pub(crate) mod tests {
         });
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Ready,
             model: Some("model-b".to_string()),
             instance_id: None,
@@ -1420,6 +1422,7 @@ pub(crate) mod tests {
             }],
         });
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Ready,
             model: Some("model-a".to_string()),
             instance_id: None,
@@ -1443,6 +1446,7 @@ pub(crate) mod tests {
         );
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Unavailable,
             model: Some("model-a".to_string()),
             instance_id: None,
@@ -1478,6 +1482,7 @@ pub(crate) mod tests {
         });
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Ready,
             model: Some("model-a".to_string()),
             instance_id: Some("runtime-1".to_string()),
@@ -1491,6 +1496,7 @@ pub(crate) mod tests {
             }],
         });
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Ready,
             model: Some("model-a".to_string()),
             instance_id: Some("runtime-2".to_string()),
@@ -1510,6 +1516,7 @@ pub(crate) mod tests {
         assert_eq!(by_instance["runtime-2"].items.slots_busy, 1);
 
         producer.publish_llama_slots_snapshot(RuntimeLlamaSlotsSnapshot {
+            speculative_strategy: None,
             status: RuntimeLlamaEndpointStatus::Unavailable,
             model: Some("model-a".to_string()),
             instance_id: Some("runtime-1".to_string()),

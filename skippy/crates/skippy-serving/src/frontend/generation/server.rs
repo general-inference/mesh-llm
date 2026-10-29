@@ -189,6 +189,8 @@ pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn InferenceBackend>,
     pub model_id: String,
     pub thinking: Option<ThinkingControls>,
+    /// Strategy of the successfully constructed backend, before per-request stand-down.
+    pub speculative_strategy: String,
     pub generation_concurrency: usize,
     pub generation_queue_capacity: usize,
     pub generation_admission_timeout_secs: u64,
@@ -386,6 +388,11 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
+    let speculative_strategy = if draft.is_some() {
+        "draft-model".to_owned()
+    } else {
+        args.speculative.effective_strategy.clone()
+    };
     let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
@@ -461,6 +468,7 @@ fn embedded_openai_backend_with_scheduler(
         backend,
         model_id,
         thinking,
+        speculative_strategy,
         generation_concurrency: args.generation_concurrency,
         generation_queue_capacity: args.generation_queue_capacity,
         generation_admission_timeout_secs: args.generation_admission_timeout_secs,

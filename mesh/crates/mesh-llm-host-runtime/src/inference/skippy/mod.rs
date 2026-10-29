@@ -246,6 +246,7 @@ pub(crate) struct SkippyModelHandle {
     /// Skippy owns both the shape (see `skippy_inference_api::thinking`) and the
     /// probe; the host only carries the value to `/v1/models`.
     thinking: Option<ThinkingControls>,
+    speculative_strategy: String,
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _prediction_return_listener: Option<PredictionReturnListener>,
@@ -362,6 +363,10 @@ impl SkippyHttpHandle {
 }
 
 impl SkippyModelHandle {
+    pub(crate) fn speculative_strategy(&self) -> &str {
+        &self.speculative_strategy
+    }
+
     pub(crate) fn backend(&self) -> Arc<dyn InferenceBackend> {
         self.backend.clone()
     }

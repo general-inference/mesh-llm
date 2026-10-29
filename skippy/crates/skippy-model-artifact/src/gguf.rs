@@ -408,9 +408,9 @@ impl GgufCompactMeta {
 
     /// F32 recurrent-state bytes allocated for one native sequence, per layer.
     ///
-    /// Skippy enables two rollback snapshots for recurrent/hybrid runtimes, so
-    /// each live native sequence owns three state planes (current + two
-    /// snapshots). Attention-only layers report zero.
+    /// Each native sequence owns its current state. Verification checkpoints
+    /// are captured on demand rather than reserved as rolling device snapshots.
+    /// Attention-only layers report zero.
     pub fn recurrent_bytes_per_native_sequence_by_layer(&self) -> Vec<u64> {
         self.recurrent_plane_bytes_by_layer()
             .into_iter()
@@ -994,7 +994,7 @@ mod tests {
         let meta = scan_gguf_compact_meta(&path).expect("should parse recurrent metadata");
         let native = meta.recurrent_bytes_per_native_sequence_by_layer();
         let base_elements = 3u64 * (2048 + 2 * 16 * 128) + 128 * 2048;
-        let expected = base_elements * 4 * 3;
+        let expected = base_elements * 4;
         assert_eq!(native, vec![expected, expected, expected, 0]);
         assert_eq!(
             meta.recurrent_bytes_per_configured_lane_by_layer(),

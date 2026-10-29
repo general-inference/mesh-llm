@@ -1,4 +1,4 @@
-From 842237d84843242384556809d0aca2907c480194 Mon Sep 17 00:00:00 2001
+From 03758e292b00ab3159cd82761c4a6b7161a6d7a3 Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -11,7 +11,9 @@ skippy_session_take_token_logprobs moves them out, oldest first; a session
 reset drops them. A logprobs request never attaches backend (in-graph)
 sampling, which skips copying the raw logits row; a token drawn while the
 lane still carried a backend sampler from an earlier request is recorded
-as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.73.
+as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.74.
+
+Co-authored-by: sol <6e6f9f687497a486f887a40f1270381aaca718090781f25867159edd4f553f49@generalinference.communities.buzz.xyz>
 ---
  include/skippy.h               |  1 +
  include/skippy/common.h        |  2 +-
@@ -143,10 +145,10 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 78e2c01f3..0d453a1e7 100644
+index 51a2c64c5..57c94ad4b 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -82,6 +82,7 @@ add_library(llama
+@@ -85,6 +85,7 @@ add_library(llama
              skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
@@ -255,7 +257,7 @@ index 000000000..43260dfc2
 +    return skippy_success(out_error);
 +}
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f44e874d9..d5dc18f06 100644
+index c201c19f2..fc6766079 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -140,6 +140,8 @@ struct skippy_session {
@@ -264,14 +266,14 @@ index f44e874d9..d5dc18f06 100644
      std::vector<skippy_token_signal> signal_history;
 +    // Recorded by sampling with SKIPPY_SAMPLING_FLAG_LOGPROBS until the caller takes them.
 +    std::vector<skippy_token_logprobs> token_logprobs;
-     std::vector<llama_pos> prefill_positions;
-     std::vector<int32_t> prefill_n_seq_ids;
-     std::vector<llama_seq_id> prefill_seq_ids;
+     // Scratch belongs to the session and is reused only under the context's
+     // execution lock. Samplers may reorder candidates, so refill every row.
+     std::vector<llama_token_data> sampling_candidates;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index de5fa6ba5..22aaa6a30 100644
+index ed4c5d96f..85e3e21a2 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -426,6 +426,9 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -430,6 +430,9 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
@@ -281,7 +283,7 @@ index de5fa6ba5..22aaa6a30 100644
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -561,13 +564,14 @@ void skippy_refresh_backend_sampling(
+@@ -565,13 +568,14 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
              !session->sampling_has_grammar &&
              !session->sampling_has_reasoning_budget &&
@@ -297,7 +299,7 @@ index de5fa6ba5..22aaa6a30 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
-@@ -597,6 +601,21 @@ llama_token skippy_sample_token_ith(
+@@ -601,6 +605,21 @@ llama_token skippy_sample_token_ith(
      return LLAMA_TOKEN_NULL;
  }
  
@@ -338,10 +340,10 @@ index 7bbf16016..81bc26ff5 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 36c972d92..3bd92390c 100644
+index 4df5b776f..5d919e04d 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
+@@ -389,6 +389,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -350,10 +352,10 @@ index 36c972d92..3bd92390c 100644
      // makes the next sampled decode reattach the chain and mark the scheduler
      // for reserve, which rebuilds compute buffers at every request boundary.
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 0f9b3a27c..2eb002bd2 100644
+index 688554c03..6ada1e8be 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -1003,6 +1003,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -889,6 +889,7 @@ enum skippy_status skippy_session_restore_prefix(
          session->token_history.assign(token_ids, token_ids + token_count);
      }
      session->signal_history.clear();
@@ -373,6 +375,3 @@ index d3de66cbe..3ca967bf3 100644
  }
  
  namespace {
--- 
-2.56.0
-

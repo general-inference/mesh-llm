@@ -58,7 +58,7 @@ def plan(args):
     formations = []
     for arm in args.arms.split(","):
         for delay in [int(d) for d in args.delays.split(",")]:
-            key = f"split:{rev[:12]}:{args.stages}:{arm}:{delay}"
+            key = f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}:{delay}"
             spec = {
                 "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]} · {delay} ms/hop @ {rev[:9]}",
                 "description": f"{matrix['name']} served across {args.stages} machines; single-stream decode on the "

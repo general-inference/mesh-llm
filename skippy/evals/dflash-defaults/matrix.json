@@ -127,16 +127,17 @@
       "machines": {
         "Spark": {
           "draft": "qwen3.8-27b-dflash2",
-          "default": true
+          "default": false
         },
         "M3 Ultra": {
           "draft": "qwen3.8-27b-dflash2",
-          "default": true
+          "default": false
         },
         "M6": {
           "skip": "Doesn't fit in 24 GB"
         }
-      }
+      },
+      "note": "Ships an MTP layer, so the default serves native MTP; the dflash arms measure the paired DFlash2 draft explicitly."
     },
     {
       "id": "qwen3.6-35b-a3b",

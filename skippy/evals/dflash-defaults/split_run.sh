@@ -135,10 +135,13 @@ if [ "$ROLE" = joiner ]; then
     --join "$TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
     >"$LOG" 2>&1 &
   SERVE=$!
-  trap 'tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
+  trap 'grep -E "\"level\":\"error\"" "$LOG" | tail -5 >&2; tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
   # Serve until the coordinator goes away: it owns the measurement and the end of the run.
   MISSES=0
   while kill -0 "$SERVE" 2>/dev/null; do
+    # The mesh may elect this joiner to plan the split; if its launch fails the
+    # coordinator only stands by, so the failure has to end the formation here.
+    grep -qE 'model launch failed|Failed to start model' "$LOG" && { echo "the model failed to launch on this joiner" >&2; exit 1; }
     if curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" >/dev/null 2>&1; then MISSES=0
     else MISSES=$((MISSES + 1)); [ "$MISSES" -ge 6 ] && break; fi
     sleep 10

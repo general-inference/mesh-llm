@@ -74,7 +74,8 @@ def once(prompt, seed):
             # The first token arrives at `first`, so the timed span decodes out - 1 tokens.
             "dec_tokens": max(out - 1, 0) if decode_s > 0 else 0, "dec_s": decode_s, "e2e_s": time.monotonic() - t0,
             "draft": t.get("draft_n") or 0, "accepted": t.get("draft_n_accepted") or 0,
-            "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12]}
+            "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12],
+            "timings": {k: v for k, v in t.items() if isinstance(v, (int, float))}}
 
 
 # The first reply that carried an error or no content, so a failed arm says why.
@@ -107,6 +108,15 @@ for name in sorted(names, key=lambda n: ["prose", "code", "math"].index(n) if n 
 
 with open(os.path.join(ART, "arms.jsonl"), "a") as f:
     f.write(json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups, "results": results}) + "\n")
+# Totals of the server's speculation timings over the arm, to show where a round's time goes.
+spec_keys = ("window", "verify", "proposal", "downstream", "draft", "decode", "speculative")
+totals = {}
+for r in results:
+    for k, v in r["timings"].items():
+        if any(word in k for word in spec_keys):
+            totals[k] = totals.get(k, 0) + v
+if totals:
+    print("SPEC_TIMINGS " + json.dumps({"arm": ARM, "requests": len(results), "totals": totals}), flush=True)
 if EMPTY_REPLIES:
     print(f"{ARM}: first empty reply: {EMPTY_REPLIES[0]}", flush=True)
 print("DFLASH_BENCH " + json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups}), flush=True)

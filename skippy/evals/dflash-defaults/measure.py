@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 ARM, PORT, MODEL_ID = os.environ["ARM"], os.environ["PORT"], os.environ["MODEL_ID"]
@@ -91,7 +92,16 @@ if int(os.environ.get("LIMIT") or 0):
             if rows and len(picked) < int(os.environ["LIMIT"]):
                 picked.append(rows.pop(0))
     items = picked
-once(items[0]["prompt"], 0)
+# A split can report every stage ready a moment before requests route to it; until then
+# the API answers 503. Retry the warm-up through that window instead of failing the arm.
+for attempt in range(60):
+    try:
+        once(items[0]["prompt"], 0)
+        break
+    except urllib.error.HTTPError as error:
+        if error.code != 503 or attempt == 59:
+            raise
+        time.sleep(5)
 results = []
 for k, item in enumerate(items):
     result = once(item["prompt"], 1234 + k)

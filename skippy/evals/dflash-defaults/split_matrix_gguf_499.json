@@ -14,5 +14,11 @@
   "cuts": {
     "2": "32",
     "4": "16,32,48"
+  },
+  "draft": {
+    "repo": "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
+    "revision": "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+    "file": "Qwen3.6-27B-DFlash.Q8_0.gguf",
+    "sha256": "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1"
   }
 }

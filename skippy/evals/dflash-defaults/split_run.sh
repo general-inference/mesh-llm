@@ -72,6 +72,19 @@ for entry in json.load(open(os.path.join(snap, "model-package.json")))["artifact
 if bad:
     print("bad files:", bad); sys.exit(1)
 PY
+  # The resolver reads a Hugging Face cache: snapshot entries are links to blobs/<sha256>.
+  SNAP="$LOCAL" python3 - <<'PY' || return 1
+import json, os
+snap = os.environ["SNAP"]
+blobs = os.path.join(os.path.dirname(os.path.dirname(snap)), "blobs")
+for entry in json.load(open(os.path.join(snap, "model-package.json")))["artifact_catalog"]["entries"]:
+    path = os.path.join(snap, entry["path"])
+    if os.path.islink(path):
+        continue
+    blob = os.path.join(blobs, entry["sha256"])
+    os.replace(path, blob)
+    os.symlink(os.path.relpath(blob, os.path.dirname(path)), path)
+PY
   touch "$LOCAL/.verified"
 }
 

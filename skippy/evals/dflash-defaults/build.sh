@@ -31,12 +31,13 @@ echo "sccache ceiling ${SCCACHE_CACHE_SIZE} (${FREE_GB:-?}G free)"
 NODE_BIN=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1 || true)
 [ -n "$NODE_BIN" ] && export PATH="$NODE_BIN:$PATH"
 NODE_VER=24.20.0
-NODE_DIR="$HOME/.cache/gi-node/node-v$NODE_VER-linux-arm64"
+NODE_PLATFORM=$( [ "$(uname -s)" = Darwin ] && echo darwin-arm64 || echo linux-arm64 )
+NODE_DIR="$HOME/.cache/gi-node/node-v$NODE_VER-$NODE_PLATFORM"
 NODE_MAJOR=$(node -v 2>/dev/null | sed 's/^v//; s/\..*//' || true)
 if ! command -v pnpm >/dev/null 2>&1 || [ "${NODE_MAJOR:-0}" -lt 24 ]; then
   if [ ! -x "$NODE_DIR/bin/pnpm" ]; then
     mkdir -p "$HOME/.cache/gi-node"
-    curl -fsSL "https://nodejs.org/dist/v$NODE_VER/node-v$NODE_VER-linux-arm64.tar.xz" | tar -xJ -C "$HOME/.cache/gi-node"
+    curl -fsSL "https://nodejs.org/dist/v$NODE_VER/node-v$NODE_VER-$NODE_PLATFORM.tar.xz" | tar -xJ -C "$HOME/.cache/gi-node"
     PATH="$NODE_DIR/bin:$PATH" npm install -g pnpm@10.34.5
   fi
   export PATH="$NODE_DIR/bin:$PATH"

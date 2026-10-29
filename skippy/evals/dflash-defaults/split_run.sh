@@ -14,6 +14,7 @@
 #   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
 #   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
 #   SPLIT_LIMIT                measure only this many prompts, for profiling
+#   SPLIT_CODEC                activation wire codec for every arm (skippy.activation_codec), empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
@@ -134,14 +135,23 @@ if [ "${SPLIT_ARM:?}" = dflash ]; then
   [ -n "${SPLIT_DFLASH_CAP:-}" ] && printf 'draft_max_tokens = %s\n' "$SPLIT_DFLASH_CAP" >> "$DFLASH_TOML"
 fi
 
+# One config file carries both the codec and the dflash arm's draft, since a serve takes one.
+ARM_CONFIG="$ART/split-arm.toml"
+: > "$ARM_CONFIG"
+if [ -n "${SPLIT_CODEC:-}" ]; then
+  printf '[defaults.skippy]\nactivation_codec = "%s"\n' "$SPLIT_CODEC" >> "$ARM_CONFIG"
+fi
+[ -n "${DFLASH_TOML:-}" ] && cat "$DFLASH_TOML" >> "$ARM_CONFIG"
+
 case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;
   default) ARM_FLAGS="" ;;
   ngram) ARM_FLAGS="--speculative-strategy ngram-suffix" ;;
   # Every member gets the config: the mesh, not jy, elects which node plans the split.
-  dflash) ARM_FLAGS="--config $DFLASH_TOML" ;;
+  dflash) ARM_FLAGS="" ;;
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
+[ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64

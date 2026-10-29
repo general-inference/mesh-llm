@@ -17,11 +17,13 @@ pub(super) type RuntimeInstanceRegistry =
     Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, RuntimeInstanceMetadata>>>>;
 
 pub(super) struct RuntimeInstanceMetadata {
+    inference_router: Option<axum::Router>,
     context_length: Option<u32>,
     thinking: Option<ThinkingControls>,
 }
 
 pub(super) struct RuntimeModelRegistration<'a> {
+    pub inference_router: Option<axum::Router>,
     pub primary_model_name: &'a str,
     pub model_name: &'a str,
     pub instance_id: &'a str,
@@ -86,6 +88,7 @@ pub(super) async fn register_runtime_instance(
     registration: RuntimeModelRegistration<'_>,
 ) {
     let RuntimeModelRegistration {
+        inference_router,
         primary_model_name,
         model_name,
         instance_id,
@@ -102,6 +105,7 @@ pub(super) async fn register_runtime_instance(
         instances.insert(
             instance_id.to_string(),
             RuntimeInstanceMetadata {
+                inference_router,
                 context_length,
                 thinking: thinking.cloned(),
             },
@@ -206,6 +210,18 @@ pub(super) async fn runtime_registry_thinking_controls(
         .then(|| controls.clone())
 }
 
+pub(super) async fn runtime_registry_inference_router(
+    registry: &RuntimeInstanceRegistry,
+    model_name: &str,
+) -> Option<axum::Router> {
+    registry
+        .lock()
+        .await
+        .get(model_name)?
+        .values()
+        .find_map(|instance| instance.inference_router.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +229,7 @@ mod tests {
 
     fn observed(efforts: &[&str]) -> RuntimeInstanceMetadata {
         RuntimeInstanceMetadata {
+            inference_router: None,
             context_length: Some(8192),
             thinking: Some(ThinkingControls {
                 toggle: ThinkingToggle::Observed,
@@ -237,6 +254,7 @@ mod tests {
                 BTreeMap::from([(
                     "three".into(),
                     RuntimeInstanceMetadata {
+                        inference_router: None,
                         context_length: None,
                         thinking: None,
                     },

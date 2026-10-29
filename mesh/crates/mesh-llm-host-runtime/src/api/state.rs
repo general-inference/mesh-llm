@@ -48,6 +48,10 @@ pub enum RuntimeControlRequest {
         resp:
             tokio::sync::oneshot::Sender<Option<skippy_inference_api::thinking::ThinkingControls>>,
     },
+    InferenceRouter {
+        model: String,
+        resp: tokio::sync::oneshot::Sender<Option<axum::Router>>,
+    },
     Join {
         invite_token: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,

@@ -76,6 +76,11 @@ impl MeshNode {
         self.handle.thinking_controls(serving_id).await
     }
 
+    /// Uses this node's loaded models directly, without an HTTP connection.
+    pub fn inference_client(&self) -> anyhow::Result<crate::inference::InferenceClient> {
+        self.handle.inference_client()
+    }
+
     pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
         self.handle.join_token(token).await
     }

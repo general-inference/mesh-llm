@@ -123,6 +123,13 @@ pub(super) struct LocalRuntimeModelHandle {
 }
 
 impl LocalRuntimeModelHandle {
+    pub(super) fn inference_router(&self) -> Option<axum::Router> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { http, .. }
+            | LocalRuntimeBackendHandle::Dedicated { http, .. } => http.inference_router(),
+        }
+    }
+
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { .. }

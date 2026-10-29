@@ -392,6 +392,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
         &registry,
         &node,
         RuntimeModelRegistration {
+            inference_router: Some(axum::Router::new()),
             primary_model_name: vision_model,
             model_name: vision_model,
             instance_id: "runtime-vision",
@@ -406,6 +407,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
         &registry,
         &node,
         RuntimeModelRegistration {
+            inference_router: None,
             primary_model_name: vision_model,
             model_name: text_model,
             instance_id: "runtime-text",
@@ -432,7 +434,13 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
     assert!(text.capabilities_known);
     assert_eq!(text.capabilities, models::ModelCapabilities::default());
 
+    use super::super::runtime_registry::runtime_registry_inference_router;
     use super::super::runtime_registry::runtime_registry_thinking_controls;
+    assert!(
+        runtime_registry_inference_router(&registry, vision_model)
+            .await
+            .is_some()
+    );
     assert_eq!(
         runtime_registry_thinking_controls(&registry, vision_model).await,
         Some(thinking)
@@ -443,6 +451,11 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             .is_none()
     );
     assert!(unregister_runtime_instance(&registry, &node, vision_model, "runtime-vision").await);
+    assert!(
+        runtime_registry_inference_router(&registry, vision_model)
+            .await
+            .is_none()
+    );
     assert!(
         runtime_registry_thinking_controls(&registry, vision_model)
             .await

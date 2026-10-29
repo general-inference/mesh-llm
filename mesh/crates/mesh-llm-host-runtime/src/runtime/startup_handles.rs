@@ -509,6 +509,7 @@ pub(super) async fn startup_register_loaded_runtime(
         ctx.runtime_instance_registry,
         ctx.node,
         RuntimeModelRegistration {
+            inference_router: handle.inference_router(),
             primary_model_name: ctx.primary_model_name,
             model_name: loaded_name,
             instance_id: ctx.instance_id,

@@ -420,6 +420,15 @@ pub(super) async fn run_auto_handle_control_request(
     use super::{IntentSource, ModelIntent};
 
     match cmd {
+        api::RuntimeControlRequest::InferenceRouter { model, resp } => {
+            let router = super::runtime_registry::runtime_registry_inference_router(
+                ctx.runtime_instance_registry,
+                &model,
+            )
+            .await;
+            let _ = resp.send(router);
+            false
+        }
         api::RuntimeControlRequest::ThinkingControls { model, resp } => {
             let controls = super::runtime_registry::runtime_registry_thinking_controls(
                 ctx.runtime_instance_registry,

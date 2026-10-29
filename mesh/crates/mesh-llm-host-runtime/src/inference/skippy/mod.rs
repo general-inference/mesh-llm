@@ -348,6 +348,10 @@ pub(crate) fn start_speech_recognition_http_on(
 }
 
 impl SkippyHttpHandle {
+    pub(crate) fn inference_router(&self) -> Option<axum::Router> {
+        self.server.inference_router()
+    }
+
     pub(crate) fn port(&self) -> u16 {
         self.port
     }

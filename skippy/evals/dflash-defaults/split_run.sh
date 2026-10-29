@@ -122,8 +122,8 @@ case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;
   default) ARM_FLAGS="" ;;
   ngram) ARM_FLAGS="--speculative-strategy ngram-suffix" ;;
-  # Only the coordinator plans speculation; joiners just hold the draft at the same path.
-  dflash) [ "$ROLE" = coordinator ] && ARM_FLAGS="--config $DFLASH_TOML" || ARM_FLAGS="" ;;
+  # Every member gets the config: the mesh, not jy, elects which node plans the split.
+  dflash) ARM_FLAGS="--config $DFLASH_TOML" ;;
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"

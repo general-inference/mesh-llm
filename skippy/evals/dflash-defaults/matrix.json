@@ -63,6 +63,11 @@
       "url": "https://huggingface.co/AtomicChat/Qwen3-Coder-Next-DFlash-GGUF/resolve/f5b4c9d2511678f75a41b3d3de5d9e379dd88768/Qwen3-Coder-Next-DFlash.Q8_0.gguf",
       "sha256": "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
       "bytes": 509674720
+    },
+    "qwen3.8-27b-dflash2": {
+      "url": "https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2-GGUF/resolve/2d9571f8ce46e151f61c6499c99dee6079e1d610/Qwen3.8-27B-DFlash2-Q8_0.gguf",
+      "sha256": "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e",
+      "bytes": 2056414816
     }
   },
   "models": [
@@ -105,6 +110,28 @@
         "M3 Ultra": {
           "draft": "qwen3.6-27b",
           "default": true
+        },
+        "M6": {
+          "skip": "Doesn't fit in 24 GB"
+        }
+      }
+    },
+    {
+      "id": "qwen3.8-27b",
+      "name": "Qwen3.8-27B",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+        "bytes": 16464440224
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.8-27b-dflash2",
+          "default": false
+        },
+        "M3 Ultra": {
+          "draft": "qwen3.8-27b-dflash2",
+          "default": false
         },
         "M6": {
           "skip": "Doesn't fit in 24 GB"

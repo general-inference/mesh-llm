@@ -130,7 +130,7 @@ for name in sorted(names, key=lambda n: ["prose", "code", "math"].index(n) if n 
 with open(os.path.join(ART, "arms.jsonl"), "a") as f:
     f.write(json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups, "results": results}) + "\n")
 # Totals of the server's speculation timings over the arm, to show where a round's time goes.
-spec_keys = ("window", "verify", "proposal", "downstream", "draft", "decode", "speculative", "dflash", "predicted")
+spec_keys = ("window", "verify", "proposal", "downstream", "draft", "decode", "speculative", "dflash", "predicted", "rollback")
 totals = {}
 for r in results:
     for k, v in r["timings"].items():

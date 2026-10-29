@@ -40,7 +40,8 @@ export HF_HOME="$HOME/.cache/split-bench-hf"
 export HF_HUB_OFFLINE=1
 REPO_DIR="models--${SPLIT_REPO//\//--}"
 LOCAL="$HF_HOME/hub/$REPO_DIR/snapshots/$SPLIT_REV"
-mkdir -p "$LOCAL"
+# A real Hugging Face cache has blobs/ beside snapshots/, and the resolver requires it.
+mkdir -p "$LOCAL" "$HF_HOME/hub/$REPO_DIR/blobs"
 PKG_PORT=9446
 LEAD="${JIANYANG_LEADER_HOST:-}"
 

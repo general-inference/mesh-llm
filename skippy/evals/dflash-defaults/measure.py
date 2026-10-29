@@ -80,6 +80,17 @@ def once(prompt, seed):
 
 # The first reply that carried an error or no content, so a failed arm says why.
 EMPTY_REPLIES = []
+# A quick profile can measure the first LIMIT prompts, taken round-robin across groups.
+if int(os.environ.get("LIMIT") or 0):
+    by_group = {}
+    for item in items:
+        by_group.setdefault(group(item), []).append(item)
+    picked = []
+    while len(picked) < int(os.environ["LIMIT"]) and any(by_group.values()):
+        for rows in by_group.values():
+            if rows and len(picked) < int(os.environ["LIMIT"]):
+                picked.append(rows.pop(0))
+    items = picked
 once(items[0]["prompt"], 0)
 results = []
 for k, item in enumerate(items):

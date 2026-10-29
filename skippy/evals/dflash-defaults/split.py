@@ -65,9 +65,10 @@ def plan(args):
     formations = []
     for arm in args.arms.split(","):
         for delay in [int(d) for d in args.delays.split(",")]:
-            key = f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}:{delay}"
+            cap = f"k{args.dflash_cap}{'f' if args.fixed else ''}" if arm == "dflash" and args.dflash_cap else ""
+            key = f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}{cap}:{delay}" + (f":n{args.limit}" if args.limit else "")
             spec = {
-                "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]} · {delay} ms/hop @ {rev[:9]}",
+                "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]}{(' ' + cap) if arm == 'dflash' and args.dflash_cap else ''} · {delay} ms/hop @ {rev[:9]}",
                 "description": f"{matrix['name']} served across {args.stages} machines; single-stream decode on the "
                                f"held-out spec-prompts split with {ARM_NAMES[arm]} and {delay} ms injected per hop.",
                 "priority": 20,
@@ -82,7 +83,8 @@ def plan(args):
                             "SPLIT_ALLOW_UNCERTIFIED": "1" if matrix.get("allow_uncertified") else "0",
                             "SPLIT_CUT": (matrix.get("cuts") or {}).get(str(args.stages), ""),
                             "SPLIT_DRAFT_URL": draft_url(matrix), "SPLIT_DRAFT_SHA256": (matrix.get("draft") or {}).get("sha256", ""),
-                            "SPLIT_DFLASH_CAP": str(args.dflash_cap or "")},
+                            "SPLIT_DFLASH_CAP": str(args.dflash_cap or ""),
+                            "SPLIT_DFLASH_FIXED": "1" if args.fixed else "0", "SPLIT_LIMIT": str(args.limit or "")},
                     "workspace": {"repos": [{"url": REPO_URL, "rev": rev, "path": "mesh-llm"}],
                                   "build": "bash mesh-llm/skippy/evals/dflash-defaults/build.sh",
                                   "retain": "on_failure"},
@@ -199,6 +201,8 @@ def main():
     parser.add_argument("--out", default="split-bench-out")
     parser.add_argument("--matrix", default="split_matrix.json", help="model and nodes to split across")
     parser.add_argument("--wait", action="store_true", help="retry while the nodes are busy")
+    parser.add_argument("--fixed", action="store_true", help="pin dflash blocks at --dflash-cap (adaptive off)")
+    parser.add_argument("--limit", type=int, help="measure only this many prompts (profiling)")
     parser.add_argument("--dflash-cap", type=int, help="draft tokens per block for the dflash arm (default: the split default)")
     args = parser.parse_args()
     {"plan": plan, "submit": submit, "status": status, "table": table}[args.command](args)

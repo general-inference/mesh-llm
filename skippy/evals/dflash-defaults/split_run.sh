@@ -12,6 +12,7 @@
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
+#   SPLIT_CUT                  layer boundaries for an even cut, e.g. "32" or "16,32,48"
 set -uo pipefail
 
 cd mesh-llm
@@ -106,9 +107,17 @@ case "${SPLIT_ARM:?}" in
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
+# Capacity-only placement packs a model that fits one node onto that node (63 of 64
+# layers), which measures a split that barely exists. An explicit cut levels the
+# stages; --auto-balance is what honours it, and its re-cut loop has nothing to fix on
+# identical machines. The layout is logged before and after measuring to show if it did.
+if [ -n "${SPLIT_CUT:-}" ]; then
+  export MESH_LLM_AUTO_BALANCE_INITIAL_CUT="$SPLIT_CUT"
+  BALANCE_FLAGS="--auto-balance"
+fi
 MODEL="${MODEL_FILE:-$SPLIT_REPO@$SPLIT_REV}"
-SPLIT_FLAGS="--split"
-[ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="--split --allow-uncertified-split"
+SPLIT_FLAGS="--split ${BALANCE_FLAGS:-}"
+[ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="$SPLIT_FLAGS --allow-uncertified-split"
 LOG="$ART/$ROLE.log"
 
 if [ "$ROLE" = joiner ]; then
@@ -166,5 +175,9 @@ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,
 ARM="$SPLIT_ARM" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
-echo "SPLIT_LAYOUT {\"stages\": $SPLIT_STAGES, \"spans\": \"$SPANS\", \"wire_delay_ms\": ${SPLIT_WIRE_DELAY_MS:-0}}"
+SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '
+import json, sys
+st = (json.load(sys.stdin).get("runtime") or {}).get("stages") or []
+print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sorted(st, key=lambda s: s["stage_index"])))' 2>/dev/null || true)
+echo "SPLIT_LAYOUT {\"stages\": $SPLIT_STAGES, \"spans\": \"$SPANS\", \"spans_after\": \"$SPANS_AFTER\", \"wire_delay_ms\": ${SPLIT_WIRE_DELAY_MS:-0}}"
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

@@ -1,0 +1,24 @@
+{
+  "id": "qwen3.6-27b-gguf-smoke",
+  "name": "Qwen3.6-27B Q4_K_M (direct GGUF split smoke)",
+  "gguf": ".cache/gi-models/Qwen3.6-27B-Q4_K_M.gguf",
+  "gguf_sha256": "5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
+  "nodes": [
+    "spark-000280",
+    "spark-000468",
+    "spark-000499",
+    "spark-000265"
+  ],
+  "lanes": 1,
+  "ctx": 8192,
+  "cuts": {
+    "2": "32",
+    "4": "16,32,48"
+  },
+  "draft": {
+    "repo": "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
+    "revision": "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+    "file": "Qwen3.6-27B-DFlash.Q8_0.gguf",
+    "sha256": "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1"
+  }
+}

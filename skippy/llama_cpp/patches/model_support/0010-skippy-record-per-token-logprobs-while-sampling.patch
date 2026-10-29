@@ -1,4 +1,4 @@
-From 03758e292b00ab3159cd82761c4a6b7161a6d7a3 Mon Sep 17 00:00:00 2001
+From c3e389b8bc3f1816649757773f019903137307fc Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -44,7 +44,7 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 53326a4e7..80710eb3b 100644
+index 53326a4e7..5f325683c 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -52,7 +52,7 @@ index 53326a4e7..80710eb3b 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 72
-+#define SKIPPY_ABI_VERSION_PATCH 75
++#define SKIPPY_ABI_VERSION_PATCH 76
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -352,10 +352,10 @@ index 4df5b776f..5d919e04d 100644
      // makes the next sampled decode reattach the chain and mark the scheduler
      // for reserve, which rebuilds compute buffers at every request boundary.
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 688554c03..6ada1e8be 100644
+index f5886ac6c..e9a5d30fb 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -889,6 +889,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -1008,6 +1008,7 @@ enum skippy_status skippy_session_restore_prefix(
          session->token_history.assign(token_ids, token_ids + token_count);
      }
      session->signal_history.clear();

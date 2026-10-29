@@ -1,4 +1,4 @@
-From 708ffe886e3d4d8dbd25abcaa8ae3162348aca56 Mon Sep 17 00:00:00 2001
+From 9e3223171398462fae7d6d732bef702f035a4ac0 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -19,7 +19,7 @@ Bumps the Skippy ABI to 0.1.72.
  include/skippy.h        |   1 +
  include/skippy/asr.h    | 172 +++++++++++++++
  include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  37 +++
+ src/CMakeLists.txt      |  37 ++++
  src/skippy/abi.cpp      |   6 +-
  src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
  6 files changed, 683 insertions(+), 2 deletions(-)
@@ -238,10 +238,10 @@ index 5180a2531..53326a4e7 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 93803e031..78e2c01f3 100644
+index eddd77112..51a2c64c5 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,7 @@ add_library(llama
+@@ -99,6 +99,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +249,7 @@ index 93803e031..78e2c01f3 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -121,6 +122,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -125,6 +126,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -260,7 +260,7 @@ index 93803e031..78e2c01f3 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -167,6 +172,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -171,6 +176,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -787,6 +787,3 @@ index 000000000..680549066
 +extern "C" void skippy_asr_result_free(struct skippy_asr_result * result) {
 +    delete result;
 +}
--- 
-2.56.0
-

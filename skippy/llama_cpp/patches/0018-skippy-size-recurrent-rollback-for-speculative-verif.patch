@@ -1,4 +1,4 @@
-From f90184336a22593f988cdf181ab9fe2f21ef216b Mon Sep 17 00:00:00 2001
+From a5cdfb49d6196c2f05fd4c7e62bdd20cab310a57 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH] skippy: size recurrent rollback for speculative verify

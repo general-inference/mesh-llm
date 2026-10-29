@@ -6124,8 +6124,8 @@ index 000000000..f4b402f56
 +    CHECK(expected == std::vector<llama_token>({42, 43, 44}));
 +    release(cold);
 +    auto * warm = create(model);
-+    const llama_token_data * candidates = nullptr;
 +    for (int attempt = 0; attempt < 3; ++attempt) {
++        common_sampler * reused_sampler = nullptr;
 +        skippy_error * error = nullptr;
 +        const auto status = skippy_session_reset(warm, &error);
 +        ok(status, error);
@@ -6137,9 +6137,9 @@ index 000000000..f4b402f56
 +        for (const auto token : expected) {
 +            previous = iteration(warm, sampling, {previous});
 +            CHECK(previous == token);
-+            CHECK(!warm->sampling_candidates.empty());
-+            if (candidates != nullptr) CHECK(candidates == warm->sampling_candidates.data());
-+            candidates = warm->sampling_candidates.data();
++            CHECK(warm->sampler != nullptr);
++            if (reused_sampler != nullptr) CHECK(reused_sampler == warm->sampler);
++            reused_sampler = warm->sampler;
 +        }
 +        CHECK(warm->token_history.size() == 353);
 +    }

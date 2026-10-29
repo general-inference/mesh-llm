@@ -79,4 +79,3 @@ struct worker {
         try { finish(); } catch (...) { }
     }
 };
-

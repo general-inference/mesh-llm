@@ -125,7 +125,7 @@ def split_arm(arm):
 def arm_label(arm):
     workload, base, sampled = split_arm(arm)
     label = ARM_LABELS.get(base) or f"fixed DFlash block {base.removeprefix('d')}"
-    prefix = "agent transcripts · " if workload == "agent" else ""
+    prefix = "agentic coding · " if workload == "agent" else ""
     return prefix + label + (" · sampled T=0.7" if sampled else " · greedy")
 
 
@@ -255,7 +255,7 @@ def compare_table(mlflow, experiment, rev_a, rev_b, matrix):
         change = f"{100 * (after / before - 1):+.1f}%" if before and after else "—"
         gains = [m.get(key, {}).get("speedup_vs_off_all") for m in (a, b)]
         gain = " → ".join(f"{g:.2f}×" if g else "—" for g in gains)
-        name = ("agent transcripts" if workload == "agent" else "all prompts") + (", sampled" if sampled else "")
+        name = ("agentic coding" if workload == "agent" else "all prompts") + (", sampled" if sampled else "")
         lines.append(f"| {machine} | {model} | {name} | {fmt(before)} | {fmt(after)} | **{change}** | {gain} |")
     return "\n".join(lines) + "\n"
 

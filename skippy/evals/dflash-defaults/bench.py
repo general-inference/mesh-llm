@@ -186,11 +186,12 @@ def table(args):
                 ("Math", "math", "off", "default", best, ""),
                 ("**All**", "all", "off", "default", best, ""),
                 ("**All**", "all", "off_t07", "default_t07", None, ", sampled"),
+                *([("Agentic coding", "all", "agent_off", "agent_default", None, "")] if "agent_off" in arms else []),
             ]:
                 before, after = rate(arms, off, group), rate(arms, default, group)
                 gain = f"{after / before:.2f}×" if before and after else ("Running" if not arms else "—")
-                bold = group == "all"
-                shown = fmt(after) + (note if group == "all" else "")
+                bold = workload == "**All**"
+                shown = fmt(after) + (note if bold else "")
                 rows.append(f"| {label}{suffix} | {model['name']} | {workload} | {fmt(before)} | "
                             f"{fmt(rate(arms, fixed_arm, group)) if fixed_arm else '—'} | "
                             f"{'**' + shown + '**' if bold else shown} | {'**' + gain + '**' if bold else gain} |")

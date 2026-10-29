@@ -223,6 +223,12 @@ def results_table(rows):
         body.append(f'<tr class="all"><td>{esc(r["machine"])}, sampled</td><td>{esc(r["model"])}</td><td>All</td>'
                     f'<td class="num">{num(before)}</td><td class="num">—</td><td class="num">{num(after)}</td>'
                     f'<td class="num">{num(gain, 2) + "×" if gain else "—"}</td></tr>')
+        if r["agent_off"]:
+            before, after = r["agent_off"].get("all"), r["agent_default"].get("all")
+            gain = ratio(after, before)
+            body.append(f'<tr><td>{esc(r["machine"])}</td><td>{esc(r["model"])}</td><td>Agentic coding</td>'
+                        f'<td class="num">{num(before)}</td><td class="num">—</td><td class="num">{num(after)}</td>'
+                        f'<td class="num">{num(gain, 2) + "×" if gain else "—"}</td></tr>')
     return f"<table>{head}{''.join(body)}</table>"
 
 
@@ -262,11 +268,14 @@ def tiles(rows, models):
 
 def render(data):
     rows, models, machines = data["rows"], data["models"], data["machines"]
-    workload_cols = [("prose", "Prose"), ("code", "Code"), ("math", "Math"), ("all", "All"), ("sampled", "Sampled")]
+    workload_cols = [("prose", "Prose"), ("code", "Code"), ("math", "Math"), ("all", "All"), ("sampled", "Sampled"),
+                     ("agent", "Agentic coding")]
 
     def workload_cell(r, key):
         if key == "sampled":
             before, after = r["off_t07"].get("all"), r["default_t07"].get("all")
+        elif key == "agent":
+            before, after = r["agent_off"].get("all"), r["agent_default"].get("all")
         else:
             before, after = r["off"].get(key), r["default"].get(key)
         gain = ratio(after, before)
@@ -291,11 +300,11 @@ def render(data):
         '<div class="card"><h2>Speculation off → shipped default</h2>'
         '<p class="note">All prompts, greedy. The gap is the speedup the default ships.</p>' + dumbbell(rows) + "</div>",
         '<div class="card"><h2>Gain by workload</h2>'
-        '<p class="note">Blue is faster than speculation off, red slower, gray about the same. Sampled is T=0.7.</p>'
+        '<p class="note">Blue is faster than speculation off, red slower, gray about the same. Sampled is T=0.7. Agentic coding is real OpenHands histories (4–48K tokens) at 64K context, separate from All.</p>'
         + heatmap(rows, workload_cols, workload_cell) + "</div>",
     ]
     if agent_rows:
-        sections.append('<div class="card"><h2>Gain on real coding-agent transcripts, by history length</h2>'
+        sections.append('<div class="card"><h2>Agentic coding, by history length</h2>'
                         '<p class="note">OpenHands histories from SWE-rebench, 64K context, greedy.</p>'
                         + heatmap(agent_rows, [(b, b) for b in bands] + [("all", "All")], agent_cell) + "</div>")
     if data.get("history"):

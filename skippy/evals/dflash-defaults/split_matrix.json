@@ -2,7 +2,7 @@
   "id": "glm-5.3-flash",
   "name": "GLM-5.3-Flash UD-Q4_K_XL",
   "repo": "meshllm/GLM-5.3-Flash-UD-Q4_K_XL-layers",
-  "revision": "d1b3be770eacf2cfef13e62866fefc2f3917616f",
+  "revision": "1341078ef859d8ddf5cad491c619c463491fac82",
   "draft": {
     "repo": "Anbeeld/GLM-5.3-Flash-DFlash2-GGUF",
     "revision": "f3569acb7f9cee95e66d24442d75536eb00ab842",
@@ -10,14 +10,14 @@
   },
   "nodes": [
     "spark-000499",
+    "spark-000265",
     "spark-000280",
-    "spark-000468",
-    "spark-000907"
+    "spark-000468"
   ],
   "lanes": 1,
   "ctx": 8192,
   "allow_uncertified": true,
-  "note": "glm5next is not in split-certified.json; served with --allow-uncertified-split, and checked by requiring identical greedy output across split sizes. The coordinator (first node) holds the package on local disk and serves it to joiners on the LAN; the shared store returns I/O errors on large writes.",
+  "note": "glm5-next is served with --allow-uncertified-split. The revision is a local package on the coordinator, rebuilt from meshllm d1b3be77 with headers renamed glm5next -> glm5-next to match Unsloth a38483c8; it is not on Hugging Face, so the first node must hold it. Joiners copy it from the coordinator over the LAN.",
   "cuts": {
     "2": "23",
     "4": "11,23,34"

@@ -8,7 +8,10 @@
 #   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face, or
 #   SPLIT_GGUF / _SHA256       a single GGUF already on every member, relative to $HOME
 #   SPLIT_STAGES               how many machines the split must span before measuring
-#   SPLIT_ARM                  off | default | ngram (speculation for this formation)
+#   SPLIT_ARM                  off | default | ngram | dflash (speculation for this formation)
+#   SPLIT_DRAFT_URL / _SHA256  the DFlash draft the dflash arm serves explicitly; every member
+#                              holds it at the same path, since the final stage loads it
+#   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
@@ -100,10 +103,27 @@ if [ "$ROLE" = coordinator ] && [ -z "${SPLIT_GGUF:-}" ]; then
   PKG_SERVER=$!
 fi
 
+if [ "${SPLIT_ARM:?}" = dflash ]; then
+  DRAFT="$HOME/.cache/dflash-bench-models/${SPLIT_DRAFT_URL##*/}"
+  mkdir -p "$(dirname "$DRAFT")"
+  draft_ok() { [ "$( (sha256sum "$DRAFT" 2>/dev/null || shasum -a 256 "$DRAFT") | cut -d' ' -f1)" = "${SPLIT_DRAFT_SHA256:?}" ]; }
+  for _ in 1 2 3; do
+    draft_ok && break
+    rm -f "$DRAFT"; curl -fsSL --retry 10 -o "$DRAFT" "${SPLIT_DRAFT_URL:?}" || true
+  done
+  draft_ok || { echo "draft $DRAFT failed verification" >&2; exit 1; }
+  echo "draft verified: $DRAFT"
+  DFLASH_TOML="$ART/split-dflash.toml"
+  printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\n' "$DRAFT" > "$DFLASH_TOML"
+  [ -n "${SPLIT_DFLASH_CAP:-}" ] && printf 'draft_max_tokens = %s\n' "$SPLIT_DFLASH_CAP" >> "$DFLASH_TOML"
+fi
+
 case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;
   default) ARM_FLAGS="" ;;
   ngram) ARM_FLAGS="--speculative-strategy ngram-suffix" ;;
+  # Only the coordinator plans speculation; joiners just hold the draft at the same path.
+  dflash) [ "$ROLE" = coordinator ] && ARM_FLAGS="--config $DFLASH_TOML" || ARM_FLAGS="" ;;
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"

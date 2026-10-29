@@ -26,7 +26,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_URL = "https://github.com/general-inference/mesh-llm.git"
-ARM_NAMES = {"off": "speculation off", "default": "package default", "ngram": "n-gram"}
+ARM_NAMES = {"off": "speculation off", "default": "package default", "ngram": "n-gram", "dflash": "DFlash"}
 
 
 def session():
@@ -46,6 +46,13 @@ def api(method, path, body=None):
                                                              "user-agent": "dflash-split-bench"})
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read())
+
+
+def draft_url(matrix):
+    draft = matrix.get("draft") or {}
+    if not draft:
+        return ""
+    return f"https://huggingface.co/{draft['repo']}/resolve/{draft['revision']}/{draft['file']}"
 
 
 def plan(args):
@@ -73,7 +80,9 @@ def plan(args):
                             "SPLIT_WIRE_DELAY_MS": str(delay), "SPLIT_LANES": str(matrix["lanes"]),
                             "SPLIT_CTX": str(matrix["ctx"]), "LLAMA_STAGE_USE_SCCACHE": "0",
                             "SPLIT_ALLOW_UNCERTIFIED": "1" if matrix.get("allow_uncertified") else "0",
-                            "SPLIT_CUT": (matrix.get("cuts") or {}).get(str(args.stages), "")},
+                            "SPLIT_CUT": (matrix.get("cuts") or {}).get(str(args.stages), ""),
+                            "SPLIT_DRAFT_URL": draft_url(matrix), "SPLIT_DRAFT_SHA256": (matrix.get("draft") or {}).get("sha256", ""),
+                            "SPLIT_DFLASH_CAP": str(args.dflash_cap or "")},
                     "workspace": {"repos": [{"url": REPO_URL, "rev": rev, "path": "mesh-llm"}],
                                   "build": "bash mesh-llm/skippy/evals/dflash-defaults/build.sh",
                                   "retain": "on_failure"},
@@ -190,6 +199,7 @@ def main():
     parser.add_argument("--out", default="split-bench-out")
     parser.add_argument("--matrix", default="split_matrix.json", help="model and nodes to split across")
     parser.add_argument("--wait", action="store_true", help="retry while the nodes are busy")
+    parser.add_argument("--dflash-cap", type=int, help="draft tokens per block for the dflash arm (default: the split default)")
     args = parser.parse_args()
     {"plan": plan, "submit": submit, "status": status, "table": table}[args.command](args)
 

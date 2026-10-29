@@ -67,7 +67,7 @@ def plan(args):
                 "BENCH_DRAFT_FILE": draft["url"].rsplit("/", 1)[1],
                 "BENCH_DEFAULT_DRAFT_FILE": draft["url"].rsplit("/", 1)[1] if entry["default"] else "",
                 "BENCH_FIXED_BLOCKS": " ".join(str(k) for k in machine["fixed_blocks"]),
-                "BENCH_AGENT": "1" if matrix.get("agent_transcripts") else "0",
+                "BENCH_AGENT": "only" if args.agent_only else "1" if matrix.get("agent_transcripts") else "0",
             }
             spec = {"spec": {
                 "name": f"DFlash defaults · {model['name']} · {label} · {node} @ {rev[:9]}",
@@ -261,6 +261,8 @@ def main():
     parser.add_argument("--out", default="dflash-bench-out", help="where specs, state and the table go")
     parser.add_argument("--poll", type=int, default=300, help="seconds between status checks in `run`")
     parser.add_argument("--label", help="free-form name for this commit in MLflow, e.g. main or a PR")
+    parser.add_argument("--agent-only", action="store_true",
+                        help="run only the agent-transcript arms, e.g. to add them to machines measured before")
     parser.add_argument("--node", help="run every planned job on this node instead of the matrix's")
     args = parser.parse_args()
     commands = {"plan": plan, "submit": submit, "status": status, "table": table, "record": record,

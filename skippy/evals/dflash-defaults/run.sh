@@ -13,7 +13,7 @@
 #   BENCH_DRAFT_URL / _SHA256 / _BYTES / _FILE   draft for the fixed arms, or empty
 #   BENCH_FIXED_BLOCKS         space-separated draft lengths, e.g. "5 7"
 #   BENCH_SPLIT                spec-prompts split (default: report)
-#   BENCH_AGENT                1 to add the agent-transcript arms
+#   BENCH_AGENT                1 to add the agent-transcript arms, only to run just them
 set -euo pipefail
 
 cd mesh-llm
@@ -131,16 +131,18 @@ fixed_config() { # draft tokens -> config path
 }
 
 prime_default_draft
-ARM_ENV= run_arm off --no-draft --speculative-strategy disabled
-ARM_ENV= run_arm default
-if [ -n "$DRAFT" ]; then
-  for k in ${BENCH_FIXED_BLOCKS:-}; do
-    ARM_ENV="SKIPPY_DFLASH_ADAPTIVE=0" run_arm "d$k" --config "$(fixed_config "$k")"
-  done
+if [ "${BENCH_AGENT:-0}" != only ]; then
+  ARM_ENV= run_arm off --no-draft --speculative-strategy disabled
+  ARM_ENV= run_arm default
+  if [ -n "$DRAFT" ]; then
+    for k in ${BENCH_FIXED_BLOCKS:-}; do
+      ARM_ENV="SKIPPY_DFLASH_ADAPTIVE=0" run_arm "d$k" --config "$(fixed_config "$k")"
+    done
+  fi
+  MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
+  MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
 fi
-MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
-MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
-if [ "${BENCH_AGENT:-0}" = 1 ]; then
+if [ "${BENCH_AGENT:-0}" != 0 ]; then
   # Transcripts reach 48K tokens of history; the server must hold them plus the reply.
   PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" SPLIT=all CTX=65536
   ARM_ENV= run_arm agent_off --no-draft --speculative-strategy disabled

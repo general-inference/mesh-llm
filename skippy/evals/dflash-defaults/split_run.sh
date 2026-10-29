@@ -5,7 +5,8 @@
 # Inputs (environment, set by split.py):
 #   JIANYANG_ROLE              coordinator | joiner
 #   JIANYANG_LEADER_HOST       the coordinator's LAN address (formation rendezvous)
-#   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face
+#   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face, or
+#   SPLIT_GGUF / _SHA256       a single GGUF already on every member, relative to $HOME
 #   SPLIT_STAGES               how many machines the split must span before measuring
 #   SPLIT_ARM                  off | default | ngram (speculation for this formation)
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
@@ -69,7 +70,14 @@ PY
   touch "$LOCAL/.verified"
 }
 
-if [ ! -f "$LOCAL/.verified" ]; then
+if [ -n "${SPLIT_GGUF:-}" ]; then
+  # A whole GGUF each member already holds: check it, and skip package staging.
+  MODEL_FILE="$HOME/$SPLIT_GGUF"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "${SPLIT_GGUF_SHA256:?}  $MODEL_FILE" | sha256sum -c --quiet || { echo "$MODEL_FILE failed verification" >&2; exit 1; }
+  fi
+  echo "serving the verified GGUF $MODEL_FILE"
+elif [ ! -f "$LOCAL/.verified" ]; then
   T0=$(date +%s)
   if [ "$ROLE" = joiner ] && [ -n "$LEAD" ]; then
     # The coordinator holds a verified copy and serves it on the LAN; one internet download
@@ -86,7 +94,7 @@ if [ ! -f "$LOCAL/.verified" ]; then
   fi
   echo "package staged and verified in $(( $(date +%s) - T0 ))s"
 fi
-if [ "$ROLE" = coordinator ]; then
+if [ "$ROLE" = coordinator ] && [ -z "${SPLIT_GGUF:-}" ]; then
   python3 -m http.server "$PKG_PORT" --directory "$LOCAL" >"$ART/package-server.log" 2>&1 &
   PKG_SERVER=$!
 fi
@@ -98,7 +106,7 @@ case "${SPLIT_ARM:?}" in
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
-MODEL="$SPLIT_REPO@$SPLIT_REV"
+MODEL="${MODEL_FILE:-$SPLIT_REPO@$SPLIT_REV}"
 SPLIT_FLAGS="--split"
 [ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="--split --allow-uncertified-split"
 LOG="$ART/$ROLE.log"

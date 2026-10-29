@@ -65,7 +65,8 @@ def plan(args):
                 "executor": "lab",
                 "nodes": nodes,
                 "runtime": {
-                    "env": {"SPLIT_REPO": matrix["repo"], "SPLIT_REV": matrix["revision"],
+                    "env": {"SPLIT_REPO": matrix.get("repo", ""), "SPLIT_REV": matrix.get("revision", ""),
+                            "SPLIT_GGUF": matrix.get("gguf", ""), "SPLIT_GGUF_SHA256": matrix.get("gguf_sha256", ""),
                             "SPLIT_STAGES": str(args.stages), "SPLIT_ARM": arm,
                             "SPLIT_WIRE_DELAY_MS": str(delay), "SPLIT_LANES": str(matrix["lanes"]),
                             "SPLIT_CTX": str(matrix["ctx"]), "LLAMA_STAGE_USE_SCCACHE": "0",

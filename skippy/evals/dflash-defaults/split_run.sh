@@ -183,7 +183,10 @@ for i in $(seq 1 360); do
 import json, os, sys
 d = json.load(sys.stdin); st = (d.get("runtime") or {}).get("stages") or []
 name = d.get("model_name") or (st[0].get("model_id") if st else "") or ""
-print(name if d.get("llama_ready") and len(st) >= int(os.environ["STAGES"]) else "")' 2>/dev/null || true)
+# On identical machines the mesh elects the node with the smallest ID to run the split, which
+# may be a joiner; this node then routes requests to it. Ready means every stage is ready.
+ready = len(st) >= int(os.environ["STAGES"]) and all(s.get("state") == "ready" for s in st)
+print(name if ready and (d.get("llama_ready") or d.get("serving_models")) else "")' 2>/dev/null || true)
   [ -n "$MODEL_ID" ] && break
   [ $((i % 6)) -eq 0 ] && echo "waiting for $SPLIT_STAGES stages — $((i * 10))s"
   kill -0 "$SERVE" 2>/dev/null || { echo "coordinator died while forming" >&2; exit 1; }

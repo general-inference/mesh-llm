@@ -150,7 +150,9 @@ fi
 "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
   --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7842 >"$LOG" 2>&1 &
 SERVE=$!
-trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" "${PKG_SERVER:-0}" 2>/dev/null || true' EXIT
+# Only kill what was started: `kill 0` would signal this whole process group, the
+# script included, and turn a finished run into a failed job.
+trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" ${PKG_SERVER:+"$PKG_SERVER"} 2>/dev/null || true' EXIT
 
 MODEL_ID=""
 for i in $(seq 1 360); do

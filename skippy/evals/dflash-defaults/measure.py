@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 ARM, PORT, MODEL_ID = os.environ["ARM"], os.environ["PORT"], os.environ["MODEL_ID"]
@@ -74,12 +75,33 @@ def once(prompt, seed):
             # The first token arrives at `first`, so the timed span decodes out - 1 tokens.
             "dec_tokens": max(out - 1, 0) if decode_s > 0 else 0, "dec_s": decode_s, "e2e_s": time.monotonic() - t0,
             "draft": t.get("draft_n") or 0, "accepted": t.get("draft_n_accepted") or 0,
-            "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12]}
+            "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12],
+            "timings": {k: v for k, v in t.items() if isinstance(v, (int, float))}}
 
 
 # The first reply that carried an error or no content, so a failed arm says why.
 EMPTY_REPLIES = []
-once(items[0]["prompt"], 0)
+# A quick profile can measure the first LIMIT prompts, taken round-robin across groups.
+if int(os.environ.get("LIMIT") or 0):
+    by_group = {}
+    for item in items:
+        by_group.setdefault(group(item), []).append(item)
+    picked = []
+    while len(picked) < int(os.environ["LIMIT"]) and any(by_group.values()):
+        for rows in by_group.values():
+            if rows and len(picked) < int(os.environ["LIMIT"]):
+                picked.append(rows.pop(0))
+    items = picked
+# A split can report every stage ready a moment before requests route to it; until then
+# the API answers 503. Retry the warm-up through that window instead of failing the arm.
+for attempt in range(60):
+    try:
+        once(items[0]["prompt"], 0)
+        break
+    except urllib.error.HTTPError as error:
+        if error.code != 503 or attempt == 59:
+            raise
+        time.sleep(5)
 results = []
 for k, item in enumerate(items):
     result = once(item["prompt"], 1234 + k)
@@ -107,6 +129,15 @@ for name in sorted(names, key=lambda n: ["prose", "code", "math"].index(n) if n 
 
 with open(os.path.join(ART, "arms.jsonl"), "a") as f:
     f.write(json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups, "results": results}) + "\n")
+# Totals of the server's speculation timings over the arm, to show where a round's time goes.
+spec_keys = ("window", "verify", "proposal", "downstream", "draft", "decode", "speculative")
+totals = {}
+for r in results:
+    for k, v in r["timings"].items():
+        if any(word in k for word in spec_keys):
+            totals[k] = totals.get(k, 0) + v
+if totals:
+    print("SPEC_TIMINGS " + json.dumps({"arm": ARM, "requests": len(results), "totals": totals}), flush=True)
 if EMPTY_REPLIES:
     print(f"{ARM}: first empty reply: {EMPTY_REPLIES[0]}", flush=True)
 print("DFLASH_BENCH " + json.dumps({"arm": ARM, "temp": TEMP, "split": SPLIT, "groups": groups}), flush=True)

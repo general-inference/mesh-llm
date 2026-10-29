@@ -12,6 +12,8 @@
 #   SPLIT_DRAFT_URL / _SHA256  the DFlash draft the dflash arm serves explicitly; every member
 #                              holds it at the same path, since the final stage loads it
 #   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
+#   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
+#   SPLIT_LIMIT                measure only this many prompts, for profiling
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
@@ -141,6 +143,7 @@ case "${SPLIT_ARM:?}" in
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
+[ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64
 # layers), which measures a split that barely exists. An explicit cut levels the
 # stages; --auto-balance is what honours it, and its re-cut loop has nothing to fix on
@@ -216,7 +219,7 @@ print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sor
 echo "split serving $MODEL_ID across $SPLIT_STAGES stages: layers $SPANS"
 nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader | sed "s/^/gpu: $SPLIT_ARM /" || true
 
-ARM="$SPLIT_ARM" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
+ARM="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
 # Errors from this node's serve log, so a failed arm explains itself in the job output.

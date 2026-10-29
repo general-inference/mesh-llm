@@ -180,7 +180,7 @@ index 5180a2531..4da8a4664 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 29e4d0be6..664c864fc 100644
+index 14ac60339..159f30bf3 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -205,6 +205,14 @@ if (LLAMA_STAGE_BUILD_TESTS)

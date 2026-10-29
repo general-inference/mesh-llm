@@ -265,7 +265,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 356120cf9..29e4d0be6 100644
+index 5424fa27c..14ac60339 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -82,6 +82,8 @@ add_library(llama

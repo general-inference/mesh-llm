@@ -118,7 +118,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0210214b7..356120cf9 100644
+index 9953d5e06..5424fa27c 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -81,6 +81,7 @@ add_library(llama

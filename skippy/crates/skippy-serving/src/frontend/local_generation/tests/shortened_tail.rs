@@ -2,15 +2,19 @@
 use super::*;
 use anyhow::Context;
 
+type TailGeneration = (Vec<i32>, u32, Option<skippy_runtime::TokenSignal>);
+
 fn generate_chat_tail(backend: &StageOpenAiBackend, prompt: &[i32]) -> Result<(Vec<i32>, u32)> {
-    generate_chat_tail_session(backend, prompt, "shortened-tail")
+    let (tokens, cached, _) = generate_chat_tail_session(backend, prompt, "shortened-tail", false)?;
+    Ok((tokens, cached))
 }
 
 fn generate_chat_tail_session(
     backend: &StageOpenAiBackend,
     prompt: &[i32],
     session: &str,
-) -> Result<(Vec<i32>, u32)> {
+    capture_final_signal: bool,
+) -> Result<TailGeneration> {
     let ids = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
         Some(session),
@@ -18,6 +22,7 @@ fn generate_chat_tail_session(
         None,
     );
     let mut output = Vec::new();
+    let mut final_signal = None;
     let stats = backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: prompt,
@@ -34,13 +39,23 @@ fn generate_chat_tail_session(
         },
         |token| {
             output.push(token);
+            if capture_final_signal && output.len() == 8 {
+                final_signal = Some(
+                    backend
+                        .runtime
+                        .lock()
+                        .unwrap()
+                        .last_token_signal(&ids.session_label)
+                        .map_err(crate::frontend::util::openai_backend_error)?,
+                );
+            }
             Ok(TokenControl::Continue)
         },
     )?;
     let kv = backend.kv.as_ref().unwrap();
     kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
-    Ok((output, stats.cached_prompt_tokens))
+    Ok((output, stats.cached_prompt_tokens, final_signal))
 }
 
 #[test]
@@ -136,7 +151,8 @@ fn check_shortened_tail(demote: bool) -> Result<()> {
 fn generate_concurrent_tails(
     backend: &StageOpenAiBackend,
     prompts: &[Vec<i32>],
-) -> Result<Vec<(Vec<i32>, u32)>> {
+    capture_last_lane: bool,
+) -> Result<Vec<TailGeneration>> {
     let start = std::sync::Barrier::new(prompts.len());
     std::thread::scope(|scope| {
         let handles: Vec<_> = prompts
@@ -146,7 +162,12 @@ fn generate_concurrent_tails(
                 let start = &start;
                 scope.spawn(move || {
                     start.wait();
-                    generate_chat_tail_session(backend, prompt, &format!("tail-{index}"))
+                    generate_chat_tail_session(
+                        backend,
+                        prompt,
+                        &format!("tail-{index}"),
+                        capture_last_lane && index + 1 == prompts.len(),
+                    )
                 })
             })
             .collect();
@@ -173,7 +194,7 @@ fn resident_hybrid_shortened_tail_preserves_concurrent_lanes() -> Result<()> {
         let prompts: Vec<Vec<i32>> = (0..lanes)
             .map(|lane| (1..=192).map(|token| token + 257 * lane as i32).collect())
             .collect();
-        generate_concurrent_tails(&warm, &prompts)
+        generate_concurrent_tails(&warm, &prompts, false)
             .with_context(|| format!("initial concurrent tails, c={lanes}"))?;
         let changed: Vec<_> = prompts
             .iter()
@@ -183,15 +204,22 @@ fn resident_hybrid_shortened_tail_preserves_concurrent_lanes() -> Result<()> {
                 changed
             })
             .collect();
-        let actual = generate_concurrent_tails(&warm, &changed)
+        let actual = generate_concurrent_tails(&warm, &changed, true)
             .with_context(|| format!("changed concurrent tails, c={lanes}"))?;
         let (cold, _) = recurrent_test_backend("cold-tails", "cold-tails", 256, (32, 32), 8, 256)?;
         for (index, prompt) in changed.iter().enumerate() {
             assert_eq!(actual[index].1, 128, "c={lanes}, lane={index}");
+            let expected = generate_chat_tail_session(
+                &cold,
+                prompt,
+                "shortened-tail",
+                index + 1 == changed.len(),
+            )?;
             assert_eq!(
-                actual[index].0,
-                generate_chat_tail(&cold, prompt)?.0,
-                "concurrent checkpoint restore changes tokens: c={lanes}, lane={index}"
+                actual[index].0, expected.0,
+                "concurrent checkpoint restore changes tokens: c={lanes}, lane={index}; \
+                 actual_final_signal={:?}, expected_final_signal={:?}",
+                actual[index].2, expected.2,
             );
         }
     }
@@ -217,7 +245,7 @@ fn shortened_tail_cold_concurrency_matches_serial() -> Result<()> {
             prompt
         })
         .collect();
-    let actual = generate_concurrent_tails(&parallel, &prompts)?;
+    let actual = generate_concurrent_tails(&parallel, &prompts, false)?;
     let (serial, _) = recurrent_test_backend("cold-serial", "cold-serial", 256, (32, 32), 8, 256)?;
     for (lane, prompt) in prompts.iter().enumerate() {
         assert_eq!(

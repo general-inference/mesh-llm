@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 mod activation_codec;
 mod capacity_budget;
 mod content_attestation;
+mod coordinator_takeover;
 
 fn lifecycle_config() -> plugin::MeshConfig {
     toml::from_str(

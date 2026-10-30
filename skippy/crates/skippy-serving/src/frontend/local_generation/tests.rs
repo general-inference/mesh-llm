@@ -36,6 +36,7 @@ mod native_cache_concurrency;
 mod native_decode_order;
 mod native_decode_shapes;
 mod native_execution_accounting;
+mod native_four_lane;
 mod recurrent_concurrency;
 mod recurrent_early_stop;
 mod recurrent_verification;

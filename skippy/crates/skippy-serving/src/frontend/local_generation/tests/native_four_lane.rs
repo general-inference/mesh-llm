@@ -9,6 +9,7 @@ use skippy_runtime::IterationBatchPhase;
 enum PrefillOrder {
     Serial,
     Interleaved,
+    InterleavedFull,
     InterleavedSmall,
     Batched,
     BatchedWide,
@@ -24,6 +25,12 @@ fn native_four_lane_serial_prefill_matches_serial_decode() -> Result<()> {
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_interleaved_prefill_matches_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::Interleaved)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_production_width_prefill_matches_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::InterleavedFull)
 }
 
 #[test]
@@ -217,16 +224,18 @@ fn decode_single_lane(chunk_size: usize) -> Result<(Vec<i32>, skippy_runtime::To
 }
 
 fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
-    let batch = if matches!(order, PrefillOrder::BatchedWide) {
-        128
+    let (batch, microbatch) = if matches!(order, PrefillOrder::InterleavedFull) {
+        (2048, 512)
+    } else if matches!(order, PrefillOrder::BatchedWide) {
+        (128, 128)
     } else {
-        32
+        (32, 32)
     };
     let (parallel, _) = recurrent_test_backend_with_lanes(
         "native-four-tail",
         "native-four-tail",
         256,
-        (batch, batch, 4),
+        (batch, microbatch, 4),
         8,
         1024,
         None,
@@ -235,7 +244,7 @@ fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
         "native-serial-tail",
         "native-serial-tail",
         256,
-        (32, 32),
+        (batch, microbatch),
         8,
         256,
     )?;
@@ -253,7 +262,12 @@ fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
     let mut parallel_runtime = parallel.runtime.lock().unwrap();
     let mut starts = prefill_parallel(&mut parallel_runtime, &sessions, &prompts, order)?;
     let mut serial_runtime = serial.runtime.lock().unwrap();
-    let mut serial_token = prefill_one(&mut serial_runtime, sessions[3], &prompts[3])?;
+    let mut serial_token = if matches!(order, PrefillOrder::InterleavedFull) {
+        prefill_without_intermediate_sampling(&mut serial_runtime, sessions[3], &prompts[3], true)?
+            .context("production-width serial prefill did not sample")?
+    } else {
+        prefill_one(&mut serial_runtime, sessions[3], &prompts[3])?
+    };
     anyhow::ensure!(
         starts[3] == serial_token,
         "{order:?} first token differs: parallel={}, serial={serial_token}",
@@ -315,6 +329,17 @@ fn prefill_parallel(
                 for lane in 0..4 {
                     prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk, 32)?;
                 }
+            }
+        }
+        PrefillOrder::InterleavedFull => {
+            for lane in 0..4 {
+                starts[lane] = prefill_without_intermediate_sampling(
+                    runtime,
+                    sessions[lane],
+                    &prompts[lane],
+                    true,
+                )?
+                .context("production-width parallel prefill did not sample")?;
             }
         }
         PrefillOrder::InterleavedSmall => {

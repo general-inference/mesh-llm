@@ -31,10 +31,6 @@ impl StageOpenAiBackend {
         state: &DecodeState,
     ) -> bool {
         #[cfg(test)]
-        if std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_SKIP_POST_DECODE_RECORD").is_some() {
-            return false;
-        }
-        #[cfg(test)]
         {
             super::capture_trace::POST_DECODE_ENTERED
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);

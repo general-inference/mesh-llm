@@ -356,6 +356,8 @@ mod tests {
             StageActivationCodec::RawF32V1,
             StageActivationCodec::F16RneV1,
             StageActivationCodec::S8RowF32RneV1,
+            StageActivationCodec::Fp8E4m3RowF32RneV1,
+            StageActivationCodec::Fp8E4m3Block32E8m0RneV1,
         ] {
             let mut config = stage_config();
             config.activation_codec = codec;

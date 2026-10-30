@@ -741,6 +741,7 @@ fn peer_serving(peer_id: iroh::EndpointId, model: &str, vision: bool) -> mesh::P
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

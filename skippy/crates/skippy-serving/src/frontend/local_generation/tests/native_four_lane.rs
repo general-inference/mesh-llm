@@ -9,6 +9,7 @@ use skippy_runtime::IterationBatchPhase;
 enum PrefillOrder {
     Serial,
     Interleaved,
+    InterleavedSmall,
     Batched,
 }
 
@@ -26,8 +27,57 @@ fn native_four_lane_interleaved_prefill_matches_serial_decode() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_interleaved_small_prefill_matches_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::InterleavedSmall)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_batched_prefill_matches_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::Batched)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_single_lane_prefill_chunk_width_preserves_decode() -> Result<()> {
+    let wide = decode_single_lane(32)?;
+    let narrow = decode_single_lane(8)?;
+    assert_eq!(
+        narrow.0, wide.0,
+        "single-lane 8-token prefill changed decode; narrow={:?}, wide={:?}",
+        narrow.1, wide.1
+    );
+    Ok(())
+}
+
+fn decode_single_lane(chunk_size: usize) -> Result<(Vec<i32>, skippy_runtime::TokenSignal)> {
+    let (backend, _) =
+        recurrent_test_backend("native-one-tail", "native-one-tail", 256, (32, 32), 8, 256)?;
+    let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * 3).collect();
+    prompt.extend_from_slice(&[501, 502, 503, 504]);
+    let session = "native-one-tail";
+    let mut runtime = backend.runtime.lock().unwrap();
+    let mut first = None;
+    for (index, chunk) in prompt.chunks(chunk_size).enumerate() {
+        first = prefill_without_intermediate_sampling(
+            &mut runtime,
+            session,
+            chunk,
+            index + 1 == prompt.len().div_ceil(chunk_size),
+        )?
+        .or(first);
+    }
+    let mut output = vec![first.context("single-lane prefill did not sample")?];
+    while output.len() < 8 {
+        let previous = *output.last().unwrap();
+        output.extend(iterate(
+            &mut runtime,
+            &[session],
+            &[&[previous]],
+            IterationBatchPhase::Decode,
+        )?);
+    }
+    Ok((output, runtime.last_token_signal(session)?))
 }
 
 fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
@@ -111,14 +161,29 @@ fn prefill_parallel(
         PrefillOrder::Serial => {
             for lane in 0..4 {
                 for chunk in 0..chunks {
-                    prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk)?;
+                    prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk, 32)?;
                 }
             }
         }
         PrefillOrder::Interleaved => {
             for chunk in 0..chunks {
                 for lane in 0..4 {
-                    prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk)?;
+                    prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk, 32)?;
+                }
+            }
+        }
+        PrefillOrder::InterleavedSmall => {
+            for chunk in 0..prompts[0].len().div_ceil(batched_chunk_size) {
+                for lane in 0..4 {
+                    prefill_chunk(
+                        runtime,
+                        sessions,
+                        prompts,
+                        &mut starts,
+                        lane,
+                        chunk,
+                        batched_chunk_size,
+                    )?;
                 }
             }
         }
@@ -159,9 +224,10 @@ fn prefill_chunk(
     starts: &mut [i32; 4],
     lane: usize,
     chunk: usize,
+    chunk_size: usize,
 ) -> Result<()> {
-    let start = chunk * 32;
-    let end = (start + 32).min(prompts[lane].len());
+    let start = chunk * chunk_size;
+    let end = (start + chunk_size).min(prompts[lane].len());
     if let Some(token) = prefill_without_intermediate_sampling(
         runtime,
         sessions[lane],

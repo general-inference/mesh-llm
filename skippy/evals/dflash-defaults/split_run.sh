@@ -14,6 +14,9 @@
 #   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
 #   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
 #   SPLIT_LIMIT                measure only this many prompts, for profiling
+#   SPLIT_WIRE_MBPS            simulated per-hop bandwidth limit, empty for none
+#   SPLIT_PREFIX               1 to measure prefix-cache reuse on agent turns instead of decode speed
+#   SPLIT_CODEC                activation wire codec for every arm (skippy.activation_codec), empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
@@ -134,15 +137,25 @@ if [ "${SPLIT_ARM:?}" = dflash ]; then
   [ -n "${SPLIT_DFLASH_CAP:-}" ] && printf 'draft_max_tokens = %s\n' "$SPLIT_DFLASH_CAP" >> "$DFLASH_TOML"
 fi
 
+# One config file carries both the codec and the dflash arm's draft, since a serve takes one.
+ARM_CONFIG="$ART/split-arm.toml"
+: > "$ARM_CONFIG"
+if [ -n "${SPLIT_CODEC:-}" ]; then
+  printf '[defaults.skippy]\nactivation_codec = "%s"\n' "$SPLIT_CODEC" >> "$ARM_CONFIG"
+fi
+[ -n "${DFLASH_TOML:-}" ] && cat "$DFLASH_TOML" >> "$ARM_CONFIG"
+
 case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;
   default) ARM_FLAGS="" ;;
   ngram) ARM_FLAGS="--speculative-strategy ngram-suffix" ;;
   # Every member gets the config: the mesh, not jy, elects which node plans the split.
-  dflash) ARM_FLAGS="--config $DFLASH_TOML" ;;
+  dflash) ARM_FLAGS="" ;;
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
+[ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
+[ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64
 # layers), which measures a split that barely exists. An explicit cut levels the
@@ -219,9 +232,15 @@ print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sor
 echo "split serving $MODEL_ID across $SPLIT_STAGES stages: layers $SPANS"
 nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader | sed "s/^/gpu: $SPLIT_ARM /" || true
 
+if [ "${SPLIT_PREFIX:-0}" = 1 ]; then
+  PORT="$API" MODEL_ID="$MODEL_ID" ART="$ART" LIMIT="${SPLIT_LIMIT:-8}" \
+    PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/prefix.py" \
+    || echo "PREFIX_BENCH {\"error\": \"measurement failed\"}"
+else
 ARM="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
+fi
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

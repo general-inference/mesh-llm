@@ -9,6 +9,7 @@ use skippy_runtime::IterationBatchPhase;
 enum PrefillOrder {
     Serial,
     Interleaved,
+    InterleavedSavedPrefix,
     InterleavedFull,
     InterleavedSmall,
     Batched,
@@ -25,6 +26,12 @@ fn native_four_lane_serial_prefill_matches_serial_decode() -> Result<()> {
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_interleaved_prefill_matches_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::Interleaved)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_saved_prefix_preserves_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::InterleavedSavedPrefix)
 }
 
 #[test]
@@ -324,10 +331,19 @@ fn prefill_parallel(
                 }
             }
         }
-        PrefillOrder::Interleaved => {
+        PrefillOrder::Interleaved | PrefillOrder::InterleavedSavedPrefix => {
             for chunk in 0..chunks {
                 for lane in 0..4 {
                     prefill_chunk(runtime, sessions, prompts, &mut starts, lane, chunk, 32)?;
+                    if matches!(order, PrefillOrder::InterleavedSavedPrefix) && chunk == 3 {
+                        anyhow::ensure!(
+                            !runtime
+                                .export_recurrent_cache_state(sessions[lane])?
+                                .is_empty(),
+                            "saved prefix has no recurrent snapshot"
+                        );
+                        runtime.save_resident_prefix(sessions[lane], 16 + lane as i32, 128)?;
+                    }
                 }
             }
         }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::{
@@ -93,6 +93,13 @@ impl Scheduler {
     }
 
     pub fn plan_iteration(&mut self) -> IterationPlan {
+        self.plan_iteration_excluding(&BTreeSet::new())
+    }
+
+    /// Plan runnable requests while a caller is still consuming a token from
+    /// the excluded requests. Their sequence state and admission stay owned by
+    /// the scheduler, but native execution cannot advance them yet.
+    pub fn plan_iteration_excluding(&mut self, excluded: &BTreeSet<String>) -> IterationPlan {
         self.waiting_turn = self.waiting_turn.saturating_add(1);
         let admitted = self.admit_waiting();
         let mut plan = IterationPlan {
@@ -103,7 +110,8 @@ impl Scheduler {
             .active
             .values()
             .filter(|sequence| {
-                sequence.prefill_cursor >= sequence.recompute_token_count()
+                !excluded.contains(&sequence.id)
+                    && sequence.prefill_cursor >= sequence.recompute_token_count()
                     && sequence.pending_decode_token().is_some()
             })
             .count()
@@ -115,12 +123,17 @@ impl Scheduler {
                 .decode_us_ewma_by_rows
                 .contains_key(&calibrated_decode_rows)
         {
-            self.plan_mixed_iteration(&mut plan);
+            self.plan_mixed_iteration(&mut plan, excluded);
             return plan;
         }
         let mut budget = self.config.max_tokens_per_iteration;
         let mut prefill_sequences = 0usize;
-        let ids = self.active.keys().cloned().collect::<Vec<_>>();
+        let ids = self
+            .active
+            .keys()
+            .filter(|id| !excluded.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
         // llama's mixed-token ABI can batch many prefills or many decode rows,
         // but combining a long prefill with live decode rows changes dense
         // model outputs. Give chunked prefill/recompute one iteration, then
@@ -227,9 +240,14 @@ impl Scheduler {
         plan
     }
 
-    fn plan_mixed_iteration(&mut self, plan: &mut IterationPlan) {
+    fn plan_mixed_iteration(&mut self, plan: &mut IterationPlan, excluded: &BTreeSet<String>) {
         let mut budget = self.config.max_tokens_per_iteration;
-        let ids = self.active.keys().cloned().collect::<Vec<_>>();
+        let ids = self
+            .active
+            .keys()
+            .filter(|id| !excluded.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
 
         // Decode is latency-sensitive and consumes exactly one token per live
         // sequence. Reserve those rows first so prompt traffic cannot starve
@@ -760,6 +778,49 @@ mod tests {
         assert_eq!(plan.work[0].tokens, vec![42]);
         assert_eq!(plan.work[0].positions, vec![3]);
         assert!(plan.work[0].sample_last);
+    }
+
+    #[test]
+    fn unacknowledged_token_does_not_advance_its_sequence() {
+        let mut scheduler = Scheduler::new(SchedulerConfig {
+            max_active_sequences: 2,
+            ..SchedulerConfig::default()
+        });
+        for id in ["awaiting", "ready"] {
+            scheduler
+                .submit(sequence(id, 3, 4).with_prefilled_generation(vec![42]))
+                .unwrap();
+        }
+        let blocked = BTreeSet::from(["awaiting".to_string()]);
+        let first = scheduler.plan_iteration_excluding(&blocked);
+        assert_eq!(first.work.len(), 1);
+        assert_eq!(first.work[0].sequence_id, "ready");
+        scheduler.complete_iteration(
+            &first,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 43,
+            }],
+        );
+        let second = scheduler.plan_iteration_excluding(&blocked);
+        assert_eq!(second.work.len(), 1);
+        assert_eq!(second.work[0].sequence_id, "ready");
+        assert_eq!(second.work[0].tokens, [43]);
+        scheduler.complete_iteration(
+            &second,
+            &[IterationPrediction {
+                work_index: 0,
+                token: 44,
+            }],
+        );
+        let resumed = scheduler.plan_iteration();
+        let awaiting = resumed
+            .work
+            .iter()
+            .find(|work| work.sequence_id == "awaiting")
+            .unwrap();
+        assert_eq!(awaiting.tokens, [42]);
+        assert_eq!(awaiting.positions, [3]);
     }
 
     #[test]

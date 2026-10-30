@@ -1267,7 +1267,15 @@ impl SchedulerWorker {
         }
 
         let iteration_started = Instant::now();
-        let mut plan = self.scheduler.plan_iteration();
+        let awaiting_token_control = self
+            .requests
+            .iter()
+            .filter(|(_, request)| !request.pending_controls.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut plan = self
+            .scheduler
+            .plan_iteration_excluding(&awaiting_token_control);
         if plan.work.is_empty() {
             return;
         }

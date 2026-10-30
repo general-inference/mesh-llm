@@ -10,17 +10,41 @@
     "sha256": "0af40871f001e624ea0fb766495405bf0d68232435a63cb00ced97e77a4387aa"
   },
   "nodes": [
-    "spark-000499",
-    "spark-000265",
     "spark-000280",
-    "spark-000468"
+    "spark-000265",
+    "spark-000499",
+    "spark-000907"
   ],
   "lanes": 1,
   "ctx": 8192,
   "allow_uncertified": true,
-  "note": "glm5-next is served with --allow-uncertified-split. The revision is a local package on the coordinator, rebuilt from meshllm d1b3be77 with headers renamed glm5next -> glm5-next to match Unsloth a38483c8; it is not on Hugging Face, so the first node must hold it. Joiners copy it from the coordinator over the LAN.",
+  "note": "glm5-next is served with --allow-uncertified-split. The revision is a local package on the coordinator, rebuilt from meshllm d1b3be77 with headers renamed glm5next -> glm5-next to match Unsloth a38483c8; it is not on Hugging Face, so the first node must hold it. Joiners copy it from the coordinator over the LAN. Four stages need a topology lock: the planner otherwise uses the fewest nodes that fit. Stage 0 sits on the node with the smallest mesh ID (spark-000280), which the mesh elects coordinator.",
   "cuts": {
     "2": "23",
     "4": "11,23,35"
+  },
+  "locks": {
+    "4": [
+      {
+        "node": "spark-db08",
+        "layer_start": 0,
+        "layer_end": 11
+      },
+      {
+        "node": "spark-9632",
+        "layer_start": 11,
+        "layer_end": 23
+      },
+      {
+        "node": "spark-9f06",
+        "layer_start": 23,
+        "layer_end": 35
+      },
+      {
+        "node": "spark-9845",
+        "layer_start": 35,
+        "layer_end": 45
+      }
+    ]
   }
 }

@@ -15,6 +15,8 @@
 #   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
 #   SPLIT_LIMIT                measure only this many prompts, for profiling
 #   SPLIT_WIRE_MBPS            simulated per-hop bandwidth limit, empty for none
+#   SPLIT_LOCK                 JSON list of {"node","layer_start","layer_end"} pinning every stage; the
+#                              planner otherwise uses the fewest nodes that fit
 #   SPLIT_PREFIX               1 to measure prefix-cache reuse on agent turns instead of decode speed
 #   SPLIT_CODEC                activation wire codec for every arm (skippy.activation_codec), empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
@@ -173,6 +175,16 @@ if [ -n "${SPLIT_CUT:-}" ]; then
 fi
 MODEL="${MODEL_FILE:-$SPLIT_REPO@$SPLIT_REV}"
 SPLIT_FLAGS="--split ${BALANCE_FLAGS:-}"
+if [ -n "${SPLIT_LOCK:-}" ]; then
+  # Every member gets the same lock; it names the package by ref and manifest digest.
+  LOCK_FILE="$ART/split-topology-lock.json"
+  MANIFEST_SHA=$( (sha256sum "$LOCAL/model-package.json" 2>/dev/null || shasum -a 256 "$LOCAL/model-package.json") | cut -d' ' -f1)
+  MODEL_REF="$SPLIT_REPO@$SPLIT_REV" LOCK="$SPLIT_LOCK" SHA="$MANIFEST_SHA" python3 -c '
+import json, os
+print(json.dumps({"version": 1, "model": os.environ["MODEL_REF"], "manifest_sha256": os.environ["SHA"],
+                  "stages": json.loads(os.environ["LOCK"])}))' > "$LOCK_FILE"
+  SPLIT_FLAGS="--split --split-topology-lock $LOCK_FILE"
+fi
 [ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="$SPLIT_FLAGS --allow-uncertified-split"
 LOG="$ART/$ROLE.log"
 

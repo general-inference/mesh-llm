@@ -50,6 +50,69 @@ fn native_four_lane_saved_chat_boundaries_preserve_serial_decode() -> Result<()>
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_single_row_decode_matches_serial() -> Result<()> {
+    let (parallel, _) = recurrent_test_backend_with_lanes(
+        "native-single-row-four",
+        "native-single-row-four",
+        256,
+        (32, 32, 4),
+        8,
+        1024,
+        None,
+    )?;
+    let (serial, _) = recurrent_test_backend(
+        "native-single-row-one",
+        "native-single-row-one",
+        256,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let prompts: [_; 4] = std::array::from_fn(|lane| {
+        let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * lane as i32).collect();
+        prompt.extend_from_slice(&[501, 502, 503, 504]);
+        prompt
+    });
+    let sessions = [
+        "single-row-0",
+        "single-row-1",
+        "single-row-2",
+        "single-row-3",
+    ];
+    let mut parallel_runtime = parallel.runtime.lock().unwrap();
+    let starts = prefill_parallel(
+        &mut parallel_runtime,
+        &sessions,
+        &prompts,
+        PrefillOrder::InterleavedBoundaries,
+    )?;
+    let mut serial_runtime = serial.runtime.lock().unwrap();
+    let mut serial_token = prefill_chat_boundaries(&mut serial_runtime, sessions[3], &prompts[3])?;
+    let mut parallel_token = starts[3];
+    assert_eq!(parallel_token, serial_token, "first token differs");
+    for step in 1..8 {
+        parallel_token = iterate(
+            &mut parallel_runtime,
+            &[sessions[3]],
+            &[&[parallel_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        serial_token = iterate(
+            &mut serial_runtime,
+            &[sessions[3]],
+            &[&[serial_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        assert_eq!(
+            parallel_token, serial_token,
+            "lane 3 diverged at token {step}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_production_width_prefill_matches_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::InterleavedFull)
 }

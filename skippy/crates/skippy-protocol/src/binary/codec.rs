@@ -189,6 +189,8 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     if dflash_health {
         stats.dflash_feature_rows_missing = read_i64(&mut reader)?;
         stats.dflash_draft_context_resets = read_i64(&mut reader)?;
+        stats.verify_rollbacks_in_place = read_i64(&mut reader)?;
+        stats.verify_rollbacks_checkpointed = read_i64(&mut reader)?;
     }
     let log_probabilities = if kind == WireReplyKind::TokenScores {
         if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
@@ -826,6 +828,8 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
     if stats.has_dflash_health() {
         write_i64(&mut writer, stats.dflash_feature_rows_missing)?;
         write_i64(&mut writer, stats.dflash_draft_context_resets)?;
+        write_i64(&mut writer, stats.verify_rollbacks_in_place)?;
+        write_i64(&mut writer, stats.verify_rollbacks_checkpointed)?;
     }
     Ok(())
 }
@@ -917,6 +921,8 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         // Read after the fixed fields when the reply marker says so.
         dflash_feature_rows_missing: 0,
         dflash_draft_context_resets: 0,
+        verify_rollbacks_in_place: 0,
+        verify_rollbacks_checkpointed: 0,
     }
 }
 

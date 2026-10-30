@@ -1034,6 +1034,12 @@ impl StageOpenAiBackend {
             } else {
                 // Resident hybrids need the full-prompt native prefix and
                 // decode headroom alongside the lane-owned exact fallback.
+                #[cfg(test)]
+                let skip_full_prefill_record =
+                    std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_SKIP_FULL_PREFILL_RECORD")
+                        .is_some();
+                #[cfg(not(test))]
+                let skip_full_prefill_record = false;
                 let scheduler_backend = self.clone();
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();
@@ -1044,14 +1050,20 @@ impl StageOpenAiBackend {
                     cache_operation_deadline,
                     request.cancellation,
                     move |runtime| {
-                        let record = scheduler_backend.record_and_evict_kv(
-                            runtime,
-                            &scheduler_session_id,
-                            &scheduler_ids,
-                            record_prefill_tokens.as_ref(),
-                            restored_prefill,
-                            restored_prefill_tokens < record_prefill_tokens.len(),
-                        );
+                        let record = if skip_full_prefill_record {
+                            // Isolate the native continuation from the
+                            // full-prompt cache record in CUDA model controls.
+                            KvRecordResult::default()
+                        } else {
+                            scheduler_backend.record_and_evict_kv(
+                                runtime,
+                                &scheduler_session_id,
+                                &scheduler_ids,
+                                record_prefill_tokens.as_ref(),
+                                restored_prefill,
+                                restored_prefill_tokens < record_prefill_tokens.len(),
+                            )
+                        };
                         Ok((record, emit_debug.then(|| runtime.session_stats())))
                     },
                 )?;

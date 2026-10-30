@@ -10,6 +10,8 @@ enum PrefillOrder {
     Serial,
     Interleaved,
     InterleavedSavedPrefix,
+    InterleavedBoundaries,
+    InterleavedSavedBoundaries,
     InterleavedFull,
     InterleavedSmall,
     Batched,
@@ -32,6 +34,18 @@ fn native_four_lane_interleaved_prefill_matches_serial_decode() -> Result<()> {
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_saved_prefix_preserves_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::InterleavedSavedPrefix)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_chat_boundaries_preserve_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::InterleavedBoundaries)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_saved_chat_boundaries_preserve_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::InterleavedSavedBoundaries)
 }
 
 #[test]
@@ -272,6 +286,11 @@ fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
     let mut serial_token = if matches!(order, PrefillOrder::InterleavedFull) {
         prefill_without_intermediate_sampling(&mut serial_runtime, sessions[3], &prompts[3], true)?
             .context("production-width serial prefill did not sample")?
+    } else if matches!(
+        order,
+        PrefillOrder::InterleavedBoundaries | PrefillOrder::InterleavedSavedBoundaries
+    ) {
+        prefill_chat_boundaries(&mut serial_runtime, sessions[3], &prompts[3])?
     } else {
         prefill_one(&mut serial_runtime, sessions[3], &prompts[3])?
     };
@@ -358,6 +377,34 @@ fn prefill_parallel(
                 .context("production-width parallel prefill did not sample")?;
             }
         }
+        PrefillOrder::InterleavedBoundaries | PrefillOrder::InterleavedSavedBoundaries => {
+            let mut start = 0;
+            for end in [32, 64, 96, 128, 160, 176, 180] {
+                for lane in 0..4 {
+                    if let Some(token) = prefill_without_intermediate_sampling(
+                        runtime,
+                        sessions[lane],
+                        &prompts[lane][start..end],
+                        end == prompts[lane].len(),
+                    )? {
+                        starts[lane] = token;
+                    }
+                    if matches!(order, PrefillOrder::InterleavedSavedBoundaries)
+                        && (end == 128 || end == 176)
+                    {
+                        anyhow::ensure!(
+                            !runtime
+                                .export_recurrent_cache_state(sessions[lane])?
+                                .is_empty(),
+                            "saved prefix has no recurrent snapshot"
+                        );
+                        let cache_seq_id = 16 + 2 * lane as i32 + i32::from(end == 176);
+                        runtime.save_resident_prefix(sessions[lane], cache_seq_id, end as u64)?;
+                    }
+                }
+                start = end;
+            }
+        }
         PrefillOrder::InterleavedSmall => {
             for chunk in 0..prompts[0].len().div_ceil(batched_chunk_size) {
                 for lane in 0..4 {
@@ -432,4 +479,24 @@ fn prefill_one(runtime: &mut RuntimeState, session: &str, prompt: &[i32]) -> Res
             .or(sampled);
     }
     sampled.context("serial prefill did not sample")
+}
+
+fn prefill_chat_boundaries(
+    runtime: &mut RuntimeState,
+    session: &str,
+    prompt: &[i32],
+) -> Result<i32> {
+    let mut start = 0;
+    let mut sampled = None;
+    for end in [32, 64, 96, 128, 160, 176, 180] {
+        sampled = prefill_without_intermediate_sampling(
+            runtime,
+            session,
+            &prompt[start..end],
+            end == prompt.len(),
+        )?
+        .or(sampled);
+        start = end;
+    }
+    sampled.context("serial chat-boundary prefill did not sample")
 }

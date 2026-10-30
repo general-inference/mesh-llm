@@ -8,6 +8,10 @@ impl StageOpenAiBackend {
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
     ) -> Vec<usize> {
+        #[cfg(test)]
+        if std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_SKIP_PREFILL_CHECKPOINT").is_some() {
+            return Vec::new();
+        }
         let Some(kv) = self
             .kv
             .as_ref()

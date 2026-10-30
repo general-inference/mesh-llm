@@ -294,6 +294,49 @@ fn shortened_tail_cold_concurrency_matches_serial() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn cold_concurrency_without_prefill_checkpoint_matches_serial() -> Result<()> {
+    anyhow::ensure!(
+        std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_SKIP_PREFILL_CHECKPOINT").is_some(),
+        "this diagnostic requires SKIPPY_RECURRENT_CACHE_TEST_SKIP_PREFILL_CHECKPOINT",
+    );
+    let (parallel, _) = recurrent_test_backend_with_lanes(
+        "cold-no-prefill-checkpoint",
+        "cold-no-prefill-checkpoint",
+        256,
+        (32, 32, 4),
+        8,
+        1024,
+        None,
+    )?;
+    let prompts: Vec<Vec<i32>> = (0..4)
+        .map(|lane| {
+            let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * lane).collect();
+            prompt.extend_from_slice(&[501, 502, 503, 504]);
+            prompt
+        })
+        .collect();
+    let actual = generate_concurrent_tails(&parallel, &prompts, true)?;
+    let (serial, _) = recurrent_test_backend(
+        "cold-no-checkpoint-serial",
+        "cold-no-checkpoint-serial",
+        256,
+        (32, 32),
+        8,
+        256,
+    )?;
+    for (lane, prompt) in prompts.iter().enumerate() {
+        let expected = generate_chat_tail_session(&serial, prompt, "shortened-tail", true)?;
+        assert_eq!(
+            actual[lane].0, expected.0,
+            "cold concurrency without prefill checkpoint changed tokens: lane={lane}; actual_final_signal={:?}, expected_final_signal={:?}",
+            actual[lane].2, expected.2,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn shortened_tail_fourth_prompt_matches_serial_restore() -> Result<()> {
     let (warm, _) = recurrent_test_backend("fourth-warm", "fourth-warm", 256, (32, 32), 8, 256)?;
     let original: Vec<_> = (1..=192).map(|token| token + 257 * 3).collect();

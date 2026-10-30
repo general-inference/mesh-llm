@@ -2,9 +2,9 @@ use super::activation_edge::{required_boundary, validate_activation_edge};
 use super::attestation::{split_stage_source_is_ready, strict_ready_status_matches};
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
-    RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
-    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, split_participant_labels,
-    split_stage_plan_labels, stop_split_generation,
+    RuntimeSliceStagePlan, SplitActivationCodec, SplitGenerationCleanup,
+    SplitRuntimeGenerationHandle, SplitTopologyGeneration, alloc_local_port, pinned_stage_device,
+    split_participant_labels, split_stage_plan_labels, stop_split_generation,
 };
 use crate::inference::skippy;
 use crate::mesh;
@@ -140,6 +140,33 @@ pub(super) fn configured_stage_lifecycle_intervals(
                 .unwrap_or(DEFAULT_STAGE_HEALTH_INTERVAL.as_millis() as u64),
         ),
     }
+}
+
+/// The activation codec a split generation runs with: `skippy.activation_codec`
+/// on the model, else in `[defaults.skippy]`, else lossless. Config validation
+/// rejects unknown values; one that slips through runs lossless.
+pub(super) fn configured_split_activation_codec(
+    mesh_config: &plugin::MeshConfig,
+    config_model_id: Option<&str>,
+) -> SplitActivationCodec {
+    let model = config_model_id
+        .and_then(|selector| model_skippy_config(mesh_config, selector))
+        .and_then(|config| config.activation_codec.as_deref());
+    let defaults = mesh_config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref())
+        .and_then(|config| config.activation_codec.as_deref());
+    let Some(value) = model.or(defaults) else {
+        return SplitActivationCodec::LOSSLESS;
+    };
+    SplitActivationCodec::from_setting(value).unwrap_or_else(|| {
+        tracing::warn!(
+            activation_codec = value,
+            "unknown skippy.activation_codec; split activations stay lossless"
+        );
+        SplitActivationCodec::LOSSLESS
+    })
 }
 
 fn model_skippy_config<'a>(
@@ -853,6 +880,9 @@ pub(super) async fn split_generation_load_settings<'a>(
         spec.config_model_id,
         spec.package.publisher_defaults.as_ref(),
     )?;
+    // A DFlash draft needs the whole target on one node, so a split serves
+    // without the default draft, falling back to native MTP when it has it.
+    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     materialize_split_default_dflash(&mut resolved).await;
     resolved.model_fit.ctx_size = spec.ctx_size;

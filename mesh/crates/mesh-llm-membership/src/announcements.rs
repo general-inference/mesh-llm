@@ -155,6 +155,7 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.stage_status_list_supported != new.stage_status_list_supported
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
+        || old.activation_codec_fp8_supported != new.activation_codec_fp8_supported
         || lightning_offers_changed(old, new)
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
@@ -341,6 +342,7 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         stage_status_list_supported: peer.stage_status_list_supported,
         local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
+        activation_codec_fp8_supported: peer.activation_codec_fp8_supported,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
         #[cfg(feature = "payments")]
         lightning_offers: peer.lightning_offers.clone(),
@@ -427,6 +429,7 @@ pub fn update_existing_direct_peer(
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
+    existing.activation_codec_fp8_supported = ann.activation_codec_fp8_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     #[cfg(feature = "payments")]
     {

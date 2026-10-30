@@ -853,6 +853,9 @@ pub(super) async fn split_generation_load_settings<'a>(
         spec.config_model_id,
         spec.package.publisher_defaults.as_ref(),
     )?;
+    // A DFlash draft needs the whole target on one node, so a split serves
+    // without the default draft, falling back to native MTP when it has it.
+    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     materialize_split_default_dflash(&mut resolved).await;
     resolved.model_fit.ctx_size = spec.ctx_size;

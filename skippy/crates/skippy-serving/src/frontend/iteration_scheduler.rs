@@ -28,7 +28,7 @@ use crate::frontend::generation::{
     GenerationAdmissionWork, GenerationServiceEstimator, TokenControl,
 };
 use crate::frontend::util::openai_backend_error;
-use crate::kv_integration::StagePrefixCachePayload;
+use crate::kv_integration::{KvStageIntegration, StagePrefixCachePayload};
 use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
@@ -128,6 +128,7 @@ struct IterationSchedulerShared {
     max_direct_iteration_tokens: usize,
     owner_count: AtomicUsize,
     worker: Mutex<Option<JoinHandle<()>>>,
+    resident_cache: Arc<Mutex<Option<Arc<KvStageIntegration>>>>,
 }
 
 struct ScheduledRequest {
@@ -387,6 +388,7 @@ struct RequestState {
 struct SchedulerWorker {
     service_estimator: Arc<GenerationServiceEstimator>,
     runtime: Arc<Mutex<RuntimeState>>,
+    resident_cache: Arc<Mutex<Option<Arc<KvStageIntegration>>>>,
     compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     scheduler: Scheduler,
     requests: BTreeMap<String, RequestState>,
@@ -411,6 +413,13 @@ struct SchedulerWorker {
 }
 
 impl IterationScheduler {
+    pub(crate) fn bind_resident_cache(&self, cache: Option<Arc<KvStageIntegration>>) {
+        *self
+            .shared
+            .resident_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = cache;
+    }
     pub(in crate::frontend) fn acquire_prefill_turn(
         &self,
         deadline: Instant,
@@ -513,6 +522,8 @@ impl IterationScheduler {
             ]),
         );
         let (commands, receiver) = std_mpsc::sync_channel(command_queue_capacity);
+        let resident_cache = Arc::new(Mutex::new(None));
+        let worker_resident_cache = Arc::clone(&resident_cache);
         let service_estimator = Arc::new(GenerationServiceEstimator::new(scheduler_lane_count));
         let worker_estimator = service_estimator.clone();
         let worker = thread::Builder::new()
@@ -521,6 +532,7 @@ impl IterationScheduler {
                 SchedulerWorker {
                     service_estimator: worker_estimator,
                     runtime,
+                    resident_cache: worker_resident_cache,
                     scheduler,
                     requests: BTreeMap::new(),
                     direct_iterations: VecDeque::new(),
@@ -557,6 +569,7 @@ impl IterationScheduler {
                 max_direct_iteration_tokens,
                 owner_count: AtomicUsize::new(1),
                 worker: Mutex::new(Some(worker)),
+                resident_cache,
             }),
         })
     }

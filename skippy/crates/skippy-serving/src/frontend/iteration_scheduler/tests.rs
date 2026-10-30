@@ -87,6 +87,7 @@ fn expired_direct_iteration_behind_blocked_worker_never_reaches_native_runtime()
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -152,6 +153,7 @@ fn direct_iteration_rechecks_deadline_after_worker_reply() {
     let (commands, receiver) = std_mpsc::sync_channel(1);
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            resident_cache: Arc::new(Mutex::new(None)),
             prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
@@ -263,6 +265,7 @@ fn server_scheduler_worker_batches_and_completes_default_generations() {
         service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
+        resident_cache: Arc::new(Mutex::new(None)),
         scheduler: Scheduler::new(build_scheduler_config(2, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
@@ -484,6 +487,7 @@ fn token_control_is_applied_without_blocking_the_scheduler_iteration() {
         service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
+        resident_cache: Arc::new(Mutex::new(None)),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
@@ -545,6 +549,7 @@ fn resumed_request_cancellation_leaves_runtime_for_caller_cleanup() {
         service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime: Arc::clone(&runtime),
+        resident_cache: Arc::new(Mutex::new(None)),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
@@ -604,6 +609,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -627,6 +633,7 @@ fn feature_runtime_operations_execute_on_the_scheduler_worker() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            resident_cache: Arc::new(Mutex::new(None)),
             prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
@@ -654,6 +661,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(3, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -677,6 +685,7 @@ fn detached_runtime_operation_returns_before_work_completes() {
     });
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            resident_cache: Arc::new(Mutex::new(None)),
             prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
@@ -801,6 +810,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
+        resident_cache: Arc::new(Mutex::new(None)),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
@@ -851,6 +861,7 @@ fn resident_kv_does_not_engage_direct_wave_gate() {
         service_estimator: Arc::default(),
         compute_meter: std::sync::Arc::default(),
         runtime,
+        resident_cache: Arc::new(Mutex::new(None)),
         scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
@@ -919,6 +930,7 @@ fn bounded_command_queue_fails_closed_with_overload() {
         .unwrap();
     let scheduler = IterationScheduler {
         shared: Arc::new(IterationSchedulerShared {
+            resident_cache: Arc::new(Mutex::new(None)),
             prefill_admission: Default::default(),
             service_estimator: Arc::default(),
             commands,
@@ -950,6 +962,7 @@ fn worker_panic_is_contained_and_fails_active_requests() {
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -1072,6 +1085,7 @@ fn detached_capture_unit_releases_on_completion_rejection_and_shutdown_drop() {
             service_estimator: Arc::default(),
             runtime,
             compute_meter: std::sync::Arc::default(),
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -1168,6 +1182,7 @@ fn scheduler_worker_keeps_serving_after_an_operation_panics() {
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),
@@ -1232,6 +1247,7 @@ fn direct_iterations_in_a_panicking_batch_get_an_error() {
             service_estimator: Arc::default(),
             compute_meter: std::sync::Arc::default(),
             runtime,
+            resident_cache: Arc::new(Mutex::new(None)),
             scheduler: Scheduler::new(build_scheduler_config(1, 64, 0, Some(8), Some(8), 8, false)),
             requests: BTreeMap::new(),
             direct_iterations: VecDeque::new(),

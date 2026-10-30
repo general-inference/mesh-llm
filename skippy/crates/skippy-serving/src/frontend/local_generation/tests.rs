@@ -331,6 +331,7 @@ fn recurrent_test_backend_with_lanes(
         None,
         telemetry.clone(),
     )?;
+    iteration_scheduler.bind_resident_cache(Some(kv.clone()));
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
         workload: Default::default(),

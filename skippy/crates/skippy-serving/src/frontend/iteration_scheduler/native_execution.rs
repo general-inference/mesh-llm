@@ -1,6 +1,58 @@
 use super::*;
 
 impl SchedulerWorker {
+    fn reserve_iteration_cells(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        token_count: usize,
+    ) -> InferenceResult<()> {
+        let cache = self
+            .resident_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some(cache) = cache else {
+            return Ok(());
+        };
+        if cache.payload != StagePrefixCachePayload::ResidentKv {
+            return Ok(());
+        }
+        runtime
+            .ensure_session_active(session_id)
+            .map_err(openai_backend_error)?;
+        let requested = token_count as u64;
+        let capacity = u64::from(runtime.kv_pool_tokens());
+        if capacity > 0
+            && runtime
+                .memory_used_cells(session_id)
+                .map_err(openai_backend_error)?
+                .saturating_add(requested)
+                <= capacity
+        {
+            return Ok(());
+        }
+        let mut decision = cache
+            .admit_resident_capacity(runtime, session_id, requested, 0, 0, None)
+            .map_err(openai_backend_error)?;
+        if !decision.admitted {
+            runtime
+                .evict_idle_recurrent()
+                .map_err(openai_backend_error)?;
+            decision = cache
+                .admit_resident_capacity(runtime, session_id, requested, 0, 0, None)
+                .map_err(openai_backend_error)?;
+        }
+        if decision.admitted {
+            Ok(())
+        } else {
+            Err(InferenceError::backend(format!(
+                "unified KV pool cannot reserve {requested} iteration cells: {} cells remain occupied in a {}-cell pool",
+                decision.physical_used_tokens, decision.capacity_tokens
+            )))
+        }
+    }
+
     pub(super) fn run_direct_iteration_batch(&mut self) {
         let batch = take_direct_iteration_batch_with_policy(
             &mut self.direct_iterations,
@@ -101,9 +153,13 @@ impl SchedulerWorker {
             .iter()
             .map(|(request, _)| request.selected_tokens.as_deref().unwrap_or_default())
             .collect::<Vec<_>>();
-        let result = runtime
-            .iteration_batch_scored(&requests, &selections)
-            .map_err(openai_backend_error);
+        let result = self
+            .reserve_iteration_cells(&mut runtime, &runnable[0].0.session_id, token_count)
+            .and_then(|()| {
+                runtime
+                    .iteration_batch_scored(&requests, &selections)
+                    .map_err(openai_backend_error)
+            });
         let hold = hold_started.elapsed();
         let runtime_lock_hold_ms = hold.as_secs_f64() * 1_000.0;
         let completed = runtime.take_completed_execution();
@@ -270,7 +326,13 @@ impl SchedulerWorker {
                 },
             })
             .collect::<Vec<_>>();
-        let result = runtime.iteration_batch_sampled(&requests);
+        let result = self
+            .reserve_iteration_cells(&mut runtime, &plan.work[0].sequence_id, plan.token_count)
+            .and_then(|()| {
+                runtime
+                    .iteration_batch_sampled(&requests)
+                    .map_err(openai_backend_error)
+            });
         let completed = runtime.take_completed_execution();
         drop(runtime);
         let elapsed = hold_started.elapsed();
@@ -305,17 +367,15 @@ impl SchedulerWorker {
             .filter(|work| work.phase == IterationPhase::Decode)
             .count();
         self.compute_meter.record_decode_tokens(decode_steps as u64);
-        result
-            .map(|outputs| {
-                outputs
-                    .samples
-                    .into_iter()
-                    .map(|sample| IterationPrediction {
-                        work_index: sample.request_index,
-                        token: sample.predicted_token,
-                    })
-                    .collect()
-            })
-            .map_err(openai_backend_error)
+        result.map(|outputs| {
+            outputs
+                .samples
+                .into_iter()
+                .map(|sample| IterationPrediction {
+                    work_index: sample.request_index,
+                    token: sample.predicted_token,
+                })
+                .collect()
+        })
     }
 }

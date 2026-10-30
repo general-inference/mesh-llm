@@ -360,6 +360,7 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
+    iteration_scheduler.bind_resident_cache(kv.clone());
     let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),

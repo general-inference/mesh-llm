@@ -83,6 +83,7 @@ mod tests {
                 max_direct_iteration_tokens: MAX_NATIVE_ITERATION_TOKENS,
                 owner_count: AtomicUsize::new(1),
                 worker: Mutex::new(None),
+                resident_cache: Arc::new(Mutex::new(None)),
             }),
         };
         let (reply, events) = std_mpsc::channel();

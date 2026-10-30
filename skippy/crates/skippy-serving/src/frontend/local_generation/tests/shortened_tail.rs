@@ -228,6 +228,30 @@ fn resident_hybrid_shortened_tail_preserves_concurrent_lanes() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_pressure_evicts_only_one_idle_lane() -> Result<()> {
+    let (backend, _) = recurrent_test_backend_with_lanes(
+        "pressure-retention",
+        "pressure-retention",
+        256,
+        (32, 32, 3),
+        8,
+        768,
+        None,
+    )?;
+    let prompts = [0, 257].map(|offset| (1..=64).map(|token| token + offset).collect::<Vec<_>>());
+    generate_concurrent_tails(&backend, &prompts, false)?;
+    let mut runtime = backend.runtime.lock().unwrap();
+    assert_eq!(runtime.session_stats().idle_resident_prefixes, 2);
+    assert!(runtime.evict_oldest_idle_recurrent()?);
+    assert_eq!(runtime.session_stats().idle_resident_prefixes, 1);
+    assert!(runtime.evict_oldest_idle_recurrent()?);
+    assert_eq!(runtime.session_stats().idle_resident_prefixes, 0);
+    assert!(!runtime.evict_oldest_idle_recurrent()?);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn shortened_tail_cold_concurrency_matches_serial() -> Result<()> {
     let (parallel, _) = recurrent_test_backend_with_lanes(
         "cold-parallel",

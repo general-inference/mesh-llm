@@ -35,10 +35,11 @@ impl SchedulerWorker {
         let mut decision = cache
             .admit_resident_capacity(runtime, session_id, requested, 0, 0, None)
             .map_err(openai_backend_error)?;
-        if !decision.admitted {
-            runtime
-                .evict_idle_recurrent()
-                .map_err(openai_backend_error)?;
+        while !decision.admitted
+            && runtime
+                .evict_oldest_idle_recurrent()
+                .map_err(openai_backend_error)?
+        {
             decision = cache
                 .admit_resident_capacity(runtime, session_id, requested, 0, 0, None)
                 .map_err(openai_backend_error)?;

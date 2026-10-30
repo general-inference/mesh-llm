@@ -23,22 +23,35 @@ impl RuntimeState {
     /// the cells is the point. A failed reset discards the native lane.
     pub fn evict_idle_recurrent(&mut self) -> Result<usize> {
         let mut evicted = 0;
-        for index in (0..self.idle_sessions.len()).rev() {
-            if self.idle_sessions[index].recurrent_prefixes.is_empty() {
-                continue;
-            }
-            let lane = self.idle_sessions.swap_remove(index);
-            let lane = match lane.into_recyclable(self.layer_start, self.layer_end) {
-                Recycle::Ready(lane) => lane,
-                Recycle::Retained(retained) => retained
-                    .lane
-                    .into_discarded(CheckpointDiscard::MemoryPressure),
-            };
+        while self.evict_oldest_idle_recurrent()? {
             evicted += 1;
-            let lane = self.reset_recycled(lane)?;
-            self.idle_sessions.push(lane);
         }
         Ok(evicted)
+    }
+
+    /// Reclaim one parked lane, leaving newer recurrent checkpoints resident
+    /// when that is enough for the next native iteration.
+    pub(crate) fn evict_oldest_idle_recurrent(&mut self) -> Result<bool> {
+        let Some(index) = self
+            .idle_sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, lane)| !lane.recurrent_prefixes.is_empty())
+            .min_by_key(|(_, lane)| lane.parked_at)
+            .map(|(index, _)| index)
+        else {
+            return Ok(false);
+        };
+        let lane = self.idle_sessions.swap_remove(index);
+        let lane = match lane.into_recyclable(self.layer_start, self.layer_end) {
+            Recycle::Ready(lane) => lane,
+            Recycle::Retained(retained) => retained
+                .lane
+                .into_discarded(CheckpointDiscard::MemoryPressure),
+        };
+        let lane = self.reset_recycled(lane)?;
+        self.idle_sessions.push(lane);
+        Ok(true)
     }
 
     pub(crate) fn record_resident_recurrent(

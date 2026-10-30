@@ -55,10 +55,16 @@ LEAD="${JIANYANG_LEADER_HOST:-}"
 fetch_package() {
   local base="$1"
   curl -fsSL --retry 5 -o "$LOCAL/model-package.json" "$base/model-package.json" || return 1
-  python3 -c 'import json,sys; [print(e["path"]) for e in json.load(open(sys.argv[1]))["artifact_catalog"]["entries"]]' \
-    "$LOCAL/model-package.json" | while read -r path; do
+  # A file already here with the manifest's SHA-256 is kept; anything else is fetched
+  # whole, since the coordinator's server cannot resume a partial file.
+  python3 -c 'import json,sys; [print(e["path"], e["sha256"]) for e in json.load(open(sys.argv[1]))["artifact_catalog"]["entries"]]' \
+    "$LOCAL/model-package.json" | while read -r path sha; do
     mkdir -p "$LOCAL/$(dirname "$path")"
-    curl -fsSL --retry 10 -C - -o "$LOCAL/$path" "$base/$path" || { echo "fetch failed: $path" >&2; exit 1; }
+    if [ -f "$LOCAL/$path" ] && [ "$( (sha256sum "$LOCAL/$path" 2>/dev/null || shasum -a 256 "$LOCAL/$path") | cut -d' ' -f1)" = "$sha" ]; then
+      continue
+    fi
+    rm -f "$LOCAL/$path"
+    curl -fsSL --retry 10 -o "$LOCAL/$path" "$base/$path" || { echo "fetch failed: $path" >&2; exit 1; }
   done || return 1
   SNAP="$LOCAL" python3 - <<'PY' || { echo "staged package failed verification" >&2; return 1; }
 import hashlib, json, os, sys

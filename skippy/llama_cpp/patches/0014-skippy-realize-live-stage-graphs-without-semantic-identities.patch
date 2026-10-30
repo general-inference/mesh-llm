@@ -24,10 +24,10 @@ selects the same slice without them, and realization uses it.
  4 files changed, 105 insertions(+), 7 deletions(-)
 
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
-index 32106f7f2..6482cafa6 100644
+index 49bf23fea..1ae940166 100644
 --- a/src/skippy/stage_realization.cpp
 +++ b/src/skippy/stage_realization.cpp
-@@ -161,7 +161,7 @@ void skippy_realize_stage_graph(
+@@ -217,7 +217,7 @@ void skippy_realize_stage_graph(
          return;
      }
      skippy_stage_slice_selection selection;

@@ -11,6 +11,7 @@ enum PrefillOrder {
     Interleaved,
     InterleavedSmall,
     Batched,
+    BatchedWide,
 }
 
 #[test]
@@ -35,6 +36,12 @@ fn native_four_lane_interleaved_small_prefill_matches_serial_decode() -> Result<
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_four_lane_batched_prefill_matches_serial_decode() -> Result<()> {
     compare_four_lane_to_serial(PrefillOrder::Batched)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_batched_wide_prefill_matches_serial_decode() -> Result<()> {
+    compare_four_lane_to_serial(PrefillOrder::BatchedWide)
 }
 
 #[test]
@@ -210,11 +217,16 @@ fn decode_single_lane(chunk_size: usize) -> Result<(Vec<i32>, skippy_runtime::To
 }
 
 fn compare_four_lane_to_serial(order: PrefillOrder) -> Result<()> {
+    let batch = if matches!(order, PrefillOrder::BatchedWide) {
+        128
+    } else {
+        32
+    };
     let (parallel, _) = recurrent_test_backend_with_lanes(
         "native-four-tail",
         "native-four-tail",
         256,
-        (32, 32, 4),
+        (batch, batch, 4),
         8,
         1024,
         None,
@@ -284,7 +296,11 @@ fn prefill_parallel(
     order: PrefillOrder,
 ) -> Result<[i32; 4]> {
     let mut starts = [0; 4];
-    let batched_chunk_size = 8;
+    let batched_chunk_size = if matches!(order, PrefillOrder::BatchedWide) {
+        32
+    } else {
+        8
+    };
     let chunks = prompts[0].len().div_ceil(32);
     match order {
         PrefillOrder::Serial => {
@@ -316,7 +332,7 @@ fn prefill_parallel(
                 }
             }
         }
-        PrefillOrder::Batched => {
+        PrefillOrder::Batched | PrefillOrder::BatchedWide => {
             let batched_chunks = prompts[0].len().div_ceil(batched_chunk_size);
             for chunk in 0..batched_chunks {
                 let start = chunk * batched_chunk_size;

@@ -701,6 +701,97 @@ fn native_shortened_tail_decode_batches_preserve_continuations() -> Result<()> {
 }
 
 #[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_shortened_tail_matches_serial() -> Result<()> {
+    let (parallel, _) = recurrent_test_backend_with_lanes(
+        "native-four-tail",
+        "native-four-tail",
+        256,
+        (32, 32, 4),
+        8,
+        1024,
+        None,
+    )?;
+    let (serial, _) = recurrent_test_backend(
+        "native-serial-tail",
+        "native-serial-tail",
+        256,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let prompts: [_; 4] = std::array::from_fn(|lane| {
+        let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * lane as i32).collect();
+        prompt.extend_from_slice(&[501, 502, 503, 504]);
+        prompt
+    });
+    let sessions = [
+        "native-tail-0",
+        "native-tail-1",
+        "native-tail-2",
+        "native-tail-3",
+    ];
+    let mut parallel_runtime = parallel.runtime.lock().unwrap();
+    let mut starts = [0; 4];
+    for (lane, prompt) in prompts.iter().enumerate() {
+        for (index, chunk) in prompt.chunks(32).enumerate() {
+            if let Some(token) = prefill_without_intermediate_sampling(
+                &mut parallel_runtime,
+                sessions[lane],
+                chunk,
+                index == prompt.len().div_ceil(32) - 1,
+            )? {
+                starts[lane] = token;
+            }
+        }
+    }
+    let mut serial_runtime = serial.runtime.lock().unwrap();
+    let mut serial_token = None;
+    for (index, chunk) in prompts[3].chunks(32).enumerate() {
+        serial_token = prefill_without_intermediate_sampling(
+            &mut serial_runtime,
+            sessions[3],
+            chunk,
+            index == prompts[3].len().div_ceil(32) - 1,
+        )?
+        .or(serial_token);
+    }
+    let mut serial_token = serial_token.context("serial prefill did not sample")?;
+    anyhow::ensure!(
+        starts[3] == serial_token,
+        "initial token differs: parallel={}, serial={serial_token}",
+        starts[3]
+    );
+    for step in 1..8 {
+        let parallel_inputs = starts.map(|token| [token]);
+        let parallel_tokens: Vec<_> = parallel_inputs
+            .iter()
+            .map(|input| input.as_slice())
+            .collect();
+        let next = iterate(
+            &mut parallel_runtime,
+            &sessions,
+            &parallel_tokens,
+            IterationBatchPhase::Decode,
+        )?;
+        starts.copy_from_slice(&next);
+        let parallel_signal = parallel_runtime.last_token_signal(sessions[3])?;
+        serial_token = iterate(
+            &mut serial_runtime,
+            &[sessions[3]],
+            &[&[serial_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        let serial_signal = serial_runtime.last_token_signal(sessions[3])?;
+        assert_eq!(
+            starts[3], serial_token,
+            "native c4 lane 3 diverged at token {step}; parallel={parallel_signal:?}, serial={serial_signal:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a full-attention hybrid SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_recurrent_cache_payload_excludes_attention_growth() -> Result<()> {
     let (backend, _) = recurrent_test_backend_with_lanes(

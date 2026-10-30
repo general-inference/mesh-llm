@@ -334,6 +334,20 @@ impl SchedulerWorker {
                     .iteration_batch_sampled(&requests)
                     .map_err(openai_backend_error)
             });
+        #[cfg(test)]
+        if let Ok(outputs) = &result
+            && let Some((last_index, last_work)) = plan.work.iter().enumerate().next_back()
+            && let Some(sample) = outputs
+                .samples
+                .iter()
+                .find(|sample| sample.request_index == last_index)
+        {
+            token_diagnostics::record_last_work(
+                &mut runtime,
+                &last_work.sequence_id,
+                sample.predicted_token,
+            );
+        }
         let completed = runtime.take_completed_execution();
         drop(runtime);
         let elapsed = hold_started.elapsed();

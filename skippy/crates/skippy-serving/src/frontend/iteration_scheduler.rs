@@ -1738,3 +1738,5 @@ fn stage_recurrent_bytes_per_native_sequence(config: &StageConfig) -> u64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(in crate::frontend) mod token_diagnostics;

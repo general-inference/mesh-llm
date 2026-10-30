@@ -22,7 +22,9 @@ fn generate_chat_tail_session(
         None,
     );
     let mut output = Vec::new();
-    let mut final_signal = None;
+    if capture_final_signal {
+        crate::frontend::iteration_scheduler::token_diagnostics::enable(&ids.session_label);
+    }
     let stats = backend.generate_local_tokens(
         LocalGeneration {
             prompt_token_ids: prompt,
@@ -39,19 +41,21 @@ fn generate_chat_tail_session(
         },
         |token| {
             output.push(token);
-            if capture_final_signal && output.len() == 8 {
-                final_signal = Some(
-                    backend
-                        .runtime
-                        .lock()
-                        .unwrap()
-                        .last_token_signal(&ids.session_label)
-                        .map_err(crate::frontend::util::openai_backend_error)?,
-                );
-            }
             Ok(TokenControl::Continue)
         },
     )?;
+    let final_signal = if capture_final_signal {
+        crate::frontend::iteration_scheduler::token_diagnostics::take(&ids.session_label)
+            .into_iter()
+            .last()
+            .and_then(|(sampled, signal)| {
+                (Some(sampled) == output.last().copied())
+                    .then_some(signal)
+                    .flatten()
+            })
+    } else {
+        None
+    };
     let kv = backend.kv.as_ref().unwrap();
     kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
@@ -269,13 +273,20 @@ fn shortened_tail_cold_concurrency_matches_serial() -> Result<()> {
             prompt
         })
         .collect();
-    let actual = generate_concurrent_tails(&parallel, &prompts, false)?;
+    let actual = generate_concurrent_tails(&parallel, &prompts, true)?;
     let (serial, _) = recurrent_test_backend("cold-serial", "cold-serial", 256, (32, 32), 8, 256)?;
     for (lane, prompt) in prompts.iter().enumerate() {
+        let expected = generate_chat_tail_session(&serial, prompt, "shortened-tail", true)?;
+        if lane + 1 == prompts.len() {
+            assert!(
+                actual[lane].2.is_some(),
+                "the last c4 lane must have a request-scoped final signal"
+            );
+        }
         assert_eq!(
-            actual[lane].0,
-            generate_chat_tail(&serial, prompt)?.0,
-            "cold concurrency changes tokens: lane={lane}"
+            actual[lane].0, expected.0,
+            "cold concurrency changes tokens: lane={lane}; actual_final_signal={:?}, expected_final_signal={:?}",
+            actual[lane].2, expected.2,
         );
     }
     Ok(())

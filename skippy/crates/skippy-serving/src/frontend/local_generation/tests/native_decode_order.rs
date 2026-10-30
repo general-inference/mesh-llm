@@ -7,8 +7,8 @@ use skippy_runtime::IterationBatchPhase;
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_four_lane_decode_preserves_state_across_batch_reordering() -> Result<()> {
-    let fixed = decode_with_order_changes(false)?;
-    let reordered = decode_with_order_changes(true)?;
+    let fixed = decode_with_order_changes(false, HandoffFixture::large())?;
+    let reordered = decode_with_order_changes(true, HandoffFixture::large())?;
     for lane in 0..4 {
         assert_eq!(
             reordered[lane], fixed[lane],
@@ -21,8 +21,64 @@ fn native_four_lane_decode_preserves_state_across_batch_reordering() -> Result<(
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn four_lane_planned_handoff_matches_direct_decode() -> Result<()> {
-    let direct = decode_with_order_changes(false)?;
-    let planned = decode_with_scheduler_handoff()?;
+    compare_handoff(HandoffFixture::large())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn four_lane_small_context_handoff_matches_direct_decode() -> Result<()> {
+    compare_handoff(HandoffFixture::small())
+}
+
+#[derive(Clone, Copy)]
+struct HandoffFixture {
+    context: usize,
+    batch: u32,
+    pool: usize,
+    prompt_len: usize,
+    changed_tail: bool,
+}
+
+impl HandoffFixture {
+    fn large() -> Self {
+        Self {
+            context: 1024,
+            batch: 128,
+            pool: 4096,
+            prompt_len: 256,
+            changed_tail: false,
+        }
+    }
+
+    fn small() -> Self {
+        Self {
+            context: 256,
+            batch: 32,
+            pool: 1024,
+            prompt_len: 180,
+            changed_tail: true,
+        }
+    }
+
+    fn prompt(self, lane: usize) -> Vec<i32> {
+        let count = if self.changed_tail {
+            176
+        } else {
+            self.prompt_len
+        };
+        let mut prompt: Vec<_> = (1..=count)
+            .map(|token| token as i32 + lane as i32 * 257)
+            .collect();
+        if self.changed_tail {
+            prompt.extend_from_slice(&[501, 502, 503, 504]);
+        }
+        prompt
+    }
+}
+
+fn compare_handoff(fixture: HandoffFixture) -> Result<()> {
+    let direct = decode_with_order_changes(false, fixture)?;
+    let planned = decode_with_scheduler_handoff(fixture)?;
     for lane in 0..4 {
         assert_eq!(
             planned[lane], direct[lane],
@@ -32,14 +88,14 @@ fn four_lane_planned_handoff_matches_direct_decode() -> Result<()> {
     Ok(())
 }
 
-fn decode_with_order_changes(reorder: bool) -> Result<[Vec<i32>; 4]> {
+fn decode_with_order_changes(reorder: bool, fixture: HandoffFixture) -> Result<[Vec<i32>; 4]> {
     let (backend, _) = recurrent_test_backend_with_lanes(
         "batch-order",
         "batch-order",
-        1024,
-        (128, 32, 4),
+        fixture.context,
+        (fixture.batch, 32, 4),
         8,
-        4096,
+        fixture.pool,
         None,
     )?;
     let mut runtime = backend.runtime.lock().unwrap();
@@ -51,13 +107,13 @@ fn decode_with_order_changes(reorder: bool) -> Result<[Vec<i32>; 4]> {
     ];
     let mut output: [Vec<i32>; 4] = std::array::from_fn(|_| Vec::new());
     for lane in 0..4 {
-        let prompt: Vec<_> = (1..=256).map(|token| token + lane as i32 * 257).collect();
+        let prompt = fixture.prompt(lane);
         for (index, chunk) in prompt.chunks(32).enumerate() {
             if let Some(token) = prefill_without_intermediate_sampling(
                 &mut runtime,
                 sessions[lane],
                 chunk,
-                index == 7,
+                index + 1 == prompt.len().div_ceil(32),
             )? {
                 output[lane].push(token);
             }
@@ -85,14 +141,14 @@ fn decode_with_order_changes(reorder: bool) -> Result<[Vec<i32>; 4]> {
     Ok(output)
 }
 
-fn decode_with_scheduler_handoff() -> Result<[Vec<i32>; 4]> {
+fn decode_with_scheduler_handoff(fixture: HandoffFixture) -> Result<[Vec<i32>; 4]> {
     let (backend, _) = recurrent_test_backend_with_lanes(
         "batch-handoff",
         "batch-handoff",
-        1024,
-        (128, 32, 4),
+        fixture.context,
+        (fixture.batch, 32, 4),
         8,
-        4096,
+        fixture.pool,
         None,
     )?;
     let sessions = [
@@ -101,8 +157,7 @@ fn decode_with_scheduler_handoff() -> Result<[Vec<i32>; 4]> {
         "batch-handoff-2",
         "batch-handoff-3",
     ];
-    let prompts: [Vec<i32>; 4] =
-        std::array::from_fn(|lane| (1..=256).map(|token| token + lane as i32 * 257).collect());
+    let prompts: [Vec<i32>; 4] = std::array::from_fn(|lane| fixture.prompt(lane));
     let mut output: [Vec<i32>; 4] = std::array::from_fn(|_| Vec::new());
     {
         let mut runtime = backend.runtime.lock().unwrap();
@@ -112,7 +167,7 @@ fn decode_with_scheduler_handoff() -> Result<[Vec<i32>; 4]> {
                     &mut runtime,
                     sessions[lane],
                     chunk,
-                    index == 7,
+                    index + 1 == prompts[lane].len().div_ceil(32),
                 )? {
                     output[lane].push(token);
                 }

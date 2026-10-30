@@ -39,6 +39,135 @@ fn native_four_lane_batched_prefill_matches_serial_decode() -> Result<()> {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_four_lane_batched_prefill_host_sampler_matches_serial_decode() -> Result<()> {
+    let (parallel, _) = recurrent_test_backend_with_lanes(
+        "native-host-four",
+        "native-host-four",
+        256,
+        (32, 32, 4),
+        8,
+        1024,
+        None,
+    )?;
+    let (serial, _) =
+        recurrent_test_backend("native-host-one", "native-host-one", 256, (32, 32), 8, 256)?;
+    // Requesting native logprobs retires the in-graph backend sampler while
+    // leaving the same greedy token policy and four-request model batch.
+    let sampling = SamplingConfig {
+        top_logprobs: Some(0),
+        ..SamplingConfig::default()
+    };
+    let prompts: [_; 4] = std::array::from_fn(|lane| {
+        let mut prompt: Vec<_> = (1..=176).map(|token| token + 257 * lane as i32).collect();
+        prompt.extend_from_slice(&[501, 502, 503, 504]);
+        prompt
+    });
+    let sessions = [
+        "native-host-0",
+        "native-host-1",
+        "native-host-2",
+        "native-host-3",
+    ];
+    let mut parallel_runtime = parallel.runtime.lock().unwrap();
+    let mut starts = Vec::new();
+    for chunk in 0..prompts[0].len().div_ceil(8) {
+        let start = chunk * 8;
+        let end = (start + 8).min(prompts[0].len());
+        let inputs: Vec<_> = prompts.iter().map(|prompt| &prompt[start..end]).collect();
+        let sample_last = end == prompts[0].len();
+        let next = iterate_configured(
+            &mut parallel_runtime,
+            &sessions,
+            &inputs,
+            &sampling,
+            IterationBatchPhase::Prefill,
+            sample_last,
+        )?;
+        if sample_last {
+            starts = next;
+        }
+    }
+    let mut serial_runtime = serial.runtime.lock().unwrap();
+    let mut serial_token = 0;
+    for chunk in prompts[3].chunks(32) {
+        let next = iterate_configured(
+            &mut serial_runtime,
+            &[sessions[3]],
+            &[chunk],
+            &sampling,
+            IterationBatchPhase::Prefill,
+            chunk.len() < 32,
+        )?;
+        if let Some(&token) = next.first() {
+            serial_token = token;
+        }
+    }
+    anyhow::ensure!(starts.len() == 4 && starts[3] == serial_token);
+    for step in 1..8 {
+        let inputs: Vec<_> = starts.iter().map(std::slice::from_ref).collect();
+        starts = iterate_configured(
+            &mut parallel_runtime,
+            &sessions,
+            &inputs,
+            &sampling,
+            IterationBatchPhase::Decode,
+            true,
+        )?;
+        let parallel_signal = parallel_runtime.last_token_signal(sessions[3])?;
+        serial_token = iterate_configured(
+            &mut serial_runtime,
+            &[sessions[3]],
+            &[&[serial_token]],
+            &sampling,
+            IterationBatchPhase::Decode,
+            true,
+        )?[0];
+        let serial_signal = serial_runtime.last_token_signal(sessions[3])?;
+        assert_eq!(
+            starts[3], serial_token,
+            "host sampler c4 diverged at token {step}; parallel={parallel_signal:?}, serial={serial_signal:?}"
+        );
+    }
+    Ok(())
+}
+
+fn iterate_configured(
+    runtime: &mut RuntimeState,
+    sessions: &[&str],
+    tokens: &[&[i32]],
+    sampling: &SamplingConfig,
+    phase: IterationBatchPhase,
+    sample_last: bool,
+) -> Result<Vec<i32>> {
+    let requests: Vec<_> = sessions
+        .iter()
+        .zip(tokens)
+        .map(|(session_id, token_ids)| RuntimeIterationBatchRequest {
+            session_id,
+            token_ids,
+            positions: &[],
+            sampling: sample_last.then_some(sampling),
+            input: None,
+            sample_last,
+            phase,
+        })
+        .collect();
+    let output = runtime.iteration_batch_sampled(&requests)?;
+    if !sample_last {
+        return Ok(Vec::new());
+    }
+    let mut predicted = vec![None; sessions.len()];
+    for sample in output.samples {
+        predicted[sample.request_index] = Some(sample.predicted_token);
+    }
+    predicted
+        .into_iter()
+        .map(|token| token.context("native request did not sample"))
+        .collect()
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn native_single_lane_prefill_chunk_width_preserves_decode() -> Result<()> {
     let wide = decode_single_lane(32)?;
     let narrow = decode_single_lane(8)?;

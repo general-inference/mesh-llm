@@ -208,7 +208,9 @@ SERVE=$!
 trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" ${PKG_SERVER:+"$PKG_SERVER"} 2>/dev/null || true' EXIT
 
 MODEL_ID=""
-for i in $(seq 1 360); do
+# Joiners copy the package from this node first; a first copy of a ~190 GB package to
+# several joiners at once takes over an hour, so wait up to three hours for the stages.
+for i in $(seq 1 1080); do
   MODEL_ID=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null | STAGES="$SPLIT_STAGES" python3 -c '
 import json, os, sys
 d = json.load(sys.stdin); st = (d.get("runtime") or {}).get("stages") or []
@@ -224,7 +226,7 @@ print(name if ready and (d.get("llama_ready") or d.get("serving_models")) else "
   grep -qE 'model launch failed|Failed to start model' "$LOG" && { echo "the model failed to launch" >&2; exit 1; }
   sleep 10
 done
-[ -n "$MODEL_ID" ] || { echo "the split never reached $SPLIT_STAGES stages" >&2; exit 1; }
+[ -n "$MODEL_ID" ] || { echo "the split never reached $SPLIT_STAGES stages in 3 hours" >&2; exit 1; }
 SPANS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '
 import json, sys
 st = (json.load(sys.stdin).get("runtime") or {}).get("stages") or []

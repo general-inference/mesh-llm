@@ -265,6 +265,8 @@ pub(in crate::frontend) struct GenerationCacheStats {
     /// Per-token log-probabilities taken from the session before cleanup,
     /// when the request asked for them.
     pub(in crate::frontend) token_logprobs: Option<Vec<skippy_runtime::TokenLogprobs>>,
+    /// The prompt prefix a split restored on every stage, on its stage 0.
+    pub(in crate::frontend) split_prefix_cache: Option<super::SplitPrefixCacheStats>,
 }
 
 impl Default for GenerationCacheStats {
@@ -284,6 +286,7 @@ impl Default for GenerationCacheStats {
             queue_wait_ms: 0.0,
             restore_ms: 0.0,
             token_logprobs: None,
+            split_prefix_cache: None,
         }
     }
 }

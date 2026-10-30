@@ -2,7 +2,11 @@
 use super::*;
 use anyhow::Context;
 
-type TailGeneration = (Vec<i32>, u32, Option<skippy_runtime::TokenSignal>);
+type TailGeneration = (
+    Vec<i32>,
+    u32,
+    Option<(skippy_runtime::TokenSignal, Vec<usize>)>,
+);
 
 fn generate_chat_tail(backend: &StageOpenAiBackend, prompt: &[i32]) -> Result<(Vec<i32>, u32)> {
     let (tokens, cached, _) = generate_chat_tail_session(backend, prompt, "shortened-tail", false)?;
@@ -45,14 +49,15 @@ fn generate_chat_tail_session(
         },
     )?;
     let final_signal = if capture_final_signal {
-        crate::frontend::iteration_scheduler::token_diagnostics::take(&ids.session_label)
-            .into_iter()
-            .last()
-            .and_then(|(sampled, signal)| {
-                (Some(sampled) == output.last().copied())
-                    .then_some(signal)
-                    .flatten()
-            })
+        let captures =
+            crate::frontend::iteration_scheduler::token_diagnostics::take(&ids.session_label);
+        let batch_sizes = captures.iter().map(|capture| capture.batch_size).collect();
+        captures.last().and_then(|capture| {
+            (Some(capture.token) == output.last().copied())
+                .then_some(capture.signal)
+                .flatten()
+                .map(|signal| (signal, batch_sizes))
+        })
     } else {
         None
     };

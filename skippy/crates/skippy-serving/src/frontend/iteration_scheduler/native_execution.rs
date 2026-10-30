@@ -346,6 +346,7 @@ impl SchedulerWorker {
                 &mut runtime,
                 &last_work.sequence_id,
                 sample.predicted_token,
+                plan.work.len(),
             );
         }
         let completed = runtime.take_completed_execution();

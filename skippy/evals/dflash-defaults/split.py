@@ -66,7 +66,8 @@ def plan(args):
     for arm in args.arms.split(","):
         for delay in [int(d) for d in args.delays.split(",")]:
             cap = f"k{args.dflash_cap}{'f' if args.fixed else ''}" if arm == "dflash" and args.dflash_cap else ""
-            key = f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}{cap}:{delay}" + (f":n{args.limit}" if args.limit else "")
+            key = (f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}{cap}:{delay}" + (f":n{args.limit}" if args.limit else "")
+                   + (f":{args.codec}" if args.codec else "") + (f":{args.mbps}mbps" if args.mbps else ""))
             spec = {
                 "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]}{(' ' + cap) if arm == 'dflash' and args.dflash_cap else ''} · {delay} ms/hop @ {rev[:9]}",
                 "description": f"{matrix['name']} served across {args.stages} machines; single-stream decode on the "
@@ -84,7 +85,8 @@ def plan(args):
                             "SPLIT_CUT": (matrix.get("cuts") or {}).get(str(args.stages), ""),
                             "SPLIT_DRAFT_URL": draft_url(matrix), "SPLIT_DRAFT_SHA256": (matrix.get("draft") or {}).get("sha256", ""),
                             "SPLIT_DFLASH_CAP": str(args.dflash_cap or ""),
-                            "SPLIT_DFLASH_FIXED": "1" if args.fixed else "0", "SPLIT_LIMIT": str(args.limit or "")},
+                            "SPLIT_DFLASH_FIXED": "1" if args.fixed else "0", "SPLIT_LIMIT": str(args.limit or ""),
+                            "SPLIT_CODEC": args.codec or "", "SPLIT_WIRE_MBPS": str(args.mbps or "")},
                     "workspace": {"repos": [{"url": REPO_URL, "rev": rev, "path": "mesh-llm"}],
                                   "build": "bash mesh-llm/skippy/evals/dflash-defaults/build.sh",
                                   "retain": "on_failure"},
@@ -201,6 +203,8 @@ def main():
     parser.add_argument("--out", default="split-bench-out")
     parser.add_argument("--matrix", default="split_matrix.json", help="model and nodes to split across")
     parser.add_argument("--wait", action="store_true", help="retry while the nodes are busy")
+    parser.add_argument("--mbps", type=int, help="simulated per-hop bandwidth limit in Mbps")
+    parser.add_argument("--codec", help="activation wire codec for every arm (lossless, f16, bf16, s8-row, f32)")
     parser.add_argument("--fixed", action="store_true", help="pin dflash blocks at --dflash-cap (adaptive off)")
     parser.add_argument("--limit", type=int, help="measure only this many prompts (profiling)")
     parser.add_argument("--dflash-cap", type=int, help="draft tokens per block for the dflash arm (default: the split default)")

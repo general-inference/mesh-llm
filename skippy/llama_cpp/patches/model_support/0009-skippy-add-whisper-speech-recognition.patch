@@ -238,7 +238,7 @@ index 4da8a4664..f233bb47f 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 664c864fc..5238f17b2 100644
+index 159f30bf3..05cd69286 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -84,6 +84,7 @@ add_library(llama

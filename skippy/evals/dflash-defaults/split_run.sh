@@ -15,6 +15,7 @@
 #   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
 #   SPLIT_LIMIT                measure only this many prompts, for profiling
 #   SPLIT_WIRE_MBPS            simulated per-hop bandwidth limit, empty for none
+#   SPLIT_PREFIX               1 to measure prefix-cache reuse on agent turns instead of decode speed
 #   SPLIT_CODEC                activation wire codec for every arm (skippy.activation_codec), empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
@@ -231,9 +232,15 @@ print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sor
 echo "split serving $MODEL_ID across $SPLIT_STAGES stages: layers $SPANS"
 nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader | sed "s/^/gpu: $SPLIT_ARM /" || true
 
+if [ "${SPLIT_PREFIX:-0}" = 1 ]; then
+  PORT="$API" MODEL_ID="$MODEL_ID" ART="$ART" LIMIT="${SPLIT_LIMIT:-8}" \
+    PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/prefix.py" \
+    || echo "PREFIX_BENCH {\"error\": \"measurement failed\"}"
+else
 ARM="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
+fi
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

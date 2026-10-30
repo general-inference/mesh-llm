@@ -182,6 +182,7 @@ pub(super) fn split_test_peer(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         decode_batch_policy_supported: stage_protocol_generation_supported,
+        activation_codec_fp8_supported: stage_protocol_generation_supported,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

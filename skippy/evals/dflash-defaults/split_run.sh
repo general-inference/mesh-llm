@@ -14,6 +14,7 @@
 #   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
 #   SPLIT_DFLASH_FIXED         1 to pin blocks at the cap (adaptive sizing off), for profiling
 #   SPLIT_LIMIT                measure only this many prompts, for profiling
+#   SPLIT_WIRE_MBPS            simulated per-hop bandwidth limit, empty for none
 #   SPLIT_CODEC                activation wire codec for every arm (skippy.activation_codec), empty for the default
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
@@ -153,6 +154,7 @@ case "${SPLIT_ARM:?}" in
 esac
 [ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
+[ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64
 # layers), which measures a split that barely exists. An explicit cut levels the

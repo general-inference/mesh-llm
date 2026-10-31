@@ -461,15 +461,15 @@ fn planned_default_dflash_draft(
         compact_meta,
     )
     .ok()?;
-    let pairing = resolved.speculative.default_dflash?;
+    let chosen = resolved.speculative.default_dflash.as_ref()?;
     let dflash = resolved.speculative.decode.dflash.as_ref()?;
     // A draft that is not cached yet downloads in the background; this load
     // plans no room for it and serves without it.
-    if !skippy::default_dflash_draft_cached(pairing) {
+    if !skippy::default_dflash_draft_cached(chosen) {
         return None;
     }
     Some(PlannedSpeculativeDraft {
-        weight_bytes: pairing.draft.bytes,
+        weight_bytes: chosen.pairing.draft.bytes,
         recurrent_rollback_tokens: dflash.recurrent_rollback_tokens(),
     })
 }
@@ -1154,6 +1154,8 @@ pub(super) async fn start_local_openai_model(
         planning_profile: spec.planning_profile,
         measured_buffers: measured_buffers_footprint(&measurement_key),
     };
+    // Choose from the published DFlash pairing index once it is cached.
+    crate::inference::skippy::refresh_dflash_pairing_index();
     // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
     let default_dflash_draft = package
         .is_none()

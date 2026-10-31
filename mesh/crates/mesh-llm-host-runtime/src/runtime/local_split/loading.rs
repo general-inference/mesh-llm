@@ -875,6 +875,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         .first()
         .context("split topology did not produce stage 0")?;
     let load_mode = split_generation_load_mode(spec.package);
+    crate::inference::skippy::refresh_dflash_pairing_index();
     let mut resolved = skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
         skippy::SkippyConfigResolveRequest {
             mesh_config: spec.mesh_config,
@@ -892,9 +893,6 @@ pub(super) async fn split_generation_load_settings<'a>(
         spec.config_model_id,
         spec.package.publisher_defaults.as_ref(),
     )?;
-    // A DFlash draft needs the whole target on one node, so a split serves
-    // without the default draft, falling back to native MTP when it has it.
-    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     materialize_split_default_dflash(&mut resolved).await;
     resolved.model_fit.ctx_size = spec.ctx_size;
@@ -934,10 +932,11 @@ pub(super) async fn split_generation_load_settings<'a>(
     // A catalog default travels with its pinned source so the final stage,
     // often another node, fetches and verifies its own copy rather than
     // looking for this node's cache path. A configured draft stays a path.
-    if let (Some(plan), Some(pairing)) =
-        (split_dflash.as_mut(), resolved.speculative.default_dflash)
-    {
-        plan.draft_source = Some(crate::inference::skippy::split_dflash_draft_source(pairing));
+    if let (Some(plan), Some(chosen)) = (
+        split_dflash.as_mut(),
+        resolved.speculative.default_dflash.as_ref(),
+    ) {
+        plan.draft_source = Some(crate::inference::skippy::split_dflash_draft_source(chosen));
     }
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let mut runtime_options = resolved.to_embedded_runtime_options(
@@ -978,10 +977,10 @@ const SPLIT_DFLASH_MAX_DRAFT_TOKENS: usize = 4;
 /// A default DFlash draft serves a split once it is cached, as it does on one
 /// node; until then it downloads in the background.
 async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyConfig) {
-    let Some(pairing) = resolved.speculative.default_dflash else {
+    let Some(chosen) = resolved.speculative.default_dflash.as_ref() else {
         return;
     };
-    if crate::inference::skippy::default_dflash_draft_cached(pairing) {
+    if crate::inference::skippy::default_dflash_draft_cached(chosen) {
         crate::inference::skippy::materialize_default_dflash_draft(resolved).await;
     } else {
         resolved.speculative.drop_default_dflash();
@@ -996,6 +995,7 @@ pub(super) fn split_dflash_final_stage_reserve_bytes(
     config_model_id: Option<&str>,
     package: &skippy::SkippyPackageIdentity,
 ) -> u64 {
+    crate::inference::skippy::refresh_dflash_pairing_index();
     let resolved = match skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
         request,
         config_model_id,
@@ -1008,6 +1008,7 @@ pub(super) fn split_dflash_final_stage_reserve_bytes(
         && resolved
             .speculative
             .default_dflash
+            .as_ref()
             .is_none_or(crate::inference::skippy::default_dflash_draft_cached);
     if !drafts {
         return 0;

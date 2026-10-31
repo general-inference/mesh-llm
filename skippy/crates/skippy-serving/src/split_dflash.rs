@@ -39,9 +39,10 @@ pub struct SplitDFlashStage {
     pub draft_model_path: Option<PathBuf>,
     pub max_draft_tokens: Option<usize>,
     pub draft_n_gpu_layers: Option<i32>,
-    /// Where a catalog default draft comes from, on the final stage only, so
-    /// that stage fetches and verifies its own copy. `None` for a configured
-    /// draft, which the operator places, and from older planners.
+    /// Where a default draft (from the package, the pairing index or the
+    /// bootstrap table) comes from, on the final stage only, so that stage
+    /// fetches and verifies its own copy. `None` for a configured draft, which
+    /// the operator places, and from older planners.
     pub draft_source: Option<SplitDFlashDraftSource>,
 }
 
@@ -52,6 +53,8 @@ pub struct SplitDFlashDraftSource {
     pub revision: String,
     pub file: String,
     pub sha256: String,
+    /// File size; `None` from older planners.
+    pub bytes: Option<u64>,
 }
 
 impl SplitDFlashStage {

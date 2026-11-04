@@ -1120,9 +1120,12 @@ contract, telemetry, and benchmark requirements.
 A DFlash or DFlash2 draft is a small model trained for one target. It reads
 hidden states from several target layers and drafts a whole block in one pass.
 DFlash is opt-in: set `strategy = "dflash"` and point `draft_model` at a GGUF
-whose architecture is `dflash`. Under `strategy = "auto"` a DFlash draft is not
-selected, and speculation stays off for that model. `draft_max_tokens` caps the
-block; the default is the trained block size minus one.
+whose architecture is `dflash`. Under `strategy = "auto"` a DFlash draft named
+as `draft_model` is not used, but the known pinned targets get their default
+DFlash draft with no speculation configuration at all, subject to the same
+backend rules; a default draft is also skipped when the runtime cannot host
+one, such as Windows. `draft_max_tokens` caps the block; the default is the
+trained block size minus one.
 
 ```toml
 [[models]]
@@ -1135,9 +1138,10 @@ draft_model = "/models/Qwen3-4B-DFlash.Q8_0.gguf"
 
 DFlash needs the complete target model on one node. A model that is split
 across nodes serves without the draft, unless `pairing_fault = "fail_closed"`,
-which rejects the load. DFlash drafts only for greedy requests that do not ask
-for logprobs; other requests decode normally. DSpark and LiliCorr drafts and
-Windows runtimes are not supported.
+which rejects the load. DFlash drafts for requests that do not ask for
+logprobs, including sampled (non-greedy) requests, because the block verifier
+samples with the request's own sampler. DSpark and LiliCorr drafts and Windows
+runtimes are not supported.
 
 ### Run-ahead admission
 

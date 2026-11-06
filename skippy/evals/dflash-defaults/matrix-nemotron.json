@@ -63,6 +63,11 @@
       "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/resolve/182d2987939e12f458298b5d5f6ef98912f4ad6c/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf",
       "sha256": "080e1ea41c9562a7804dbf30c6fbd4d17e216c6b8ff666f88e6edb1816010194",
       "bytes": 998242560
+    },
+    "qwen3.5-9b": {
+      "url": "https://huggingface.co/AtomicChat/Qwen3.5-9B-DFlash-GGUF/resolve/c7c69923d77a9aa0004b410d3a7a3dbb64591d41/Qwen3.5-9B-DFlash.Q8_0.gguf",
+      "sha256": "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
+      "bytes": 1383768224
     }
   },
   "models": [
@@ -334,6 +339,28 @@
           "fixed_blocks": [
             6
           ]
+        }
+      }
+    },
+    {
+      "id": "qwen9b-probe",
+      "name": "Qwen3.5-9B (full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "bytes": 5680522464
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.5-9b",
+          "default": true,
+          "node": "spark-000265",
+          "fixed_blocks": [
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Spark only"
         }
       }
     }

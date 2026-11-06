@@ -114,6 +114,11 @@
       "url": "https://huggingface.co/meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF/resolve/5b7d4423fad884ef9a5a451c396b91bbd5f4d050/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-Q8_0.gguf",
       "sha256": "0ca3174767e1ee35c193af9911de49fd2810a630fd7fa8b68fcab3137e72b5cf",
       "bytes": 1036046944
+    },
+    "bolt74-lilicorr-q8": {
+      "url": "https://huggingface.co/meshllm/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-LiLiCorr-GGUF/resolve/d4db003996783d8de474f0fa5d17bd46c4f9e1a6/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-LiLiCorr-Q8_0.gguf",
+      "sha256": "107b7bce132f3a3bed865e11cb4bee67ffb7baf2cc886725f6110f15a614a856",
+      "bytes": 1191059648
     }
   },
   "models": [
@@ -662,6 +667,36 @@
         "M6": {
           "draft": "bolt-q8",
           "default": true
+        }
+      }
+    },
+    {
+      "id": "metal-bolt74-q3-lilicorr-q8",
+      "name": "Nemotron-3.5-Bolt-74B-A9B UD-Q3_K_XL (LiLiCorr Q8_0 draft, no head)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF/resolve/34841e360524d421c564cc3ed247aa04a865473b/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-UD-Q3_K_XL.gguf",
+        "sha256": "51077d511c769efb299073cc7b33d31bb007eb4fdaed60938dc1133146b708e3",
+        "bytes": 39027158016
+      },
+      "env": {
+        "SKIPPY_DFLASH_LILICORR_HEADLESS": "1"
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "skip": "not on this run"
+        },
+        "M1 Ultra": {
+          "draft": "bolt74-lilicorr-q8",
+          "default": false
+        },
+        "M6": {
+          "skip": "not on this run"
         }
       }
     }

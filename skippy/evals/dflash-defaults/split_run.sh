@@ -214,15 +214,31 @@ VRAM_FLAGS=""
 
 if [ "$ROLE" = joiner ] && [ -n "${SPLIT_JOIN_TOKEN:-}" ]; then
   echo "joining the mesh with the handed-over invite"
-  "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
-    --join "$SPLIT_JOIN_TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
-    >"$LOG" 2>&1 &
-  SERVE=$!
+  # The invite names the coordinator's node key, which outlives its runs, so the joiner may
+  # be submitted with a previous run's invite and start before the coordinator is up. Retry
+  # the join until it has a peer, for up to an hour.
+  join() {
+    "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
+      --join "$SPLIT_JOIN_TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
+      >>"$LOG" 2>&1 &
+    SERVE=$!; T_START=$(date +%s)
+  }
+  join
   trap 'grep -E "\"level\":\"error\"" "$LOG" | tail -5 >&2; tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
   # The coordinator is on another LAN, so watch this node's own view of the mesh: once
   # it has had a peer, serve until it has had none for two minutes.
-  SEEN=0; MISSES=0
-  while kill -0 "$SERVE" 2>/dev/null; do
+  SEEN=0; MISSES=0; T_JOIN=$(date +%s)
+  while true; do
+    if ! kill -0 "$SERVE" 2>/dev/null; then
+      [ "$SEEN" = 1 ] && break
+      [ $(( $(date +%s) - T_JOIN )) -gt 3600 ] && { echo "no coordinator within an hour" >&2; exit 1; }
+      echo "join ended before the mesh formed; retrying in 20s"; sleep 20; join; continue
+    fi
+    if [ "$SEEN" = 0 ] && [ $(( $(date +%s) - T_JOIN )) -gt 3600 ]; then echo "no peer within an hour" >&2; exit 1; fi
+    # A join that has found no peer in two minutes may be serving alone; start it again.
+    if [ "$SEEN" = 0 ] && [ $(( $(date +%s) - T_START )) -gt 120 ]; then
+      echo "no peer yet; restarting the join"; kill "$SERVE" 2>/dev/null; wait "$SERVE" 2>/dev/null; sleep 20; join; continue
+    fi
     grep -qE 'model launch failed|Failed to start model' "$LOG" && { echo "the model failed to launch on this joiner" >&2; exit 1; }
     PEERS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null \
       | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("peers") or []))' 2>/dev/null || echo 0)

@@ -363,6 +363,75 @@
           "skip": "Spark only"
         }
       }
+    },
+    {
+      "id": "lightning-dspark-probe-280",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-dspark-probe-499",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000499",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-dflash-probe-280",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DFlash Q8_0 draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-q8",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            15
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
     }
   ]
 }

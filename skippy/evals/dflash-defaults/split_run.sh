@@ -178,12 +178,15 @@ if [ "${SPLIT_ARM:?}" = dflash ]; then
 fi
 
 # One config file carries both the codec and the dflash arm's draft, since a serve takes one.
-ARM_CONFIG="$ART/split-arm.toml"
+# The serve flags are word-split, so the config lives at a path without spaces (a Mac's
+# artifact directory is under "Application Support").
+ARM_CONFIG="$(mktemp -d /tmp/split-arm.XXXXXX)/split-arm.toml"
 : > "$ARM_CONFIG"
 if [ -n "${SPLIT_CODEC:-}" ]; then
   printf '[defaults.skippy]\nactivation_codec = "%s"\n' "$SPLIT_CODEC" >> "$ARM_CONFIG"
 fi
 [ -n "${DFLASH_TOML:-}" ] && cat "$DFLASH_TOML" >> "$ARM_CONFIG"
+cp "$ARM_CONFIG" "$ART/split-arm.toml" 2>/dev/null || true
 
 case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;

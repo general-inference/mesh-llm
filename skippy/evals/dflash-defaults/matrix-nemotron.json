@@ -4,15 +4,33 @@
   "machines": {
     "Spark": {
       "backend": "cuda",
-      "nodes": ["spark-000280", "spark-000499"],
-      "placeholder_package": {"ref": "skippy://smoketest/noop", "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"},
-      "fixed_blocks": [3, 7, 15]
+      "nodes": [
+        "spark-000280",
+        "spark-000499"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        3,
+        7,
+        15
+      ]
     },
     "M4": {
       "backend": "metal",
-      "nodes": ["macmini-qkvx2j"],
-      "placeholder_package": {"ref": "skippy://smoketest/noop", "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"},
-      "fixed_blocks": [4, 6]
+      "nodes": [
+        "macmini-qkvx2j"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        4,
+        6
+      ]
     }
   },
   "drafts": {
@@ -47,8 +65,14 @@
         "bytes": 25266255936
       },
       "machines": {
-        "Spark": {"draft": "lightning-q8", "default": false, "node": "spark-000280"},
-        "M4": {"skip": "Doesn't fit in 16 GB"}
+        "Spark": {
+          "draft": "lightning-q8",
+          "default": false,
+          "node": "spark-000280"
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
       }
     },
     {
@@ -60,8 +84,14 @@
         "bytes": 25266255936
       },
       "machines": {
-        "Spark": {"draft": "lightning-nvfp4", "default": false, "node": "spark-000499"},
-        "M4": {"skip": "Doesn't fit in 16 GB"}
+        "Spark": {
+          "draft": "lightning-nvfp4",
+          "default": false,
+          "node": "spark-000499"
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
       }
     },
     {
@@ -73,8 +103,21 @@
         "bytes": 6180446208
       },
       "machines": {
-        "Spark": {"draft": "bolt-q8", "default": false, "node": "spark-000280", "fixed_blocks": [3, 5, 7]},
-        "M4": {"draft": "bolt-q8", "default": false, "node": "macmini-qkvx2j"}
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            5,
+            7
+          ]
+        },
+        "M4": {
+          "draft": "bolt-q8",
+          "default": false,
+          "node": "macmini-qkvx2j"
+        }
       }
     },
     {
@@ -86,8 +129,42 @@
         "bytes": 6180446208
       },
       "machines": {
-        "Spark": {"draft": "bolt-bf16", "default": false, "node": "spark-000499", "fixed_blocks": [3, 5, 7]},
-        "M4": {"skip": "Q8_0 draft only on the M4"}
+        "Spark": {
+          "draft": "bolt-bf16",
+          "default": false,
+          "node": "spark-000499",
+          "fixed_blocks": [
+            3,
+            5,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Q8_0 draft only on the M4"
+        }
+      }
+    },
+    {
+      "id": "bolt-default",
+      "name": "Nemotron-3.5-Bolt-E4B",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "spark-000280",
+          "fixed_blocks": []
+        },
+        "M4": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "macmini-qkvx2j",
+          "fixed_blocks": []
+        }
       }
     }
   ]

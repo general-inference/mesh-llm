@@ -102,9 +102,21 @@ for attempt in range(60):
         if error.code != 503 or attempt == 59:
             raise
         time.sleep(5)
+def measured(prompt, seed):
+    """One measured request. A single-lane server answers 503 while it is still releasing
+    the previous request's lane, so retry that briefly rather than fail the arm."""
+    for attempt in range(30):
+        try:
+            return once(prompt, seed)
+        except urllib.error.HTTPError as error:
+            if error.code != 503 or attempt == 29:
+                raise
+            time.sleep(2)
+
+
 results = []
 for k, item in enumerate(items):
-    result = once(item["prompt"], 1234 + k)
+    result = measured(item["prompt"], 1234 + k)
     result.update(id=item["id"], category=item.get("category", ""), group=group(item))
     results.append(result)
     if (k + 1) % 20 == 0:

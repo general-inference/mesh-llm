@@ -156,6 +156,9 @@ if [ "${BENCH_AGENT:-0}" != only ]; then
   fi
   MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
   MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
+  if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
+    MEASURE_TEMP=0.7 ARM_ENV= run_arm dflash_t07 --config "$(fixed_config "$DFLASH_CAP")"
+  fi
 fi
 if [ "${BENCH_AGENT:-0}" != 0 ]; then
   # Transcripts reach 48K tokens of history; the server must hold them plus the reply.

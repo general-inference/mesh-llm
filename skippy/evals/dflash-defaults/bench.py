@@ -27,8 +27,11 @@ REPO_URL = "https://github.com/general-inference/mesh-llm.git"
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
+MATRIX = os.environ.get("BENCH_MATRIX", "matrix.json")
+
+
 def load_matrix():
-    return json.loads((HERE / "matrix.json").read_text())
+    return json.loads((HERE / MATRIX).read_text())
 
 
 def git_rev(rev):
@@ -51,7 +54,7 @@ def plan(args):
                 continue
             machine = matrix["machines"][label]
             # Spread a machine kind's jobs over its nodes so they run in parallel.
-            node = args.node or machine["nodes"][next_node[label] % len(machine["nodes"])]
+            node = args.node or entry.get("node") or machine["nodes"][next_node[label] % len(machine["nodes"])]
             next_node[label] += 1
             draft = matrix["drafts"][entry["draft"]]
             env = {
@@ -66,7 +69,7 @@ def plan(args):
                 "BENCH_DRAFT_BYTES": str(draft["bytes"]),
                 "BENCH_DRAFT_FILE": draft["url"].rsplit("/", 1)[1],
                 "BENCH_DEFAULT_DRAFT_FILE": draft["url"].rsplit("/", 1)[1] if entry["default"] else "",
-                "BENCH_FIXED_BLOCKS": " ".join(str(k) for k in machine["fixed_blocks"]),
+                "BENCH_FIXED_BLOCKS": " ".join(str(k) for k in entry.get("fixed_blocks", machine["fixed_blocks"])),
                 "BENCH_AGENT": "only" if args.agent_only else "1" if matrix.get("agent_transcripts") else "0",
             }
             spec = {"spec": {
@@ -82,7 +85,7 @@ def plan(args):
                 "labels": {"suite": "dflash-defaults", "model": model["id"], "machine": label, "rev": rev[:9]},
                 "runtime": {
                     # jy requires a registered package; jobs fetch and verify their own weights.
-                    "model_package": {"ref": machine["placeholder_package"], "egress": "lab_only"},
+                    "model_package": placeholder(machine["placeholder_package"]),
                     "models": [],
                     "workspace": {"repos": [{"url": REPO_URL, "rev": rev, "path": "mesh-llm"}],
                                   "build": "bash mesh-llm/skippy/evals/dflash-defaults/build.sh",
@@ -100,6 +103,13 @@ def plan(args):
             json.dumps(job["spec"], indent=1))
         print(f"{job['key']:32s} -> {job['node']}")
     return rev, jobs
+
+
+def placeholder(package):
+    """A placeholder package: a registry ref, or a {ref, sha256} object such as the noop package."""
+    if isinstance(package, dict):
+        return {"egress": "lab_only", **package}
+    return {"ref": package, "egress": "lab_only"}
 
 
 def state_path(args):

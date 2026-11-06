@@ -72,6 +72,7 @@ def plan(args):
                 "BENCH_FIXED_BLOCKS": " ".join(str(k) for k in entry.get("fixed_blocks", machine["fixed_blocks"])),
                 "BENCH_AGENT": "only" if args.agent_only else "1" if matrix.get("agent_transcripts") else "0",
             }
+            env.update(model.get("env", {}))
             spec = {"spec": {
                 "name": f"DFlash defaults · {model['name']} · {label} · {node} @ {rev[:9]}",
                 "description": "Decode tok/s with speculation off, the shipped default and fixed DFlash blocks, "

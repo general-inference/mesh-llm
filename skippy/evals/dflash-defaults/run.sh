@@ -48,8 +48,22 @@ sha_ok() { # sha256 path
   [ "$got" = "$1" ]
 }
 size_of() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo 0; }
+# A copy staged on the lab's model store (BENCH_NAS_ROOT, laid out <org>/<repo>/<rev>/<file>
+# like the Hugging Face URL) is copied to local disk and checked again before use. A copy
+# that fails the check is reported and ignored, and the file is downloaded instead.
+from_nas() { # url sha256 path
+  local root="${BENCH_NAS_ROOT:-/mnt/model-store/gi-models}" rel staged
+  rel=$(printf '%s' "$1" | sed -n 's#^https://huggingface.co/\(.*\)/resolve/\([^/]*\)/\(.*\)$#\1/\2/\3#p')
+  staged="$root/$rel"
+  [ -n "$rel" ] && [ -f "$staged" ] || return 1
+  cp "$staged" "$3.nas" || { rm -f "$3.nas"; return 1; }
+  if sha_ok "$2" "$3.nas"; then mv "$3.nas" "$3"; echo "copied from the model store: $staged"; return 0; fi
+  echo "NAS-CORRUPT: $staged failed its checksum; downloading instead" >&2
+  rm -f "$3.nas"; return 1
+}
 fetch() { # url sha256 bytes path
   local url="$1" sha="$2" bytes="$3" path="$4"
+  sha_ok "$sha" "$path" || from_nas "$url" "$sha" "$path" || true
   # A resumed download keeps whatever corrupt prefix it resumed from, so a file that
   # fails the check is fetched again from scratch, twice at most.
   for attempt in 1 2 3; do

@@ -7,8 +7,11 @@
 #   JIANYANG_LEADER_HOST       the coordinator's LAN address (formation rendezvous)
 #   SPLIT_REPO / SPLIT_REV     the layer package on Hugging Face, or
 #   SPLIT_GGUF / _SHA256       a single GGUF already on every member, relative to $HOME
+#   SPLIT_GGUF_URL             where to download SPLIT_GGUF from when a member lacks a verified copy
 #   SPLIT_STAGES               how many machines the split must span before measuring
-#   SPLIT_ARM                  off | default | ngram | dflash (speculation for this formation)
+#   SPLIT_ARM                  off | default | ngram | dflash | mtp (speculation for this formation)
+#   SPLIT_WORKLOADS            comma list of chat (spec-prompts) and agent (coding-agent transcripts);
+#                              default chat. Agent turns need SPLIT_CTX of 65536.
 #   SPLIT_DRAFT_URL / _SHA256  the DFlash draft the dflash arm serves explicitly; every member
 #                              holds it at the same path, since the final stage loads it
 #   SPLIT_DFLASH_CAP           draft tokens per block for the dflash arm, empty for the default
@@ -22,6 +25,13 @@
 #   SPLIT_WIRE_DELAY_MS        injected per-hop delay, 0 for the plain LAN
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
+#   SPLIT_JOIN_TOKEN           joiner only: the mesh invite, handed over by whoever submitted the
+#                              jobs, for members on different LANs that cannot reach each other's
+#                              console. The joiner then serves until its mesh has no peers left.
+#   SPLIT_PUBLISH_INVITE       coordinator only: 1 to print the invite as SPLIT_INVITE for that hand-over
+#   SPLIT_MAX_VRAM             cap this member's advertised memory (GB). The mesh makes the member
+#                              with the most memory stage 0, so capping the others puts stage 0
+#                              (and the client) where the coordinator runs.
 #   SPLIT_CUT                  layer boundaries for an even cut, e.g. "32" or "16,32,48"
 set -uo pipefail
 
@@ -104,9 +114,19 @@ PY
 if [ -n "${SPLIT_GGUF:-}" ]; then
   # A whole GGUF each member already holds: check it, and skip package staging.
   MODEL_FILE="$HOME/$SPLIT_GGUF"
-  if command -v sha256sum >/dev/null 2>&1; then
-    echo "${SPLIT_GGUF_SHA256:?}  $MODEL_FILE" | sha256sum -c --quiet || { echo "$MODEL_FILE failed verification" >&2; exit 1; }
+  gguf_ok() { [ -f "$MODEL_FILE" ] && echo "${SPLIT_GGUF_SHA256:?}  $MODEL_FILE" | sha256sum -c --quiet; }
+  if ! gguf_ok && [ -n "${SPLIT_GGUF_URL:-}" ]; then
+    # A member without the GGUF (another site has no shared model store) downloads
+    # its own copy to local disk from the pinned revision.
+    mkdir -p "$(dirname "$MODEL_FILE")"
+    for _ in 1 2 3; do
+      T0=$(date +%s)
+      rm -f "$MODEL_FILE.part"
+      curl -fsSL --retry 10 -o "$MODEL_FILE.part" "$SPLIT_GGUF_URL" && mv "$MODEL_FILE.part" "$MODEL_FILE"
+      gguf_ok && { echo "downloaded $SPLIT_GGUF in $(( $(date +%s) - T0 ))s"; break; }
+    done
   fi
+  gguf_ok || { echo "$MODEL_FILE failed verification" >&2; exit 1; }
   echo "serving the verified GGUF $MODEL_FILE"
 elif [ ! -f "$LOCAL/.verified" ]; then
   T0=$(date +%s)
@@ -159,6 +179,7 @@ case "${SPLIT_ARM:?}" in
   ngram) ARM_FLAGS="--speculative-strategy ngram-suffix" ;;
   # Every member gets the config: the mesh, not jy, elects which node plans the split.
   dflash) ARM_FLAGS="" ;;
+  mtp) ARM_FLAGS="--speculative-strategy mtp" ;;
   *) echo "unknown arm $SPLIT_ARM" >&2; exit 1 ;;
 esac
 [ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
@@ -188,6 +209,36 @@ fi
 [ "${SPLIT_ALLOW_UNCERTIFIED:-0}" = 1 ] && SPLIT_FLAGS="$SPLIT_FLAGS --allow-uncertified-split"
 LOG="$ART/$ROLE.log"
 
+VRAM_FLAGS=""
+[ -n "${SPLIT_MAX_VRAM:-}" ] && VRAM_FLAGS="--max-vram $SPLIT_MAX_VRAM"
+
+if [ "$ROLE" = joiner ] && [ -n "${SPLIT_JOIN_TOKEN:-}" ]; then
+  echo "joining the mesh with the handed-over invite"
+  "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
+    --join "$SPLIT_JOIN_TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
+    >"$LOG" 2>&1 &
+  SERVE=$!
+  trap 'grep -E "\"level\":\"error\"" "$LOG" | tail -5 >&2; tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
+  # The coordinator is on another LAN, so watch this node's own view of the mesh: once
+  # it has had a peer, serve until it has had none for two minutes.
+  SEEN=0; MISSES=0
+  while kill -0 "$SERVE" 2>/dev/null; do
+    grep -qE 'model launch failed|Failed to start model' "$LOG" && { echo "the model failed to launch on this joiner" >&2; exit 1; }
+    PEERS=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null \
+      | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("peers") or []))' 2>/dev/null || echo 0)
+    if [ "$PEERS" -gt 0 ]; then
+      [ "$SEEN" = 0 ] && { echo "joined: $PEERS peer(s)"; curl -sf -m 10 "http://127.0.0.1:$CONSOLE/api/diagnostics/network" > "$ART/network-joiner.json" 2>/dev/null || true; }
+      SEEN=1; MISSES=0
+    elif [ "$SEEN" = 1 ]; then
+      MISSES=$((MISSES + 1)); [ "$MISSES" -ge 12 ] && break
+    fi
+    sleep 10
+  done
+  curl -sf -m 10 "http://127.0.0.1:$CONSOLE/api/diagnostics/network" > "$ART/network-joiner-end.json" 2>/dev/null || true
+  echo "joiner finished"
+  exit 0
+fi
+
 if [ "$ROLE" = joiner ]; then
   LEAD="${JIANYANG_LEADER_HOST:?no leader host in the formation env}"
   TOKEN=""
@@ -199,7 +250,7 @@ if [ "$ROLE" = joiner ]; then
   done
   [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 30m" >&2; exit 1; }
   echo "joining the mesh at $LEAD"
-  "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
+  "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
     --join "$TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
     >"$LOG" 2>&1 &
   SERVE=$!
@@ -218,12 +269,22 @@ if [ "$ROLE" = joiner ]; then
   exit 0
 fi
 
-"$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
+"$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
   --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7842 >"$LOG" 2>&1 &
 SERVE=$!
 # Only kill what was started: `kill 0` would signal this whole process group, the
 # script included, and turn a finished run into a failed job.
 trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" ${PKG_SERVER:+"$PKG_SERVER"} 2>/dev/null || true' EXIT
+
+if [ "${SPLIT_PUBLISH_INVITE:-0}" = 1 ]; then
+  for _ in $(seq 1 120); do
+    INVITE=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
+    [ -n "$INVITE" ] && { echo "SPLIT_INVITE $INVITE"; break; }
+    kill -0 "$SERVE" 2>/dev/null || break
+    sleep 5
+  done
+fi
 
 MODEL_ID=""
 # Joiners copy the package from this node first; a first copy of a ~190 GB package to
@@ -252,15 +313,39 @@ print(" ".join("%s-%s" % (s.get("layer_start"), s.get("layer_end")) for s in sor
 echo "split serving $MODEL_ID across $SPLIT_STAGES stages: layers $SPANS"
 nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader | sed "s/^/gpu: $SPLIT_ARM /" || true
 
+# The path iroh picked to every peer (direct or relay, with RTT), so a WAN result says
+# what it ran over.
+net_paths() {
+  curl -sf -m 10 "http://127.0.0.1:$CONSOLE/api/diagnostics/network" > "$ART/network-$1.json" 2>/dev/null || true
+  python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+peers = [{"peer": p.get("short_node_id"), "path": p.get("path"), "rtt_ms": p.get("rtt_ms")} for p in d.get("peers") or []]
+adv = d.get("advertisement") or {}
+print("SPLIT_NET " + json.dumps({"when": sys.argv[2], "peers": peers, "verdict": adv.get("verdict"),
+      "public_candidates": [c.get("addr") for c in adv.get("public_candidates") or []]}))' "$ART/network-$1.json" "$1" 2>/dev/null \
+    || echo "SPLIT_NET {\"when\": \"$1\", \"error\": \"no diagnostics\"}"
+}
+net_paths before
+ARM_LABEL="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}"
 if [ "${SPLIT_PREFIX:-0}" = 1 ]; then
   PORT="$API" MODEL_ID="$MODEL_ID" ART="$ART" LIMIT="${SPLIT_LIMIT:-8}" \
     PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/prefix.py" \
     || echo "PREFIX_BENCH {\"error\": \"measurement failed\"}"
-else
-ARM="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
-  PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
-  || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
 fi
+for WORKLOAD in $(echo "${SPLIT_WORKLOADS:-chat}" | tr , ' '); do
+  [ "${SPLIT_PREFIX:-0}" = 1 ] && [ -z "${SPLIT_WORKLOADS:-}" ] && break
+  case "$WORKLOAD" in
+    chat) ARM="$ARM_LABEL" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
+            PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
+            || echo "DFLASH_BENCH {\"arm\": \"$ARM_LABEL\", \"error\": \"measurement failed\"}" ;;
+    agent) ARM="agent_$ARM_LABEL" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=all \
+            PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/measure.py" \
+            || echo "DFLASH_BENCH {\"arm\": \"agent_$ARM_LABEL\", \"error\": \"measurement failed\"}" ;;
+    *) echo "unknown workload $WORKLOAD" >&2 ;;
+  esac
+done
+net_paths after
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

@@ -5,8 +5,7 @@
   "Spark": {
    "backend": "cuda",
    "nodes": [
-    "spark-000586",
-    "spark-001272"
+    "spark-000280"
    ],
    "placeholder_package": {
     "ref": "skippy://smoketest/noop",
@@ -66,7 +65,7 @@
     "Spark": {
      "draft": "s-q8",
      "default": false,
-     "node": "spark-001272"
+     "node": "spark-000280"
     },
     "M3 Ultra": {
      "skip": "Spark repeat"
@@ -88,7 +87,7 @@
     "Spark": {
      "draft": "s-bf16",
      "default": false,
-     "node": "spark-001272"
+     "node": "spark-000280"
     },
     "M3 Ultra": {
      "skip": "Spark repeat"

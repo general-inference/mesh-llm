@@ -22,6 +22,9 @@ URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
 
 items = [json.loads(line) for line in open(os.environ["PROMPTS"]) if line.strip()]
 items = [item for item in items if SPLIT == "all" or item["split"] == SPLIT]
+# A memory-capped context holds only the shorter histories (MAX_EST_TOKENS).
+if os.environ.get("MAX_EST_TOKENS"):
+    items = [item for item in items if item.get("est_tokens", 0) <= int(os.environ["MAX_EST_TOKENS"])]
 
 
 def group(item):

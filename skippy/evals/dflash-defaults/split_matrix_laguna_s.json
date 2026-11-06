@@ -1,0 +1,21 @@
+{
+ "id": "laguna-s-sparks",
+ "name": "Laguna-S-2.1 Q4_K_M",
+ "gguf": ".cache/dflash-bench-models/laguna-s-2.1-Q4_K_M.gguf",
+ "gguf_sha256": "a8b55c75714ea73fd90ec85de5defdc0b8d88ca0ad2108343cdd8fc22f7583e4",
+ "nodes": [
+  "spark-001272",
+  "spark-000945"
+ ],
+ "lanes": 1,
+ "ctx": 8192,
+ "cuts": {
+  "2": "24"
+ },
+ "draft": {
+  "repo": "wimmmm/poolside-Laguna-S-2.1-DFlash-GGUF",
+  "revision": "5788bc865e0d2726267ead1bc15ce64c5253b7dc",
+  "file": "laguna-s-2.1-dflash-Q8_0.gguf",
+  "sha256": "d4e698ad542a66a961a7194f858193708db32546c5786de2bc5ed6addabc9075"
+ }
+}

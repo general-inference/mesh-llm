@@ -67,9 +67,9 @@ def plan(args):
         for delay in [int(d) for d in args.delays.split(",")]:
             cap = f"k{args.dflash_cap}{'f' if args.fixed else ''}" if arm == "dflash" and args.dflash_cap else ""
             key = (f"split:{matrix['id']}:{rev[:12]}:{args.stages}:{arm}{cap}:{delay}" + (f":n{args.limit}" if args.limit else "")
-                   + (f":{args.codec}" if args.codec else "") + (f":{args.mbps}mbps" if args.mbps else "") + (":prefix" if args.prefix else ""))
+                   + (f":{args.codec}" if args.codec else "") + (f":{args.mbps}mbps" if args.mbps else "") + (":prefix" if args.prefix else "") + (":agent" if args.agent else ""))
             spec = {
-                "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]}{(' ' + cap) if arm == 'dflash' and args.dflash_cap else ''} · {delay} ms/hop @ {rev[:9]}",
+                "name": f"Split ×{args.stages} · {matrix['name']} · {ARM_NAMES[arm]}{' · agent' if args.agent else ''}{(' ' + cap) if arm == 'dflash' and args.dflash_cap else ''} · {delay} ms/hop @ {rev[:9]}",
                 "description": f"{matrix['name']} served across {args.stages} machines; single-stream decode on the "
                                f"held-out spec-prompts split with {ARM_NAMES[arm]} and {delay} ms injected per hop.",
                 "priority": 20,
@@ -88,6 +88,9 @@ def plan(args):
                             "SPLIT_DFLASH_FIXED": "1" if args.fixed else "0", "SPLIT_LIMIT": str(args.limit or ""),
                             "SPLIT_CODEC": args.codec or "", "SPLIT_WIRE_MBPS": str(args.mbps or ""),
                             "SPLIT_PREFIX": "1" if args.prefix else "0",
+                            "SPLIT_AGENT": "1" if args.agent else "0",
+                            # Matrix-wide settings, such as a context cap or a required wired limit.
+                            **{k: str(v) for k, v in (matrix.get("env") or {}).items()},
                             "SPLIT_LOCK": json.dumps((matrix.get("locks") or {}).get(str(args.stages), "")) if (matrix.get("locks") or {}).get(str(args.stages)) else ""},
                     "workspace": {"repos": [{"url": REPO_URL, "rev": rev, "path": "mesh-llm"}],
                                   "build": "bash mesh-llm/skippy/evals/dflash-defaults/build.sh",
@@ -169,6 +172,10 @@ def coordinator_result(formation_id):
     return result, layout
 
 
+def matrix_label(args):
+    return json.loads((HERE / args.matrix).read_text()).get("machine_label", "Sparks")
+
+
 def table(args):
     state = json.loads((Path(args.out) / "split-state.json").read_text())
     cells, layouts = {}, {}
@@ -187,7 +194,7 @@ def table(args):
         best = max(((v, a) for a, v in row.items() if v and a != "off"), default=(None, None))
         gain = f"{best[0] / off:.2f}× ({ARM_NAMES[best[1]]})" if best[0] and off else "—"
         network = "LAN" if delay == 0 else f"+{delay} ms/hop"
-        lines.append(f"| {stages} Sparks | {layouts.get(stages, '—')} | {network} | "
+        lines.append(f"| {stages} {matrix_label(args)} | {layouts.get(stages, '—')} | {network} | "
                      + " | ".join("—" if row[a] is None else f"{row[a]:.1f}" for a in arms) + f" | {gain} |")
     text = "\n".join(lines) + "\n"
     (Path(args.out) / "split-table.md").write_text(text)
@@ -206,6 +213,7 @@ def main():
     parser.add_argument("--matrix", default="split_matrix.json", help="model and nodes to split across")
     parser.add_argument("--wait", action="store_true", help="retry while the nodes are busy")
     parser.add_argument("--prefix", action="store_true", help="measure prefix-cache reuse on agent turns")
+    parser.add_argument("--agent", action="store_true", help="measure decode on the coding-agent transcripts")
     parser.add_argument("--mbps", type=int, help="simulated per-hop bandwidth limit in Mbps")
     parser.add_argument("--codec", help="activation wire codec for every arm (lossless, f16, bf16, s8-row, f32)")
     parser.add_argument("--fixed", action="store_true", help="pin dflash blocks at --dflash-cap (adaptive off)")

@@ -23,10 +23,43 @@
 #   SPLIT_LANES / SPLIT_CTX    parallel lanes and context per lane
 #   SPLIT_ALLOW_UNCERTIFIED    1 to serve an architecture CI has not certified for splits
 #   SPLIT_CUT                  layer boundaries for an even cut, e.g. "32" or "16,32,48"
+#   SPLIT_AGENT                1 to measure the coding-agent transcripts instead of chat prompts
+#   SPLIT_MAX_EST_TOKENS       with SPLIT_AGENT, only transcripts up to this many estimated tokens
+#   SPLIT_REQUIRE_WIRED_MB     on macOS, fail unless iogpu.wired_limit_mb is at least this
 set -uo pipefail
 
 cd mesh-llm
 HERE="$PWD/skippy/evals/dflash-defaults"
+if [ -n "${SPLIT_REQUIRE_WIRED_MB:-}" ] && [ "$(uname -s)" = Darwin ]; then
+  # A raised Metal wired limit is a runtime sysctl; a reboot puts it back to 0 (about 2/3 of RAM).
+  WIRED=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
+  if [ "${WIRED:-0}" -lt "$SPLIT_REQUIRE_WIRED_MB" ]; then
+    echo "iogpu.wired_limit_mb is ${WIRED:-0} on $(hostname), below the $SPLIT_REQUIRE_WIRED_MB this split needs; ask for it to be raised again" >&2
+    exit 1
+  fi
+  echo "iogpu.wired_limit_mb = $WIRED"
+fi
+# Peak memory of this member's serve, for the per-stage report: the native buffer sizes
+# llama.cpp logs, and the process's physical footprint sampled every 15 s.
+memory_report() {
+  grep -oE '(MTL0|CUDA0|CPU|Metal)[_A-Za-z ]*(model|KV|compute|output|draft)[a-z ]*buffer size *= *[0-9.]+ MiB' "$LOG" 2>/dev/null \
+    | sort | uniq -c | sed "s/^/memory: $ROLE /" || true
+  [ -f "$ART/footprint-peak.txt" ] && echo "memory: $ROLE peak footprint $(cat "$ART/footprint-peak.txt") MB"
+  [ "$(uname -s)" = Darwin ] && vm_stat | head -8 | sed "s/^/memory: $ROLE /"
+  return 0
+}
+sample_footprint() { # pid
+  local peak=0 mb
+  while kill -0 "$1" 2>/dev/null; do
+    if [ "$(uname -s)" = Darwin ]; then
+      mb=$(footprint -p "$1" 2>/dev/null | awk '/phys_footprint:/ {v=$2; u=$3; if (u ~ /GB/) v*=1024; if (u ~ /KB/) v/=1024; print int(v); exit}')
+    else
+      mb=$(( $(ps -o rss= -p "$1" 2>/dev/null || echo 0) / 1024 ))
+    fi
+    [ -n "$mb" ] && [ "$mb" -gt "$peak" ] && { peak=$mb; echo "$peak" > "$ART/footprint-peak.txt"; }
+    sleep 15
+  done
+}
 ART="${JIANYANG_ARTIFACT_DIR:?}"
 ROLE="${JIANYANG_ROLE:?}"
 API=9447
@@ -202,7 +235,8 @@ if [ "$ROLE" = joiner ]; then
     --join "$TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \
     >"$LOG" 2>&1 &
   SERVE=$!
-  trap 'grep -E "\"level\":\"error\"" "$LOG" | tail -5 >&2; tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
+  sample_footprint "$SERVE" &
+  trap 'memory_report; grep -E "\"level\":\"error\"" "$LOG" | tail -5 >&2; tail -60 "$LOG" >&2; kill "$SERVE" 2>/dev/null || true' EXIT
   # Serve until the coordinator goes away: it owns the measurement and the end of the run.
   MISSES=0
   while kill -0 "$SERVE" 2>/dev/null; do
@@ -220,6 +254,7 @@ fi
 "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS --listen-all \
   --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7842 >"$LOG" 2>&1 &
 SERVE=$!
+sample_footprint "$SERVE" &
 # Only kill what was started: `kill 0` would signal this whole process group, the
 # script included, and turn a finished run into a failed job.
 trap 'rc=$?; [ $rc -ne 0 ] && tail -120 "$LOG" >&2; kill "$SERVE" ${PKG_SERVER:+"$PKG_SERVER"} 2>/dev/null || true' EXIT
@@ -255,11 +290,17 @@ if [ "${SPLIT_PREFIX:-0}" = 1 ]; then
   PORT="$API" MODEL_ID="$MODEL_ID" ART="$ART" LIMIT="${SPLIT_LIMIT:-8}" \
     PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/prefix.py" \
     || echo "PREFIX_BENCH {\"error\": \"measurement failed\"}"
+elif [ "${SPLIT_AGENT:-0}" = 1 ]; then
+ARM="agent_$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=all \
+  MAX_EST_TOKENS="${SPLIT_MAX_EST_TOKENS:-}" PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" \
+  python3 "$HERE/measure.py" \
+  || echo "DFLASH_BENCH {\"arm\": \"agent_$SPLIT_ARM\", \"error\": \"measurement failed\"}"
 else
 ARM="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
   PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
   || echo "DFLASH_BENCH {\"arm\": \"$SPLIT_ARM\", \"error\": \"measurement failed\"}"
 fi
+memory_report
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

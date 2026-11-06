@@ -1,0 +1,114 @@
+{
+ "prompt_split": "report",
+ "agent_transcripts": true,
+ "machines": {
+  "Spark": {
+   "backend": "cuda",
+   "nodes": [
+    "spark-000586",
+    "spark-001272"
+   ],
+   "placeholder_package": {
+    "ref": "skippy://smoketest/noop",
+    "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+   },
+   "fixed_blocks": [
+    3,
+    7,
+    15
+   ]
+  },
+  "M3 Ultra": {
+   "backend": "metal",
+   "nodes": [
+    "macstudio-4f19n3"
+   ],
+   "placeholder_package": {
+    "ref": "skippy://smoketest/noop",
+    "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+   },
+   "fixed_blocks": [
+    4,
+    6
+   ]
+  }
+ },
+ "drafts": {
+  "xs-q8": {
+   "url": "https://huggingface.co/meshllm/Laguna-XS-2.1-DFlash-GGUF/resolve/7197343f8f8b29c3a50b72647ca4606edcfc70f1/Laguna-XS-2.1-DFlash-Q8_0.gguf",
+   "sha256": "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8",
+   "bytes": 494735360
+  },
+  "s-bf16": {
+   "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-DFlash-BF16.gguf",
+   "sha256": "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4",
+   "bytes": 2233764224
+  },
+  "s-q8": {
+   "url": "https://huggingface.co/wimmmm/poolside-Laguna-S-2.1-DFlash-GGUF/resolve/5788bc865e0d2726267ead1bc15ce64c5253b7dc/laguna-s-2.1-dflash-Q8_0.gguf",
+   "sha256": "d4e698ad542a66a961a7194f858193708db32546c5786de2bc5ed6addabc9075",
+   "bytes": 1188531360
+  }
+ },
+ "models": [
+  {
+   "id": "laguna-xs",
+   "name": "Laguna-XS-2.1 Q4_K_M (Q8_0 draft)",
+   "target": {
+    "url": "https://huggingface.co/poolside/Laguna-XS-2.1-GGUF/resolve/1a37c0a5fb8c7a18e6106decb6be6327d1b63fa6/Laguna-XS-2.1-Q4_K_M.gguf",
+    "sha256": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb",
+    "bytes": 20274300032
+   },
+   "machines": {
+    "Spark": {
+     "draft": "xs-q8",
+     "default": false,
+     "node": "spark-000586"
+    },
+    "M3 Ultra": {
+     "draft": "xs-q8",
+     "default": false
+    }
+   }
+  },
+  {
+   "id": "laguna-s-q8",
+   "name": "Laguna-S-2.1 Q4_K_M (Q8_0 draft)",
+   "target": {
+    "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-Q4_K_M.gguf",
+    "sha256": "a8b55c75714ea73fd90ec85de5defdc0b8d88ca0ad2108343cdd8fc22f7583e4",
+    "bytes": 96031829760
+   },
+   "machines": {
+    "Spark": {
+     "draft": "s-q8",
+     "default": false,
+     "node": "spark-001272"
+    },
+    "M3 Ultra": {
+     "draft": "s-q8",
+     "default": false
+    }
+   }
+  },
+  {
+   "id": "laguna-s-bf16",
+   "name": "Laguna-S-2.1 Q4_K_M (Poolside BF16 draft)",
+   "target": {
+    "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-Q4_K_M.gguf",
+    "sha256": "a8b55c75714ea73fd90ec85de5defdc0b8d88ca0ad2108343cdd8fc22f7583e4",
+    "bytes": 96031829760
+   },
+   "machines": {
+    "Spark": {
+     "draft": "s-bf16",
+     "default": false,
+     "node": "spark-001272"
+    },
+    "M3 Ultra": {
+     "skip": "Q8_0 draft measured instead"
+    }
+   }
+  }
+ ]
+}

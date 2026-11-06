@@ -30,8 +30,7 @@ pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
 /// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
 pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
 /// The one index commit this release trusts.
-pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
-    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
+pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> = None;
 
 /// A pairing index file pinned to one commit of a Hugging Face repo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,8 +275,56 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::Metal,
         },
+        // Laguna-XS-2.1 (Poolside, 33B MoE with 3B active). Poolside's draft,
+        // converted to Q8_0, reads target layers 2, 14, 26, 34 and 40 (the last
+        // layer's output) through the Laguna decoder contract. Verifying a block
+        // touches many of the 256 experts, so short blocks win.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 40,
+                embedding_length: 2048,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "meshllm/Laguna-XS-2.1-DFlash-GGUF".to_string(),
+                revision: "7197343f8f8b29c3a50b72647ca4606edcfc70f1".to_string(),
+                file: "Laguna-XS-2.1-DFlash-Q8_0.gguf".to_string(),
+                sha256: "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8"
+                    .to_string(),
+                bytes: 494_735_360,
+            },
+            max_draft_tokens: LAGUNA_XS_CAP,
+            backends: DFlashBackends::NotMetal,
+        },
+        // Laguna-S-2.1 (Poolside, 118B MoE with 8B active). The draft reads
+        // target layers 2, 11, 20, 30, 39 and 48 (the last layer's output).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 48,
+                embedding_length: 3072,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "poolside/Laguna-S-2.1-GGUF".to_string(),
+                revision: "19036076775e9ba6758595f78af99cb976ef8ff0".to_string(),
+                file: "laguna-s-2.1-DFlash-BF16.gguf".to_string(),
+                sha256: "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4"
+                    .to_string(),
+                bytes: 2_233_764_224,
+            },
+            max_draft_tokens: LAGUNA_S_CAP,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
+
+// Provisional caps, set from the benchmark.
+const LAGUNA_XS_CAP: u32 = 3;
+const LAGUNA_S_CAP: u32 = 15;
 
 /// The known pairing for the target `meta` describes on this backend.
 pub(super) fn pairing_for_target(meta: &GgufCompactMeta, metal: bool) -> Option<DefaultDFlash> {

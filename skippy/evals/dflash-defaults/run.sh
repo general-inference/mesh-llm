@@ -15,6 +15,9 @@
 #   BENCH_SPLIT                spec-prompts split (default: report)
 #   (when the default does not serve the draft, a "dflash" arm runs it with adaptive blocks)
 #   BENCH_AGENT                1 to add the agent-transcript arms, only to run just them
+#   BENCH_ADAPTIVE_CAPS        extra adaptive-block caps to measure greedy, e.g. "3 5 7"
+#   BENCH_AGENT_CAPS           extra adaptive-block caps to measure on the transcripts
+#   BENCH_AGENT_CAP            cap for the agent_dflash and dflash arms instead of the largest fixed block
 set -euo pipefail
 
 cd mesh-llm
@@ -165,9 +168,13 @@ if [ "${BENCH_AGENT:-0}" != only ]; then
   # When the default serves something other than this draft (native MTP, or nothing),
   # measure the draft as it would ship: adaptive blocks up to the largest fixed one.
   if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
-    DFLASH_CAP=$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)
+    DFLASH_CAP=${BENCH_AGENT_CAP:-$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)}
     ARM_ENV= run_arm dflash --config "$(fixed_config "$DFLASH_CAP")"
   fi
+  # Extra adaptive caps to compare (BENCH_ADAPTIVE_CAPS, e.g. "3 5 7"), as arms dflash_k<cap>.
+  for k in ${BENCH_ADAPTIVE_CAPS:-}; do
+    [ -n "$DRAFT" ] && ARM_ENV= run_arm "dflash_k$k" --config "$(fixed_config "$k")"
+  done
   MEASURE_TEMP=0.7 ARM_ENV= run_arm off_t07 --no-draft --speculative-strategy disabled
   MEASURE_TEMP=0.7 ARM_ENV= run_arm default_t07
   if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
@@ -179,8 +186,12 @@ if [ "${BENCH_AGENT:-0}" != 0 ]; then
   PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" SPLIT=all CTX=65536
   ARM_ENV= run_arm agent_off --no-draft --speculative-strategy disabled
   ARM_ENV= run_arm agent_default
+  # Extra adaptive caps on the transcripts (BENCH_AGENT_CAPS), as arms agent_dflash_k<cap>.
+  for k in ${BENCH_AGENT_CAPS:-}; do
+    [ -n "$DRAFT" ] && ARM_ENV= run_arm "agent_dflash_k$k" --config "$(fixed_config "$k")"
+  done
   if [ -n "$DRAFT" ] && [ -z "${BENCH_DEFAULT_DRAFT_FILE:-}" ]; then
-    DFLASH_CAP=$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)
+    DFLASH_CAP=${BENCH_AGENT_CAP:-$(echo ${BENCH_FIXED_BLOCKS:-7} | tr ' ' '\n' | sort -n | tail -1)}
     ARM_ENV= run_arm agent_dflash --config "$(fixed_config "$DFLASH_CAP")"
   fi
 fi

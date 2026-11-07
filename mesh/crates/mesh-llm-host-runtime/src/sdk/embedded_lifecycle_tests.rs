@@ -31,6 +31,15 @@ fn stop_during_join_releases_runtime_and_restarts() {
 
 #[test]
 #[serial_test::serial]
+fn stop_releases_quic_before_caller_blocking_pool_runs() {
+    isolated(
+        "stop_releases_quic_before_caller_blocking_pool_runs",
+        busy_caller_pool_scenario,
+    );
+}
+
+#[test]
+#[serial_test::serial]
 fn cancelling_startup_releases_runtime_and_restarts() {
     isolated(
         "cancelling_startup_releases_runtime_and_restarts",
@@ -118,6 +127,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
     if std::env::var_os(CHILD).is_some() {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .max_blocking_threads(1)
             .enable_all()
             .build()
             .unwrap()
@@ -125,6 +135,17 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         return;
     }
     let temp = tempfile::tempdir().unwrap();
+    // Preserve installed runtimes for opt-in native tests, but fall back to the
+    // fixture when HOME and platform cache paths are unavailable.
+    let runtime_cache = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::system::native_runtime_install::default_native_runtime_cache()
+                .ok()
+                .map(|cache| cache.root().to_path_buf())
+        })
+        .unwrap_or_else(|| temp.path().join("native-runtimes"));
     let executable = std::env::current_exe().unwrap();
     #[cfg(target_os = "macos")]
     let executable = {
@@ -141,6 +162,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
+    let home = temp.path().join("home");
     let mut child = Command::new(executable)
         .args([
             "--exact",
@@ -152,17 +174,18 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         // Lifecycle barriers use local fixtures, not the availability of GitHub.
         .env(mesh_llm_config::MESH_LLM_NO_UPDATE_CHECK_ENV, "1")
         .env("HF_ENDPOINT", endpoint)
-        .env(
-            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
-            crate::system::native_runtime_install::default_native_runtime_cache()
-                .unwrap()
-                .root(),
-        )
+        .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", runtime_cache)
         .env("HF_HOME", temp.path().join("hf"))
         .env("HF_HUB_CACHE", temp.path().join("hf/hub"))
         .env("HF_XET_CACHE", temp.path().join("hf/xet"))
         .env("MESH_LLM_RUNTIME_ROOT", temp.path().join("runtime"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        // The node keeps its state under ~/.mesh-llm; keep it out of the real
+        // home, which may also be read-only or missing. `dirs::home_dir()`
+        // ignores HOME on Windows, hence the test home and key path too.
+        .env("HOME", &home)
+        .env("MESH_LLM_TEST_HOME", &home)
+        .env("MESH_LLM_NODE_KEY_PATH", home.join(".mesh-llm").join("key"))
         .env_remove("HF_TOKEN")
         .env_remove("HUGGING_FACE_HUB_TOKEN")
         .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -296,6 +319,39 @@ async fn join_scenario() {
     restart_and_stop(config).await;
 }
 
+/// Require the QUIC port to be reusable before the caller's blocking worker runs.
+async fn busy_caller_pool_scenario() {
+    let config = isolated_config();
+    let handle = start_embedded_node(config.clone()).await.unwrap();
+    let stop = handle.stop();
+    tokio::pin!(stop);
+    // Poll once to enqueue the runtime-thread join on the caller's sole
+    // blocking worker, then queue a blocker behind it. Any socket close
+    // deferred to the caller after that join must wait for our release.
+    assert!(futures_util::poll!(&mut stop).is_pending());
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let (started, running) = tokio::sync::oneshot::channel();
+    let blocker = tokio::task::spawn_blocking(move || {
+        let _ = started.send(());
+        let _ = wait.recv();
+    });
+    tokio::time::timeout(Duration::from_secs(10), stop)
+        .await
+        .expect("stop joins its worker without waiting for the caller's pool")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("caller blocking worker reaches the fixture gate")
+        .unwrap();
+    let rebound =
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, config.network.bind_port.unwrap()));
+    // Release even on failure, so the fixture cannot hang runtime teardown.
+    drop(release);
+    blocker.await.unwrap();
+    drop(rebound.expect("stop released QUIC before caller-side deferred cleanup"));
+    restart_and_stop(config).await;
+}
+
 async fn cancelled_startup_scenario() {
     let mut config = isolated_config();
     let (peer, token) = unresponsive_peer().await;
@@ -413,5 +469,33 @@ async fn serve_hub_request(
             )
             .await
             .unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial]
+async fn embedded_listen_all_rejects_foreign_loopback_console() {
+    let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind foreign console");
+    let console_port = foreign.local_addr().expect("foreign address").port();
+    let api = TcpListener::bind("127.0.0.1:0").expect("reserve API port");
+    let api_port = api.local_addr().expect("API address").port();
+    drop(api);
+
+    let result = start_embedded_serve(EmbeddedServeConfig {
+        mode: EmbeddedMeshNodeMode::Client,
+        api_port,
+        console_port,
+        listen_all: true,
+        startup_timeout: Duration::from_secs(30),
+        ..EmbeddedServeConfig::default()
+    })
+    .await;
+
+    if let Ok(handle) = result {
+        let _ = handle.stop().await;
+        panic!("embedded startup must reject a foreign loopback console");
     }
 }

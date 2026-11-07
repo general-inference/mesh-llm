@@ -73,7 +73,12 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 }
 
 impl Node {
+    /// Resolve the attachment-specific membership file before the process default.
+    /// Tests without an explicit file avoid accessing the user's persisted membership.
     fn membership_file(&self) -> Result<Option<std::path::PathBuf>> {
+        if let Some(path) = &self.adopted_membership_file {
+            return Ok(Some(path.clone()));
+        }
         #[cfg(test)]
         {
             Ok(self.adopted_membership_file.clone())
@@ -181,15 +186,13 @@ impl Node {
         }
     }
 
-    pub(crate) fn load_or_create_signed_genesis_policy(
+    pub(crate) fn load_persisted_signed_genesis_policy(
         &self,
-    ) -> Result<crate::SignedMeshGenesisPolicy> {
-        let owner = self.owner_keypair.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
-            )
-        })?;
-        let path = mesh_genesis_policy_path()?;
+    ) -> Result<Option<crate::SignedMeshGenesisPolicy>> {
+        let path = match &self.identity_state_dir {
+            Some(directory) => directory.join("mesh_genesis_policy.json"),
+            None => mesh_genesis_policy_path()?,
+        };
         match std::fs::read(&path) {
             Ok(serialized) => {
                 let existing =
@@ -198,20 +201,37 @@ impl Node {
                 existing
                     .verify()
                     .map_err(|reason| anyhow::anyhow!("verify mesh genesis policy: {reason:?}"))?;
-                if existing.policy.origin_owner_id != owner.owner_id()
-                    || existing.policy.requirements != self.local_mesh_requirements
-                    || existing.origin_sign_public_key != owner.verifying_key().as_bytes().to_vec()
-                {
-                    anyhow::bail!(
-                        "persisted mesh genesis policy does not match local owner or requirements"
-                    );
-                }
-                return Ok(existing);
+                Ok(Some(existing))
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+        }
+    }
+
+    pub(crate) fn load_or_create_signed_genesis_policy(
+        &self,
+    ) -> Result<crate::SignedMeshGenesisPolicy> {
+        let owner = self.owner_keypair.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
+            )
+        })?;
+        if let Some(existing) = self.load_persisted_signed_genesis_policy()? {
+            if existing.policy.origin_owner_id != owner.owner_id()
+                || existing.policy.requirements != self.local_mesh_requirements
+                || existing.origin_sign_public_key != owner.verifying_key().as_bytes().to_vec()
+            {
+                anyhow::bail!(
+                    "persisted mesh genesis policy does not match local owner or requirements"
+                );
+            }
+            return Ok(existing);
         }
 
+        let path = match &self.identity_state_dir {
+            Some(directory) => directory.join("mesh_genesis_policy.json"),
+            None => mesh_genesis_policy_path()?,
+        };
         let signed = crate::SignedMeshGenesisPolicy::sign(
             crate::MeshGenesisPolicy::new(
                 owner.owner_id(),

@@ -151,6 +151,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
             .continuous_batching
             .unwrap_or(skippy_config::local_serving::CONTINUOUS_BATCHING),
         compute_meter: None,
+        split_dflash: None,
         openai,
         l3_manager: None,
     })
@@ -392,6 +393,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

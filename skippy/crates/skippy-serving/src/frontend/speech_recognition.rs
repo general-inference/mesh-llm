@@ -10,9 +10,9 @@ use skippy_inference_api::realtime::{
 };
 use skippy_inference_api::{
     AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionSegment,
-    AudioTranscriptionTiming, CancellationToken, ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionStream, InferenceBackend, InferenceError, InferenceRequestContext,
-    InferenceResult, ModelObject,
+    AudioTranscriptionTiming, CancellationToken, InferenceBackend, InferenceError,
+    InferenceRequestContext, InferenceResult, ModelObject, generation::GenerationEventStream,
+    generation::GenerationRequest, generation::GenerationResponse,
 };
 use skippy_runtime::{
     PcmResampler, SpeechRecognitionModel, SpeechStream, SpeechStreamConfig, SpeechStreamEvent,
@@ -236,16 +236,16 @@ impl InferenceBackend for SpeechRecognitionBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         Err(speech_only())
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Err(speech_only())
     }
 }
@@ -301,16 +301,13 @@ impl LiveSession {
                     });
                     stream.commit(&mut |samples, options| self.transcribe(samples, options))
                 }
-                RealtimeInput::Clear => {
-                    stream.clear();
-                    Ok(Vec::new())
-                }
+                RealtimeInput::Clear => Ok(stream.clear()),
                 RealtimeInput::Configure(config) => {
-                    stream.set_config(stream_config(&config));
+                    let events = stream.set_config(stream_config(&config));
                     if resampler.input_rate() != config.input_sample_rate {
                         resampler = PcmResampler::new(config.input_sample_rate);
                     }
-                    Ok(Vec::new())
+                    Ok(events)
                 }
             };
             match events {

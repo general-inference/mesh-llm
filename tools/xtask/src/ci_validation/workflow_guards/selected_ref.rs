@@ -6,6 +6,20 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     let workflow = workflows
         .get("llama-upstream-canary.yml")
         .ok_or("upstream canary missing")?;
+    let action = workflow
+        .get("on")
+        .and_then(|on| on.get("workflow_dispatch"))
+        .and_then(|dispatch| dispatch.get("inputs"))
+        .and_then(|inputs| inputs.get("mesh_action"))
+        .ok_or("selected source action missing")?;
+    h::binding(action, "type", "choice")?;
+    if action.get("options").map(Node::list)
+        != Some(vec!["certify", "certify-and-publish", "upgrade"])
+    {
+        return Err(
+            "selected source must expose the bounded certification and upgrade actions".into(),
+        );
+    }
     let job = h::job(workflow, "resolve")?;
     h::condition(
         job,
@@ -42,7 +56,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "UPSTREAM",
         "${{ inputs.upstream_sha }}",
     )?;
-    h::binding(selection, "timeout-minutes", "3")?;
+    // The selection step must outlast the resolver's own 180-second API budget.
+    h::binding(selection, "timeout-minutes", "5")?;
     h::command(
         selection,
         &[
@@ -58,7 +73,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     )?;
     let run = field(step, "run").ok_or("resolver run missing")?;
     if !run.contains("upstream=\"$SELECTED_UPSTREAM\"") || run.contains("ls-remote") {
-        return Err("default upstream must consume the admitted stable release commit".into());
+        return Err("default upstream must consume the admitted release commit".into());
     }
     h::command(
         step,

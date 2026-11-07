@@ -21,11 +21,12 @@ pub(super) use axum::{http::StatusCode, response::IntoResponse};
 pub(super) use base64::Engine as _;
 pub(super) use serde_json::{Value, json};
 pub(super) use skippy_inference_api::{
-    AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionStream, ChatHookAction, ChatHookOutcome, CompactionConfig, CompletionRequest,
-    CompletionResponse, CompletionStream, FinishReason, GuardrailMode, GuardrailPolicy,
-    InferenceBackend, InferenceError, InferenceRequestContext, InferenceResult, MessageContent,
-    ModelObject, Usage, apply_chat_hook_outcome,
+    ChatHookAction, ChatHookOutcome, CompactionConfig, CompletionRequest, CompletionResponse,
+    CompletionStream, FinishReason, GuardrailMode, GuardrailPolicy, InferenceBackend,
+    InferenceError, InferenceRequestContext, InferenceResult, MessageContent, ModelObject, Usage,
+    apply_chat_hook_outcome, generation::GeneratedMessage, generation::GenerationChoice,
+    generation::GenerationEventStream, generation::GenerationRequest,
+    generation::GenerationResponse,
 };
 pub(super) use skippy_metrics::attr as attr_key;
 pub(super) use skippy_protocol::{
@@ -53,6 +54,7 @@ mod cache_publication;
 mod causal_decisions;
 mod chat_stream_deltas;
 mod draft_runtime;
+pub(in crate::frontend) mod enc_dec_lane_admission;
 mod generation;
 mod guardrails;
 mod multimodal;

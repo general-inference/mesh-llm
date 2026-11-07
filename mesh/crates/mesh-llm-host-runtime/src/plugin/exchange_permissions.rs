@@ -159,17 +159,20 @@ mod tests {
             ..Default::default()
         };
         let spec = ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "deferred-observer".into(),
             command: "must-not-start-deferred-observer".into(),
             args: Vec::new(),
             url: None,
             env: Default::default(),
+            settings: Default::default(),
             startup: super::super::PluginStartupOptions {
                 lazy_start: true,
                 ..Default::default()
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
             openai_exchange_grant: Some(Box::new(grant)),
         };

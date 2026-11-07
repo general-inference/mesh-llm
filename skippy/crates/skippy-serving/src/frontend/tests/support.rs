@@ -1,4 +1,5 @@
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 pub(super) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
@@ -32,6 +33,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -57,6 +59,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
@@ -140,7 +143,7 @@ pub(super) fn local_openai_backend(
         config,
         model_id: model_id.into(),
         default_max_tokens: 16,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::LocalRuntime,
@@ -191,8 +194,8 @@ pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
     }
 }
 
-pub(super) fn tool_request() -> ChatCompletionRequest {
-    serde_json::from_value(json!({
+pub(super) fn tool_request() -> GenerationRequest {
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "look this up"}],
         "tools": [{
@@ -211,4 +214,5 @@ pub(super) fn tool_request() -> ChatCompletionRequest {
         }]
     }))
     .unwrap()
+    .into()
 }

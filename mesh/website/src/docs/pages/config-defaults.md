@@ -45,6 +45,7 @@ stage_topology        = ""               # Stage topology override
 binary_stage_transport = ""              # Binary stage transport override
 prefill_chunking      = "auto"           # Prefill chunking policy
 prefill_chunk_size    = 0                 # Fixed prefill chunk size (0 = auto)
+activation_codec      = "f16"            # Split activation codec: f16, lossless, bf16, s8-row, fp8-e4m3-row, fp8-e4m3-block32, fp8-e5m2-row, f32
 
 [defaults.speculative]
 mode                 = "auto"            # "auto", "disabled", or "draft"
@@ -132,6 +133,6 @@ alias = ""                               # Optional model alias
 | `throughput` | Concurrency — parallel sequences, threading, flash attention |
 | `skippy` | Stage-split serving — stage packages, activation dtypes |
 | `speculative` | Speculative decoding — draft source, verification policy, and runtime controls |
-| `request_defaults` | Sampling — temperature, tokens, penalties, stop sequences |
+| Request defaults | Sampling — temperature, tokens, penalties, stop sequences |
 | `multimodal` | Vision — CLIP model, projection, GPU assignment |
 | `advanced` | Low-level — slot count, hierarchical slots |

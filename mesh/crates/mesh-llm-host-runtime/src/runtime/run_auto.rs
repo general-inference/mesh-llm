@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::embedded_readiness::EmbeddedReadinessTx;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
@@ -113,6 +114,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
     pub(crate) control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(crate) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 impl EmbeddedRuntimeOptions {
@@ -167,7 +169,7 @@ pub(super) fn write_runtime_owner_metadata(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+    run_runtime_cli(RuntimeOptions::default(), None, None, None, None).await
 }
 
 pub(crate) async fn run_cli(
@@ -176,7 +178,14 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
+    if options.memberships_config.is_some() {
+        anyhow::ensure!(
+            explicit_surface == Some(RuntimeSurface::Serve),
+            "configured memberships require serve"
+        );
+        return super::shared_serving::configured::run(&options).await;
+    }
+    run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -186,8 +195,18 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
+    let embedded_readiness_tx = options.embedded_readiness_tx.take();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(options, Some(surface), None, control_rx).await
+    crate::sdk::embedded_shutdown::stopped_during_startup_is_ok(
+        run_runtime_cli(
+            options,
+            Some(surface),
+            None,
+            control_rx,
+            embedded_readiness_tx,
+        )
+        .await,
+    )
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -228,6 +247,7 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
         min_protocol_version: embedded.mesh_requirements.min_protocol_version,
         max_protocol_version: embedded.mesh_requirements.max_protocol_version,
         require_release_attestation: embedded.mesh_requirements.require_release_attestation,
+        require_signed_gossip: embedded.mesh_requirements.require_signed_gossip,
         release_signer_key: embedded.mesh_requirements.release_signer_keys,
         config: embedded.config_path,
         ..RuntimeOptions::default()
@@ -269,6 +289,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 ) -> Result<()> {
     // Register termination-signal handling before any startup work. Startup
     // publishes readiness well before the serving loops await the signal, so a
@@ -363,7 +384,7 @@ pub(super) async fn run_runtime_cli(
 
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
-    let has_config_models = !config.models.is_empty();
+    let has_config_models = config.models.iter().any(|model| model.provider.is_none());
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
     // Acquire the per-instance runtime directory and flock. Plain --client still
@@ -425,6 +446,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
+        embedded_readiness_tx,
     })
     .await
 }
@@ -541,7 +563,11 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
         .defaults
         .get_or_insert_with(plugin::ModelConfigDefaults::default)
         .speculative = Some(resolved_defaults);
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         model.speculative = Some(plugin::SpeculativeConfig::with_precedence(
             Some(overrides),
             model.speculative.as_ref(),
@@ -601,7 +627,11 @@ pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
     // Runtime CLI flags are process-wide serving overrides. Apply them to
     // config-declared models as well as defaults so model-local config cannot
     // unexpectedly take precedence over the explicit command line.
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         let hardware = model
             .hardware
             .get_or_insert_with(plugin::HardwareConfig::default);
@@ -656,62 +686,6 @@ pub(super) async fn store_benchmark_metrics(
     *mem_arc.lock().await = result.map(|r| r.mem_bandwidth_gbps.clone());
     *fp32_arc.lock().await = result.and_then(|r| r.compute_tflops_fp32.clone());
     *fp16_arc.lock().await = result.and_then(|r| r.compute_tflops_fp16.clone());
-}
-
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "release attestation loading logs missing, valid, and invalid embedded states before advertising the result"
-)]
-pub(super) async fn attach_local_release_attestation(node: &mesh::Node) -> Result<()> {
-    let loaded = match release_attestation::load_for_current_binary() {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to load local embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    };
-    node.set_release_attestation_report(loaded.summary.clone(), loaded.attestation.clone())
-        .await;
-    match loaded.summary.status {
-        crate::ReleaseAttestationStatus::Missing => {
-            tracing::info!(
-                path = %loaded.binary_path.display(),
-                "no embedded release attestation found for local binary"
-            );
-            return Ok(());
-        }
-        crate::ReleaseAttestationStatus::Valid => {}
-        crate::ReleaseAttestationStatus::Invalid => {
-            tracing::warn!(
-                path = %loaded.binary_path.display(),
-                error = %loaded.summary.error.as_deref().unwrap_or("unknown release attestation error"),
-                "local binary has an invalid embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    }
-    let Some(attestation) = loaded.attestation else {
-        tracing::warn!(
-            path = %loaded.binary_path.display(),
-            "embedded release attestation verified but no release attestation payload was produced"
-        );
-        return Ok(());
-    };
-    let attestation_hash = attestation.canonical_hash_hex().ok();
-    if loaded.summary.verified {
-        tracing::info!(
-            path = %loaded.binary_path.display(),
-            signer_key_id = %attestation.signer_key_id,
-            attestation_hash = attestation_hash.as_deref().unwrap_or("unknown"),
-            "loaded local embedded release attestation"
-        );
-    }
-    node.set_release_attestation_report(loaded.summary, Some(attestation))
-        .await;
-    Ok(())
 }
 
 /// Install the model-intent channel on `node` and return the receiver the
@@ -885,6 +859,8 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
+/// Start the ordinary node, attach its binary proof before accepting peers,
+/// and install its stage-control and plugin services with startup failure cleanup.
 pub(super) async fn start_run_auto_node_and_plugins(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -901,6 +877,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {
@@ -927,7 +904,8 @@ pub(super) async fn start_run_auto_node_and_plugins(
     )
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
-    attach_local_release_attestation(&node).await?;
+    release_attestation::attach_to_node(&node, release_attestation::load_for_current_binary())
+        .await;
     node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
         options,
     )))
@@ -955,9 +933,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;
     resolved_plugins.externals.push(moa_spec);
-    #[cfg(feature = "payments")]
-    let in_process = crate::network::payments::in_process_plugins(&node);
-    #[cfg(not(feature = "payments"))]
     let in_process = plugin::InProcessPlugins::default();
     let moa_runner: plugin::InProcessPluginRunner =
         std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
@@ -983,8 +958,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .await;
     node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
         .await?;
-    #[cfg(feature = "payments")]
-    crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
 }
@@ -1002,7 +975,11 @@ pub(super) fn register_pre_accept_local_source_policies(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_deref());
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let mut model_ids = BTreeSet::from([model.model.clone()]);
         let configured_path = model
             .hardware
@@ -1300,6 +1277,30 @@ fn initial_run_auto_requested_models(
         .collect()
 }
 
+/// The names a request may use for a startup model before it resolves: its
+/// declared or path reference and its configured id. A bare local GGUF has
+/// neither until it is hashed, so while one resolves any name may be coming.
+pub(super) fn startup_resolution(
+    startup_specs: &[StartupModelSpec],
+    requested_model_names: &[String],
+) -> mesh::StartupResolution {
+    if startup_specs.is_empty() {
+        return mesh::StartupResolution::Done;
+    }
+    let mut names = Vec::new();
+    for (spec, requested) in startup_specs.iter().zip(requested_model_names) {
+        if spec.declared_ref.is_none()
+            && spec.config_model_id.is_none()
+            && super::startup_models::is_direct_local_gguf_source(&spec.model_ref)
+        {
+            return mesh::StartupResolution::AnyName;
+        }
+        names.push(requested.clone());
+        names.extend(spec.config_model_id.clone());
+    }
+    mesh::StartupResolution::Names(names)
+}
+
 pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
@@ -1581,6 +1582,7 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(super) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 /// Installs the mesh-serve path's runtime-event stack -- engine,
@@ -1735,6 +1737,7 @@ async fn run_auto_inner(
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
+        embedded_readiness_tx,
     } = ctx;
     // Do not create the mesh node or detached role watchers until a slow
     // termination-signal observer has either registered every required stream
@@ -1787,6 +1790,10 @@ async fn run_auto_inner(
     let initial_requested_models =
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
+    // Until they resolve, a request naming one of them gets a retryable 503
+    // rather than a 404.
+    node.set_startup_resolution(startup_resolution(&startup_specs, &requested_model_names))
+        .await;
 
     // On cancellation, continue to the lifecycle owner below so it can run
     // the existing ordered cleanup for the node we have already created.
@@ -1841,6 +1848,9 @@ async fn run_auto_inner(
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+    if !is_client && !super::startup_models::cli_has_explicit_models(&options) {
+        super::native_model_lifecycle::install(&node, &config, target_tx.subscribe()).await?;
+    }
 
     let model_name_for_console = String::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;
@@ -1899,6 +1909,7 @@ async fn run_auto_inner(
         interactive_started: &interactive_started,
         console_state: console_state.as_ref(),
         model_name_for_console: &model_name_for_console,
+        embedded_readiness_tx,
     })
     .await?;
 
@@ -2097,6 +2108,7 @@ mod tests {
         clear_runtime_event_engine();
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
+                operation_bindings: Vec::new(),
                 name: BLOBSTORE_PLUGIN_ID.to_owned(),
                 enabled: Some(true),
                 web_ui_enabled: None,
@@ -2107,6 +2119,7 @@ mod tests {
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,
+                models: None,
                 settings: Default::default(),
                 startup: Default::default(),
             }],
@@ -2128,6 +2141,7 @@ mod tests {
             runtime: None,
             auto_join_candidates: Vec::new(),
             embedded_control_rx: None,
+            embedded_readiness_tx: None,
         })
         .await;
 

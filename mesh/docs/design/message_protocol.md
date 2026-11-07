@@ -2,7 +2,12 @@
 
 Use this reference for public mesh communication over the `meshllm.node.v1`
 protobuf schema on QUIC ALPN `mesh-llm/1` and for the separate private
-owner-control lane on `mesh-llm-control/1`.
+owner-control lane on `mesh-llm-control/2`.
+
+The owner-control ALPN changed from `/1` to `/2` when plugin command approvals
+began binding the full argument list. Both the controlling and target nodes must
+support `/2`; the controller does not downgrade to `/1`, whose receivers could
+ignore the argument approval field. Public mesh ALPN negotiation is unchanged.
 
 ## ALPN
 
@@ -28,6 +33,7 @@ Each QUIC connection carries multiple logical streams, distinguished by a 1-byte
 | 0x0b | CONFIG_SUBSCRIBE | reserved | legacy mesh-plane config stream ID; do not reuse |
 | 0x0c | CONFIG_PUSH | reserved | legacy mesh-plane config stream ID; do not reuse |
 | 0x0d | SUBPROTOCOL | bidirectional | protobuf `MeshSubprotocolOpen`, then subprotocol-owned framing |
+| 0x0f | NATIVE_CHAT | bidirectional | length-prefixed protobuf `NativeChatFrame` |
 
 Streams 0x02 and 0x04 are raw TCP relay tunnels. They carry llama.cpp RPC and HTTP traffic respectively and are not subject to protobuf framing or generation validation.
 
@@ -43,9 +49,89 @@ Maximum frame size: 8 MiB (`MAX_CONTROL_FRAME_BYTES`). Frames exceeding this
 limit are rejected before allocation on read and before a prefix or body is
 written on send.
 
-Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
+Config and inventory mutation are exclusive to `mesh-llm-control/2`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
 
-## Private owner-control (`mesh-llm-control/1`)
+## Native chat inference (`0x0f`)
+
+Native SDK chat inference uses a mesh bidirectional stream without HTTP request
+lines, headers, SSE framing, or a loopback TCP connection. After the stream-type
+byte, every frame is a 4-byte little-endian length followed by a protobuf
+`NativeChatFrame`. Its `generation` must be `1`; `payload_json` carries typed
+inference data, and optional `error` carries a terminal provider error. The
+normal 8 MiB frame bound applies to requests, replies, and individual chunks.
+
+The caller sends one request frame and finishes its send direction. The JSON
+payload binds the exact provider and serving ID to an OpenAI-shaped chat request:
+
+```json
+{
+  "target": {
+    "provider_node_id": "<provider-endpoint-id>",
+    "serving_id": "<exact-serving-id>"
+  },
+  "request": {
+    "model": "<exact-serving-id>",
+    "messages": [{"role": "user", "content": "Explain lock ordering."}],
+    "reasoning_effort": "high",
+    "stream": false
+  }
+}
+```
+
+The provider must be the receiving node. An empty `request.model` is filled
+with the selected serving ID; a different nonempty model is rejected. Incoming
+native chat executes a locally loaded backend and never routes to another peer.
+Mesh admission, activity policy, runtime drain admission, request capacity, and
+the current instance's effort observations apply before execution. Remote native
+chat does not implement paid inference: a provider requiring payment rejects the
+request rather than bypassing payment or changing transports.
+
+Unary inference returns one response frame whose payload is the serialized chat
+completion. With `request.stream = true`, the provider returns one frame per
+serialized chat-completion chunk. Successful streaming ends with an explicit
+terminal frame with empty `payload_json` and no `error`. EOF before that terminal
+frame is a failure, so a lost connection cannot appear as successful truncated
+output. An error frame terminates either response shape. Dropping the native
+consumer stream cancels its producer and stops receiving; the provider observes
+the stopped stream and cancels backend execution.
+
+Native chat is bounded on both sides, but no bound covers a healthy
+generation's total duration:
+
+- A unary request must complete within 300 seconds of the provider accepting
+  it. It produces one response and has no progress signal of its own.
+- Opening the provider stream, including connection acquisition, QUIC stream
+  credit and the initial request write, must finish within 300 seconds.
+- A stream has no total-duration limit. Each wait for the next chunk is bounded
+  by a 300-second inactivity window that restarts with every chunk, so a
+  generation that keeps producing is never cut off and a generation that stops
+  producing fails instead of hanging. The consumer applies the window to the
+  provider it reads from; the provider applies the same window to its local
+  backend, so a client cannot extend or shorten a provider's silence.
+- A single frame write blocked by QUIC flow control, and the provider's read of
+  the request frame before it starts work, are bounded by 15 seconds. That is a
+  blocked-write deadline, not a stream lifetime: a paused reader does not by
+  itself expire it, and a reader that resumes before the write deadline keeps
+  the exchange alive.
+
+Any of these failures ends the stream with a provider error frame, or with a
+local timeout error in a consumer still waiting on a provider that has gone
+silent. Neither materializes as a successful truncated response.
+
+Model discovery uses the existing model advertisements. The optional
+`ServedModelMetadata.thinking_efforts` protobuf message wraps the ordered effort
+strings so missing metadata remains distinct from a present empty list. Its
+legacy JSON representation is an optional array. It contains no thinking-toggle
+or reasoning-parser diagnostics. These are render-probe observations of the
+selected template, not guarantees about generation. Providers remain separate
+catalog entries even when their serving IDs match.
+
+Older peers ignore the optional metadata addition. An older peer may advertise
+a model without understanding `NATIVE_CHAT`; attempting native inference then
+returns an explicit stream/support error. Native callers never fall back to HTTP
+or silently select another provider.
+
+## Private owner-control (`mesh-llm-control/2`)
 
 Owned-node commands use a separate QUIC ALPN and do not consume a public mesh
 stream type. Each bidirectional owner-control stream carries 4-byte
@@ -144,7 +230,7 @@ remain a separate projection of a successful local scan.
 
 `load_model` (tag 6), `unload_model` (tag 7), `ensure_model` (tag 8), and
 `drain_model` (tag 9) are shipped additive owner-control commands on
-`mesh-llm-control/1`. They create session-only desired intents on the target
+`mesh-llm-control/2`. They create session-only desired intents on the target
 node's reconciler and never mutate durable config.
 
 - **`load_model`**: one-shot present intent. Accepts one canonical model
@@ -248,10 +334,10 @@ close that gap.
 
 ### Signed records
 
-Anything gossiped to the whole mesh is signed by the node it describes, with
-its endpoint key (the Ed25519 key behind `endpoint_id`). Relays store each
-record and forward its bytes unchanged, so a record keeps fields a relay's
-build does not know and cannot be altered on the way. Every kind uses the
+Node descriptions and cache-affinity records are signed by the node they
+describe, with its endpoint key (the Ed25519 key behind `endpoint_id`). Relays
+store each record and forward its bytes unchanged, so a record keeps fields a
+relay's build does not know and cannot be altered on the way. Every kind uses the
 same envelope under its own domain tag:
 
 ```text
@@ -302,20 +388,74 @@ Receivers apply these rules to every kind:
    record whenever its body changes; an unchanged node record is re-signed
    every 15 minutes, and cache affinity is re-signed every gossip round
    because its advertisement time changes.
-4. An accepted node record replaces the frame's unsigned entry for the same
-   node, and accepted cache affinity replaces the unsigned copy. The sender's
-   own unsigned entry is always applied, because the connection authenticates
-   it and it carries the direct-only data.
+4. In compatibility mode, an accepted node record replaces the frame's unsigned
+   entry for the same node, and accepted cache affinity replaces the unsigned copy.
+   The sender's own unsigned entry is always applied, because the connection
+   authenticates it and it carries the direct-only data.
 
-Nodes that predate signed records ignore fields 4 and 5 and keep using
-`peers`, which newer nodes still populate, including `cache_affinity`. During
-the transition, unsigned data is still applied whenever no accepted record
-replaces it, including entries relayed by older nodes about nodes that do
-sign. A relay can therefore still misdescribe another node with unsigned data
-until signed records become mandatory; that enforcement is deferred so
-upgraded nodes keep working with nodes that have not upgraded. Phase 2,
-[#2301](https://github.com/Mesh-LLM/mesh-llm/issues/2301), tracks enforcing
-signatures and dropping the unsigned copies.
+### Signed-gossip enforcement and migration
+
+The signed genesis policy's `require_signed_gossip` requirement selects the
+mode for the whole mesh. The default is `false`, including policies created
+before the field existed. Compatibility mode keeps unsigned `peers` copies,
+including cache affinity, so nodes predating signed records can still relay
+topology. It also keeps the old fallback: a relay can misdescribe another node
+when no accepted signed record replaces its unsigned entry. Compatibility
+mode must not be described as protecting against malicious relays.
+
+With `require_signed_gossip = true`, receivers discard **every** unsigned
+third-party entry, even if its signed twin is missing, invalid, expired, or
+could not be verified within the work budget. Accepted relayed descriptions
+and cache affinity come exclusively from origin-signed bytes. Senders omit the
+redundant third-party `peers` copies. They retain exactly their own unsigned
+entry for connection-authenticated state, merged demand, admission proof,
+claimed log head, and plugin keys. Merged demand continues to propagate
+through that entry; it is not origin-signed per-node demand. Hop measurements
+remain the relay's observations, not assertions authenticated by the origin.
+
+The cutover is explicit mesh creation, after all intended participants support
+this requirement. Set `[mesh_requirements] require_signed_gossip = true`,
+create a new mesh with an owner-signed genesis policy, and distribute its new
+signed bootstrap token. Joining nodes inherit the requirement. Changing the
+flag changes the policy hash and mesh id; it is not a hot toggle on an existing
+mesh. Reverting to compatibility mode also requires a new mesh and invitations.
+No date or release silently changes existing meshes' policy.
+An identity with a persisted strict genesis policy rejects conflicting creation
+settings, including disabling signed gossip. Migration uses a fresh identity
+namespace (a new `MESH_LLM_NODE_KEY_PATH`), preserving the old policy and identity
+for the old mesh.
+
+The canonical bytes of policies with the flag absent or false are unchanged.
+A true flag appends the domain-separated bytes `\0require-signed-gossip-v1`
+to the existing canonical policy encoding. A decoder that does not know the
+field cannot validate that policy's original hash/signature, so it cannot
+silently join under a weaker policy. Older participants must remain on a
+compatibility mesh until upgraded.
+
+Signature verification and body decoding run outside the membership lock.
+Committing a verified record rechecks freshness and sequence against the
+current held record, so a concurrent newer relay cannot be overwritten.
+Each authenticated sender has a ten-second budget of 4,096 records and
+16 MiB of signed bytes; at most two verification jobs run per node. The sender
+accounting table is bounded at 2,048 active entries and does not evict active
+quotas on churn. Exhaustion defers signed records without clearing previously
+verified records or enabling unsigned third-party fallback in strict mode.
+An exchange waits up to 250 ms for a verification slot. Sender quota is charged
+only after acquiring that slot; a timeout or cancellation while queued consumes
+no quota. The blocking worker retains its concurrency permit even if its caller
+is cancelled.
+
+Gossip still obeys the 8 MiB control-frame limit and carries at most 4,096 signed
+records per frame. Larger snapshots are sent in bounded portions, rotating
+origins independently for each destination. The sender's own entries stay in
+every frame; each relayed origin's unsigned compatibility entry, signed node
+record and signed cache evidence travel together without rewriting signed bytes.
+At most 2,048 destination cursors are retained; least-recently-used cursors may
+restart after eviction. An individually oversized relayed origin is skipped
+with a warning so other origins can progress. If the sender's own entries cannot
+fit, heartbeats still treat the local error as deferred, neither a peer failure
+nor proof of recovery. Malformed or oversized inbound frames remain protocol
+errors. Frames already within both limits preserve their existing encoding.
 
 ### PeerAnnouncement
 

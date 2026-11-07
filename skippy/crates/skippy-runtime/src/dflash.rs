@@ -13,8 +13,11 @@
 //! than through the Skippy model ABI. Draft state is advisory: a failed draft
 //! operation clears that lane's draft cache and never fails the target.
 
+mod context;
 mod draft_batch;
+mod feature_wire;
 mod readout;
+mod split;
 
 use std::ffi::CString;
 use std::path::Path;
@@ -26,14 +29,20 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::Opaque;
 use skippy_ffi::llama_draft::{
     LLAMA_CONTEXT_TYPE_DEFAULT, LLAMA_ROPE_TYPE_MROPE, LlamaContextParams, LlamaDraftApi,
-    LlamaModelParams,
+    LlamaFlashAttnType, LlamaModelParams,
 };
 
 use crate::path_cstring::path_to_cstring;
 use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log_note};
 
+use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
 use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
+
+pub use context::DFlashHealth;
+pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
+pub use split::{DFlashFeatureRows, dflash_feature_payload_bytes, frame_has_dflash_features};
+pub(crate) use split::{DFlashSplitSession, SharedDFlashCapture};
 
 const DFLASH_ARCHITECTURE: &str = "dflash";
 const DEFAULT_BLOCK_SIZE: usize = 16;
@@ -89,7 +98,43 @@ pub struct DFlashDraftInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DFlashProposal {
     pub tokens: Vec<i32>,
+    /// Draft time for this block: the block decode, plus the feature rows of
+    /// the last decode when their injection was deferred to it.
     pub proposal_compute_us: u64,
+}
+
+/// Where a session's draft spent its time since the session was last
+/// activated. Only injections of decode rows count; a prefill's rows are not
+/// per-window draft work, whatever their chunk size.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DFlashDraftStats {
+    /// Block drafts, including empty ones from a draft without context.
+    pub proposals: u64,
+    /// Time in block decodes.
+    pub propose_us: u64,
+    /// Feature injections of decode rows, and the time they took.
+    pub ingests: u64,
+    pub ingest_us: u64,
+}
+
+impl DFlashDraftStats {
+    /// Injection and block time together: the draft's whole share of the
+    /// stage's time per window.
+    pub fn draft_us(self) -> u64 {
+        self.propose_us.saturating_add(self.ingest_us)
+    }
+}
+
+/// Feature rows of a target decode held back to be injected right before
+/// the next block draft, so that a split final stage can reply to stage 0
+/// first. The rows are copied out of the target's capture buffer, which the
+/// next target decode on any lane overwrites.
+struct PendingIngest {
+    features: Vec<f32>,
+    positions: Vec<i32>,
+    /// The target position after the rows.
+    end: u64,
+    truncate_from: Option<u64>,
 }
 
 pub(crate) struct DFlashDraft {
@@ -98,6 +143,12 @@ pub(crate) struct DFlashDraft {
     model: *mut Opaque,
     ctx: *mut Opaque,
     info: DFlashDraftInfo,
+    /// Per target layer: captured on this stage, or sent by an earlier stage
+    /// of a split target.
+    local_layers: Vec<bool>,
+    /// The target layer whose input is the activation this final stage
+    /// receives, when the draft reads it: its rows come from that activation.
+    input_layer: Option<u32>,
     lanes: i32,
     n_embd_target: usize,
     n_embd_draft: usize,
@@ -129,7 +180,14 @@ impl DFlashDraft {
     ) -> Result<Self> {
         let api = skippy_ffi::llama_draft::llama_draft_api()
             .ok_or_else(|| anyhow!("native runtime does not export the draft-context API"))?;
-        reject_dspark(path)?;
+        let draft_embeds = reject_dspark(path)?;
+        if !draft_embeds
+            && let Some(tensor) = missing_borrowed_tensor(&config.resident_tensor_names)
+        {
+            bail!(
+                "the target stage does not load {tensor}, which the DFlash draft embeds its block with"
+            );
+        }
         validate_default_params(api)?;
         let target_model = unsafe { (api.get_model)(target_ctx) };
         if target_model.is_null() {
@@ -149,6 +207,8 @@ impl DFlashDraft {
                 target_layer_ids: Vec::new(),
                 selector_top_k: 0,
             },
+            local_layers: Vec::new(),
+            input_layer: None,
             lanes,
             n_embd_target: 0,
             n_embd_draft: 0,
@@ -182,11 +242,29 @@ impl DFlashDraft {
         if meta_usize(self.model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
             bail!("LiliCorr drafts are not supported");
         }
-        if !(config.resident_tensor_names.is_empty() && config.layer_start == 0) {
-            bail!("DFlash drafts require the complete target model in one stage");
-        }
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
+        // A final stage of a split target captures only the layers whose
+        // input its graph produces; earlier stages send the rest with their
+        // activations. The input of this stage's first layer is the
+        // activation it receives.
+        let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
+        let local_end = if complete || config.layer_end == 0 {
+            u32::MAX
+        } else {
+            config.layer_end
+        };
+        self.local_layers = self
+            .info
+            .target_layer_ids
+            .iter()
+            .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
+            .collect();
+        self.input_layer = if complete {
+            None
+        } else {
+            split::stage_receives_layer_input(&self.info.target_layer_ids, config.layer_start)
+        };
         self.n_embd_target =
             positive_usize(unsafe { (api.model_n_embd)(target_model) }, "target n_embd")?;
         self.n_embd_draft =
@@ -247,16 +325,20 @@ impl DFlashDraft {
             // DFlash2 reads its lattice from every row of the nextn output.
             (api.set_embeddings_nextn)(self.ctx, true, !dflash2);
             (api.set_causal_attn)(self.ctx, causal);
-            for &lid in &self.info.target_layer_ids {
-                (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
+            for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+                if local {
+                    (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
+                }
             }
         }
         write_native_log_note(format!(
-            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} mask_token={} causal={causal} mrope={}",
+            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} input_layer={:?} mask_token={} causal={causal} mrope={}",
             self.info.variant.as_str(),
             self.info.block_size,
             self.info.max_draft_tokens,
             self.info.target_layer_ids,
+            self.local_layers,
+            self.input_layer,
             self.mask_token,
             self.mrope,
         ));
@@ -272,31 +354,80 @@ impl DFlashDraft {
     }
 
     /// Injects the target features for `positions.len()` rows of the last
-    /// target decode, starting at batch row `first_row`.
+    /// target decode, starting at batch row `first_row`. Layers an earlier
+    /// stage owns come from the trailing rows of `remote`. Rows stream from
+    /// the capture buffer into the draft microbatches without a full copy.
     pub(crate) fn ingest(
         &mut self,
         seq_id: i32,
         first_row: usize,
         positions: &[i32],
+        remote: Option<(&DFlashFeatureRows, usize)>,
     ) -> Result<()> {
         if positions.is_empty() {
             return Ok(());
         }
+        let layers = self.feature_layers(first_row, positions.len(), remote)?;
+        let n_embd = self.n_embd_target;
+        self.inject_rows(seq_id, positions, |row| {
+            target_feature_row(&layers, n_embd, row)
+        })
+    }
+
+    /// The draft's encoder input for `positions.len()` rows of the last
+    /// target decode, one row after another, every target layer per row.
+    /// Copied out, so it outlives the capture buffer the next target decode
+    /// overwrites; only a deferred ingest needs that.
+    fn gather_features(
+        &self,
+        first_row: usize,
+        positions: &[i32],
+        remote: Option<(&DFlashFeatureRows, usize)>,
+    ) -> Result<Vec<f32>> {
+        if positions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let layers = self.feature_layers(first_row, positions.len(), remote)?;
+        let mut features = Vec::with_capacity(positions.len() * self.n_embd_target * layers.len());
+        for row in 0..positions.len() {
+            features.extend(target_feature_row(&layers, self.n_embd_target, row));
+        }
+        Ok(features)
+    }
+
+    /// Each target layer's rows of the last target decode, from batch row
+    /// `first_row`: this stage's own from the capture buffer, an earlier
+    /// stage's from the trailing rows of `remote`. The capture rows stay
+    /// valid until the next target decode, which cannot run while the draft
+    /// is borrowed.
+    fn feature_layers<'r>(
+        &self,
+        first_row: usize,
+        rows: usize,
+        remote: Option<(&'r DFlashFeatureRows, usize)>,
+    ) -> Result<Vec<&'r [f32]>> {
         // The capture buffer holds `n_batch` rows per layer, filled by the
         // target decode that just ran; reading past it would be out of bounds.
         let rows_needed = first_row
-            .checked_add(positions.len())
+            .checked_add(rows)
             .filter(|rows| *rows <= self.target_n_batch)
             .ok_or_else(|| {
                 anyhow!(
-                    "{} target rows from row {first_row} exceed the capture buffer of {} rows",
-                    positions.len(),
+                    "{rows} target rows from row {first_row} exceed the capture buffer of {} rows",
                     self.target_n_batch
                 )
             })?;
         let layer_len = rows_needed * self.n_embd_target;
+        let first_value = first_row * self.n_embd_target;
         let mut layers = Vec::with_capacity(self.info.target_layer_ids.len());
-        for &lid in &self.info.target_layer_ids {
+        for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+            if !local {
+                let layer_rows = remote
+                    .and_then(|(remote, start)| remote.rows_of(lid, start, rows))
+                    .ok_or_else(|| anyhow!("target layer {lid} features did not arrive"))?;
+                layers.push(layer_rows);
+                continue;
+            }
             // The native getter aborts unless the buffer is allocated. Capture
             // is enabled for the draft's whole lifetime and nothing else
             // toggles it, and sessions only ingest rows of a target decode
@@ -305,17 +436,38 @@ impl DFlashDraft {
             if data.is_null() {
                 bail!("target layer {lid} input was not captured");
             }
-            layers.push(unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) });
+            let all: &'r [f32] =
+                unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) };
+            layers.push(&all[first_value..]);
         }
+        Ok(layers)
+    }
+
+    /// Injects gathered encoder rows at `positions`, in microbatches.
+    fn ingest_features(&mut self, seq_id: i32, features: &[f32], positions: &[i32]) -> Result<()> {
+        if positions.is_empty() {
+            return Ok(());
+        }
+        let row_len = features.len() / positions.len();
+        self.inject_rows(seq_id, positions, |row| {
+            features[row * row_len..(row + 1) * row_len].iter().copied()
+        })
+    }
+
+    /// Injects one encoder row per position, `row(index)` giving its values,
+    /// in microbatches of `n_ubatch` rows.
+    fn inject_rows<I: IntoIterator<Item = f32>>(
+        &mut self,
+        seq_id: i32,
+        positions: &[i32],
+        mut row: impl FnMut(usize) -> I,
+    ) -> Result<()> {
         for (chunk_index, chunk) in positions.chunks(self.n_ubatch).enumerate() {
             self.batch.clear();
-            let chunk_row = first_row + chunk_index * self.n_ubatch;
+            let chunk_row = chunk_index * self.n_ubatch;
             for (offset, &position) in chunk.iter().enumerate() {
-                self.batch.push_features(
-                    target_feature_row(&layers, self.n_embd_target, chunk_row + offset),
-                    position,
-                    seq_id,
-                );
+                self.batch
+                    .push_features(row(chunk_row + offset), position, seq_id);
             }
             let rc = unsafe { (self.api.decode)(self.ctx, self.batch.as_raw(self.mrope)) };
             if rc != 0 {
@@ -362,6 +514,8 @@ impl DFlashDraft {
             return Ok(Vec::new());
         }
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
+        // Rows a split final stage verified past the anchor are still cached.
+        self.truncate(seq_id, anchor_position);
         // Every block row is an output, as upstream requests: marking only the
         // mask rows returns logits shifted by one row. DFlash2 reads its
         // lattice from the nextn output instead and needs no logits.
@@ -418,8 +572,10 @@ impl DFlashDraft {
 impl Drop for DFlashDraft {
     fn drop(&mut self) {
         unsafe {
-            for &lid in &self.info.target_layer_ids {
-                (self.api.set_embeddings_layer_inp)(self.target_ctx, lid, false);
+            for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
+                if local {
+                    (self.api.set_embeddings_layer_inp)(self.target_ctx, lid, false);
+                }
             }
             if !self.ctx.is_null() {
                 (self.api.free)(self.ctx);
@@ -431,7 +587,25 @@ impl Drop for DFlashDraft {
     }
 }
 
-fn reject_dspark(path: &Path) -> Result<()> {
+/// The target tensor a DFlash draft without its own token embeddings reads
+/// through `ctx_other`. A stage slice holds only the tensors its own layers
+/// read, and keeps just the metadata of the rest: the draft would embed its
+/// block from memory nothing loaded.
+pub const DFLASH_BORROWED_TARGET_TENSOR: &str = "token_embd.weight";
+
+/// The borrowed tensor a target filtered to `resident` tensors lacks. A
+/// target without a resident list loads every tensor.
+fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
+    (!resident.is_empty()
+        && !resident
+            .iter()
+            .any(|name| name == DFLASH_BORROWED_TARGET_TENSOR))
+    .then_some(DFLASH_BORROWED_TARGET_TENSOR)
+}
+
+/// Refuses a DSpark draft, and returns whether the draft carries its own
+/// token embeddings.
+fn reject_dspark(path: &Path) -> Result<bool> {
     let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
         .with_context(|| format!("read draft GGUF {}", path.display()))?;
     if catalog
@@ -444,7 +618,10 @@ fn reject_dspark(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    Ok(())
+    Ok(catalog
+        .tensors
+        .iter()
+        .any(|tensor| tensor.name == DFLASH_BORROWED_TARGET_TENSOR))
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -455,9 +632,9 @@ fn validate_default_params(api: &LlamaDraftApi) -> Result<()> {
     let context_matches = context.n_ubatch == 512
         && context.n_seq_max == 1
         && context.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT
-        && context.flash_attn_type == -1
-        && context.type_k == 1
-        && context.type_v == 1
+        && context.flash_attn_type == LlamaFlashAttnType::Auto
+        && context.type_k == skippy_ffi::GgmlType::F16
+        && context.type_v == skippy_ffi::GgmlType::F16
         && context.moe_cache_size == 0
         && !context.embeddings
         && context.offload_kqv
@@ -524,7 +701,7 @@ fn load_draft(
     let mut model_params: LlamaModelParams = unsafe { (api.model_default_params)() };
     model_params.n_gpu_layers = options.n_gpu_layers.unwrap_or(config.n_gpu_layers);
     if !devices.is_empty() {
-        model_params.devices = devices.as_mut_ptr();
+        model_params.devices = devices.as_mut_ptr().cast();
     }
     write_native_log_note(format!(
         "dflash draft load begin path={} device={:?} n_gpu_layers={}",
@@ -532,6 +709,7 @@ fn load_draft(
         device_name,
         model_params.n_gpu_layers
     ));
+    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
     let model = unsafe { (api.model_load_from_file)(path.as_ptr(), model_params) };
     if model.is_null() {
         bail!(
@@ -539,7 +717,6 @@ fn load_draft(
             path.to_string_lossy()
         );
     }
-    let context_params = draft_context_params(api, target_ctx, config, lanes);
     let ctx = unsafe { (api.init_from_model)(model, context_params) };
     if ctx.is_null() {
         unsafe { (api.model_free)(model) };
@@ -558,7 +735,7 @@ fn draft_context_params(
     target_ctx: *mut Opaque,
     config: &RuntimeConfig,
     lanes: i32,
-) -> LlamaContextParams {
+) -> Result<LlamaContextParams> {
     let mut params = unsafe { (api.context_default_params)() };
     let target_n_ctx = unsafe { (api.n_ctx)(target_ctx) };
     let target_n_batch = unsafe { (api.n_batch)(target_ctx) };
@@ -570,11 +747,15 @@ fn draft_context_params(
     params.n_seq_max = lanes as u32;
     // A quantized V cache turns on flash attention under `Auto`; the native
     // context refuses to initialize when the backend cannot provide it.
-    params.type_k = config.cache_type_k as i32;
-    params.type_v = config.cache_type_v as i32;
-    params.flash_attn_type = config.flash_attn_type as i32;
+    params.type_k = cache_ggml_type("cache_k", config.cache_type_k)?;
+    params.type_v = cache_ggml_type("cache_v", config.cache_type_v)?;
+    params.flash_attn_type = match config.flash_attn_type {
+        crate::config::FlashAttentionType::Auto => LlamaFlashAttnType::Auto,
+        crate::config::FlashAttentionType::Disabled => LlamaFlashAttnType::Disabled,
+        crate::config::FlashAttentionType::Enabled => LlamaFlashAttnType::Enabled,
+    };
     params.kv_unified = true;
-    params.ctx_other = target_ctx;
+    params.ctx_other = target_ctx.cast();
     let threads = config
         .n_threads
         .or_else(|| {
@@ -590,7 +771,18 @@ fn draft_context_params(
             .and_then(|threads| i32::try_from(threads).ok())
             .unwrap_or(threads);
     }
-    params
+    Ok(params)
+}
+
+/// Resolve a configured cache-type code to the upstream ggml type the draft
+/// context stores. Publicly constructed configs can carry codes outside the
+/// validated catalog, and the generated `ggml_type` enum has gaps, so an
+/// unchecked conversion would be undefined behavior; refuse instead.
+fn cache_ggml_type(field: &str, code: u32) -> Result<skippy_ffi::llama_draft::GgmlType> {
+    let code = i32::try_from(code)
+        .with_context(|| format!("draft {field} cache type {code} exceeds i32"))?;
+    skippy_ffi::llama_draft::ggml_type_from_cache_code(code)
+        .with_context(|| format!("draft {field} cache type {code} is not a declared ggml type"))
 }
 
 /// Draft `(n_batch, n_ubatch)` for a target's batch sizes. Non-causal
@@ -613,6 +805,10 @@ fn meta_usize(model: *const Opaque, key: &str) -> Result<Option<usize>> {
         .transpose()
 }
 
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
 fn positive_usize(value: i32, label: &str) -> Result<usize> {
     usize::try_from(value)
         .ok()
@@ -622,25 +818,100 @@ fn positive_usize(value: i32, label: &str) -> Result<usize> {
 
 /// A session's handle to the model's draft. Weak so that the model frees the
 /// draft before the target context it borrows from.
-#[derive(Clone)]
 pub(crate) struct DFlashSessionLink {
     draft: Weak<Mutex<DFlashDraft>>,
     seq_id: i32,
+    /// The draft's layer read from this stage's input activation, and the
+    /// target width.
+    pub(crate) input_layer: Option<(u32, usize)>,
+    /// The target positions this lane's draft holds.
+    context: DraftContext,
+    stats: DFlashDraftStats,
+    /// Hold back the next decode's feature rows until the next proposal.
+    defer_next_ingest: bool,
+    pending: Option<PendingIngest>,
 }
 
 impl DFlashSessionLink {
     pub(crate) fn new(draft: &Arc<Mutex<DFlashDraft>>, seq_id: i32) -> Option<Self> {
-        let owns_lane = lock_draft(draft).owns_lane(seq_id);
+        let (owns_lane, input_layer) = {
+            let draft = lock_draft(draft);
+            (
+                draft.owns_lane(seq_id),
+                draft.input_layer.map(|layer| (layer, draft.n_embd_target)),
+            )
+        };
         owns_lane.then(|| Self {
             draft: Arc::downgrade(draft),
             seq_id,
+            input_layer,
+            context: DraftContext::empty(),
+            stats: DFlashDraftStats::default(),
+            defer_next_ingest: false,
+            pending: None,
         })
+    }
+
+    /// A link whose draft is already gone, for tests of session bookkeeping.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn detached(seq_id: i32) -> Self {
+        Self {
+            draft: Weak::new(),
+            seq_id,
+            input_layer: None,
+            context: DraftContext::empty(),
+            stats: DFlashDraftStats::default(),
+            defer_next_ingest: false,
+            pending: None,
+        }
     }
 
     fn with_draft<R>(&self, operation: impl FnOnce(&mut DFlashDraft, i32) -> R) -> Option<R> {
         let draft = self.draft.upgrade()?;
         let mut draft = lock_draft(&draft);
         Some(operation(&mut draft, self.seq_id))
+    }
+
+    /// Injects held-back feature rows. Every operation that reads or changes
+    /// the draft cache calls this first, so the cache always sees the rows in
+    /// decode order.
+    fn flush_pending(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let started = Instant::now();
+        let injected = self.with_draft(|draft, seq_id| {
+            if let Some(from) = pending.truncate_from {
+                draft.truncate(seq_id, i32::try_from(from).unwrap_or(i32::MAX));
+            }
+            let injected = draft.ingest_features(seq_id, &pending.features, &pending.positions);
+            if injected.is_err() {
+                draft.clear(seq_id);
+            }
+            injected
+        });
+        // Only decode rows are deferred.
+        self.record_ingest(started);
+        self.finish_ingest(injected, pending.end);
+    }
+
+    /// Counts one injection of decode rows as draft time.
+    fn record_ingest(&mut self, started: Instant) {
+        self.stats.ingests += 1;
+        self.stats.ingest_us = self.stats.ingest_us.saturating_add(elapsed_us(started));
+    }
+
+    fn finish_ingest(&mut self, injected: Option<Result<()>>, end: u64) {
+        match injected {
+            Some(Ok(())) => self.context.ingested(end),
+            Some(Err(error)) => {
+                write_native_log_note(format!(
+                    "dflash feature injection failed, draft context cleared: {error:#}"
+                ));
+                self.context.lose(end);
+            }
+            None => {}
+        }
     }
 }
 
@@ -659,6 +930,15 @@ fn lock_recovering<T>(mutex: &Mutex<T>, reset: impl FnOnce(&mut T)) -> MutexGuar
         mutex.clear_poison();
         guard
     })
+}
+
+/// Which kind of target decode produced the rows a draft ingests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetPhase {
+    /// Prompt prefill: context for the draft, not per-window draft work.
+    Prefill,
+    /// Token decode and verify windows.
+    Decode,
 }
 
 /// Rows of the last target decode that belong to one session.
@@ -687,6 +967,17 @@ impl<'a> DecodedRows<'a> {
             }
         } else {
             Self::trailing(0, count)
+        }
+    }
+
+    /// The first batch row and the number of rows.
+    fn span(&self) -> (usize, usize) {
+        match self {
+            Self::Trailing { first_row, count } => (*first_row, *count),
+            Self::At {
+                first_row,
+                positions,
+            } => (*first_row, positions.len()),
         }
     }
 
@@ -722,38 +1013,163 @@ impl StageSession {
 
     /// Drafts tokens that follow `anchor`, the token the target consumes
     /// next. Returns `None` when no draft is attached. A draft failure clears
-    /// the lane's draft cache and yields an empty proposal.
+    /// the lane's draft cache and yields an empty proposal, as does a draft
+    /// whose context is empty or has a gap.
     pub fn dflash_propose(
         &mut self,
         anchor: i32,
         max_tokens: usize,
     ) -> Result<Option<DFlashProposal>> {
-        let Some(link) = self.dflash.clone() else {
+        if self.dflash.is_none() {
+            return Ok(None);
+        }
+        let anchor_position = self.native_position()?;
+        self.dflash_propose_from(anchor, anchor_position, max_tokens)
+    }
+
+    /// Drafts tokens that follow `anchor` at `anchor_position`, for a split
+    /// final stage whose target has already decoded past the anchor: rows the
+    /// target verified beyond it are dropped from the draft first. Returns
+    /// `None` when no draft is attached.
+    pub fn dflash_propose_at(
+        &mut self,
+        anchor: i32,
+        anchor_position: u64,
+        max_tokens: usize,
+    ) -> Result<Option<DFlashProposal>> {
+        self.dflash_propose_from(anchor, anchor_position, max_tokens)
+    }
+
+    fn dflash_propose_from(
+        &mut self,
+        anchor: i32,
+        anchor_position: u64,
+        max_tokens: usize,
+    ) -> Result<Option<DFlashProposal>> {
+        let Some(link) = self.dflash.as_mut() else {
             return Ok(None);
         };
-        let anchor_position =
-            i32::try_from(self.native_position()?).context("session position exceeds i32")?;
         let started = Instant::now();
+        // Rows held back for this proposal go in first; their time is part
+        // of this block's draft time.
+        link.flush_pending();
+        link.stats.proposals += 1;
+        // A draft missing any earlier target row proposes noise; the target
+        // decodes this step serially instead.
+        if !link.context.can_propose(anchor_position) {
+            return Ok(Some(DFlashProposal {
+                tokens: Vec::new(),
+                proposal_compute_us: elapsed_us(started),
+            }));
+        }
+        let position = i32::try_from(anchor_position).context("anchor position exceeds i32")?;
+        let propose_started = Instant::now();
         let tokens = link.with_draft(|draft, seq_id| {
-            draft
-                .propose(seq_id, anchor_position, anchor, max_tokens)
-                .unwrap_or_else(|error| {
-                    write_native_log_note(format!("dflash proposal failed: {error:#}"));
-                    draft.clear(seq_id);
-                    Vec::new()
-                })
+            let tokens = draft.propose(seq_id, position, anchor, max_tokens);
+            if tokens.is_err() {
+                draft.clear(seq_id);
+            }
+            tokens
         });
+        let tokens = match tokens {
+            Some(Ok(tokens)) => {
+                // The draft dropped its rows past the anchor.
+                link.context.truncated(anchor_position);
+                Some(tokens)
+            }
+            Some(Err(error)) => {
+                write_native_log_note(format!(
+                    "dflash proposal failed, draft context cleared: {error:#}"
+                ));
+                link.context.cleared(anchor_position);
+                Some(Vec::new())
+            }
+            None => None,
+        };
+        link.stats.propose_us = link
+            .stats
+            .propose_us
+            .saturating_add(elapsed_us(propose_started));
         Ok(tokens.map(|tokens| DFlashProposal {
             tokens,
-            proposal_compute_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            proposal_compute_us: elapsed_us(started),
         }))
+    }
+
+    /// Holds back the feature rows of this session's next target decode until
+    /// its next proposal, instead of injecting them right after the decode. A
+    /// split final stage uses this to send stage 0 its verdict before it
+    /// spends any draft time. The draft sees the same rows in the same
+    /// batches either way, so proposals do not change.
+    pub fn dflash_defer_next_ingest(&mut self) {
+        if let Some(link) = self.dflash.as_mut() {
+            link.defer_next_ingest = true;
+        }
+    }
+
+    /// Whether feature rows are waiting for the next proposal.
+    pub fn dflash_ingest_pending(&self) -> bool {
+        self.dflash
+            .as_ref()
+            .is_some_and(|link| link.pending.is_some())
+    }
+
+    /// Where this session's draft spent its time since it was last activated.
+    /// `None` without a draft.
+    pub fn dflash_draft_stats(&self) -> Option<DFlashDraftStats> {
+        self.dflash.as_ref().map(|link| link.stats)
+    }
+
+    /// Feeds the target features of this session's rows in the last prefill
+    /// chunk to the draft. Their injection is not counted as draft time.
+    pub(crate) fn dflash_after_prefill(&mut self, rows: DecodedRows<'_>) {
+        self.dflash_after_target(rows, TargetPhase::Prefill);
     }
 
     /// Feeds the target features of this session's rows in the last decode to
     /// the draft.
     pub(crate) fn dflash_after_decode(&mut self, rows: DecodedRows<'_>) {
-        let Some(link) = self.dflash.clone() else {
+        self.dflash_after_target(rows, TargetPhase::Decode);
+    }
+
+    fn dflash_after_target(&mut self, rows: DecodedRows<'_>, phase: TargetPhase) {
+        let (span_row, span_count) = rows.span();
+        let remote = match self.dflash_split.as_mut() {
+            Some(split) => {
+                split.after_decode(span_row, span_count);
+                split.remote.take()
+            }
+            None => None,
+        };
+        // Earlier stages' rows are consumed in decode order; keep the rest
+        // for a decode that continues the same message.
+        if let Some((rows, consumed)) = &remote
+            && consumed + span_count < rows.rows()
+            && let Some(split) = self.dflash_split.as_mut()
+        {
+            split.remote = Some((rows.clone(), consumed + span_count));
+        }
+        if self.dflash.is_none() {
             return;
+        }
+        // The target's position after the decode bounds the rows it added.
+        let end = self.native_position().ok();
+        let Some(link) = self.dflash.as_mut() else {
+            return;
+        };
+        link.flush_pending();
+        let defer = std::mem::take(&mut link.defer_next_ingest);
+        let count = u64::try_from(span_count).unwrap_or(u64::MAX);
+        let Some(end) = end.filter(|end| *end >= count) else {
+            write_native_log_note("dflash feature injection skipped: target position unknown");
+            link.with_draft(|draft, seq_id| draft.clear(seq_id));
+            link.context.lose(count);
+            return;
+        };
+        let start = end - count;
+        let truncate_from = match link.context.plan_ingest(start, end) {
+            IngestPlan::Ingest { truncate_from } => truncate_from,
+            IngestPlan::Skip => return,
         };
         let (first_row, trailing_positions);
         let positions = match rows {
@@ -769,47 +1185,156 @@ impl StageSession {
                 count,
             } => {
                 first_row = row;
-                let Some(end) = self
-                    .native_position()
-                    .ok()
-                    .and_then(|position| i32::try_from(position).ok())
-                else {
-                    return;
-                };
+                let end = i32::try_from(end).unwrap_or(i32::MAX);
                 let count = i32::try_from(count).unwrap_or(i32::MAX);
                 trailing_positions = (end.saturating_sub(count)..end).collect::<Vec<_>>();
                 &trailing_positions
             }
         };
-        link.with_draft(|draft, seq_id| {
-            if let Err(error) = draft.ingest(seq_id, first_row, positions) {
-                write_native_log_note(format!("dflash feature injection failed: {error:#}"));
+        let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
+        if defer && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
+            let gathered =
+                link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
+            match gathered {
+                Some(Ok(features)) => {
+                    link.pending = Some(PendingIngest {
+                        features,
+                        positions: positions.to_vec(),
+                        end,
+                        truncate_from,
+                    });
+                    return;
+                }
+                Some(Err(error)) => {
+                    link.with_draft(|draft, seq_id| draft.clear(seq_id));
+                    link.finish_ingest(Some(Err(error)), end);
+                    return;
+                }
+                None => return,
+            }
+        }
+        let started = Instant::now();
+        let injected = link.with_draft(|draft, seq_id| {
+            if let Some(from) = truncate_from {
+                draft.truncate(seq_id, i32::try_from(from).unwrap_or(i32::MAX));
+            }
+            let injected = draft.ingest(seq_id, first_row, positions, remote);
+            if injected.is_err() {
                 draft.clear(seq_id);
             }
+            injected
         });
+        if phase == TargetPhase::Decode {
+            link.record_ingest(started);
+        }
+        link.finish_ingest(injected, end);
     }
 
     /// Keeps the draft cache no longer than a rewound target session.
     pub(crate) fn dflash_after_rewind(&mut self) {
-        let Some(link) = self.dflash.clone() else {
+        if self.dflash.is_none() {
+            return;
+        }
+        let position = self.native_position().ok();
+        let Some(link) = self.dflash.as_mut() else {
             return;
         };
-        let Some(position) = self
-            .native_position()
-            .ok()
-            .and_then(|position| i32::try_from(position).ok())
-        else {
-            link.with_draft(|draft, seq_id| draft.clear(seq_id));
-            return;
-        };
-        link.with_draft(|draft, seq_id| draft.truncate(seq_id, position));
+        link.flush_pending();
+        match position.and_then(|position| i32::try_from(position).ok().map(|p| (position, p))) {
+            Some((position, native)) => {
+                link.with_draft(|draft, seq_id| draft.truncate(seq_id, native));
+                link.context.truncated(position);
+            }
+            None => {
+                link.with_draft(|draft, seq_id| draft.clear(seq_id));
+                link.context.lose(0);
+            }
+        }
     }
 
     /// Forgets draft context after the target state was replaced without a
-    /// decode (reset, cache restore, or imported state).
+    /// decode (reset, cache restore, or imported state). A target restored
+    /// past position 0 leaves the draft without the restored prefix; it
+    /// drafts again from the rows decoded after it.
     pub(crate) fn dflash_after_replace(&mut self) {
-        if let Some(link) = self.dflash.clone() {
-            link.with_draft(|draft, seq_id| draft.clear(seq_id));
+        if let Some(split) = self.dflash_split.as_mut() {
+            split.clear();
+        }
+        if self.dflash.is_none() {
+            return;
+        }
+        let position = self.native_position().ok();
+        let Some(link) = self.dflash.as_mut() else {
+            return;
+        };
+        // The cache is cleared below; held-back rows are moot.
+        link.pending = None;
+        link.defer_next_ingest = false;
+        link.with_draft(|draft, seq_id| draft.clear(seq_id));
+        match position {
+            Some(position) => {
+                if position > 0 {
+                    write_native_log_note(format!(
+                        "dflash draft restarts at position {position}: the target was restored there, so the draft drafts from the rows decoded after it"
+                    ));
+                }
+                link.context.restarted_at(position);
+            }
+            None => link.context.lose(0),
+        }
+    }
+
+    /// Feature rows this session's draft lost and its context resets, since
+    /// the session was last activated. `None` without a draft.
+    pub fn dflash_health(&self) -> Option<DFlashHealth> {
+        self.dflash.as_ref().map(|link| link.context.health())
+    }
+
+    /// The draft's loss counters when they grew since the last call.
+    pub fn dflash_take_new_losses(&mut self) -> Option<DFlashHealth> {
+        self.dflash.as_mut()?.context.take_new_losses()
+    }
+
+    /// Starts this session's loss counters over, for a new request.
+    pub fn dflash_reset_health(&mut self) {
+        if let Some(link) = self.dflash.as_mut() {
+            link.context.reset_health();
+            link.stats = DFlashDraftStats::default();
+        }
+        if let Some(split) = self.dflash_split.as_mut() {
+            split.rows_dropped = 0;
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl StageSession {
+    /// A session without native state whose DFlash draft is already gone,
+    /// for tests of split DFlash bookkeeping above the runtime.
+    pub fn detached_dflash_for_test() -> Self {
+        Self {
+            raw: ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: true,
+            batched_activation_exports: true,
+            dflash: Some(DFlashSessionLink::detached(0)),
+            dflash_split: None,
+        }
+    }
+
+    /// The earlier stages' feature rows waiting for this session's next
+    /// decode.
+    pub fn dflash_remote_features_for_test(&self) -> Option<&DFlashFeatureRows> {
+        self.dflash_split
+            .as_ref()
+            .and_then(|split| split.remote.as_ref())
+            .map(|(rows, _)| rows)
+    }
+
+    /// Records that `rows` target rows never reached this session's draft.
+    pub fn dflash_lose_rows_for_test(&mut self, rows: u64) {
+        if let Some(link) = self.dflash.as_mut() {
+            link.context.lose(rows);
         }
     }
 }
@@ -837,7 +1362,8 @@ impl StageModel {
         // Every lane shares one target context; a scratch session exposes it
         // and refreshes any installed stage program for layer capture.
         let probe = self.create_session()?;
-        let target_ctx = unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) };
+        let target_ctx: *mut Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) }.cast();
         if target_ctx.is_null() {
             bail!("target session has no llama context");
         }
@@ -872,6 +1398,14 @@ fn refresh_target_program(session: &StageSession) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Every runtime the host ships carries the draft-context entry points,
+    /// whichever C++ decoration its toolchain gives the `llama-ext.h` ones.
+    #[test]
+    fn the_loaded_runtime_exports_the_draft_context_api() {
+        crate::test_support::require_native_runtime();
+        assert!(skippy_ffi::llama_draft::llama_draft_api().is_some());
+    }
+
     #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {
         let mutex = Mutex::new(vec![1, 2, 3]);
@@ -885,6 +1419,120 @@ mod tests {
 
         assert!(!mutex.is_poisoned());
         assert_eq!(*lock_recovering(&mutex, |_| unreachable!()), vec![7]);
+    }
+
+    fn drafting_session() -> StageSession {
+        StageSession {
+            raw: ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: true,
+            batched_activation_exports: true,
+            dflash: Some(DFlashSessionLink::detached(0)),
+            dflash_split: None,
+        }
+    }
+
+    #[test]
+    fn a_draft_without_context_proposes_nothing() {
+        let mut session = drafting_session();
+        // Position 9 with an empty draft: a restore, or rows that never came.
+        let proposal = session.dflash_propose_at(5, 9, 4).unwrap().unwrap();
+        assert!(proposal.tokens.is_empty());
+    }
+
+    #[test]
+    fn a_draft_with_a_gap_proposes_nothing_until_the_target_restarts() {
+        let mut session = drafting_session();
+        let link = session.dflash.as_mut().unwrap();
+        link.context.plan_ingest(0, 6);
+        link.context.ingested(6);
+        link.context.lose(1);
+        assert!(
+            session
+                .dflash_propose_at(5, 6, 4)
+                .unwrap()
+                .unwrap()
+                .tokens
+                .is_empty()
+        );
+        assert_eq!(
+            session.dflash_take_new_losses(),
+            Some(DFlashHealth {
+                feature_rows_missing: 1,
+                draft_context_resets: 1
+            })
+        );
+        session.dflash_reset_health();
+        assert_eq!(session.dflash_health(), Some(DFlashHealth::default()));
+    }
+
+    #[test]
+    fn draft_stats_count_every_block_and_start_over_per_request() {
+        let mut session = drafting_session();
+        assert_eq!(
+            session.dflash_draft_stats(),
+            Some(DFlashDraftStats::default())
+        );
+        session.dflash_propose_at(5, 9, 4).unwrap().unwrap();
+        session.dflash_propose_at(6, 10, 4).unwrap().unwrap();
+        let stats = session.dflash_draft_stats().unwrap();
+        assert_eq!(stats.proposals, 2);
+        assert_eq!(stats.draft_us(), stats.propose_us + stats.ingest_us);
+        session.dflash_reset_health();
+        assert_eq!(
+            session.dflash_draft_stats(),
+            Some(DFlashDraftStats::default())
+        );
+    }
+
+    #[test]
+    fn a_deferred_ingest_is_held_only_until_the_next_draft_operation() {
+        crate::test_support::require_native_runtime();
+        let mut session = drafting_session();
+        let rows = [0.5_f32; 4];
+        session.dflash.as_mut().unwrap().pending = Some(PendingIngest {
+            features: rows.to_vec(),
+            positions: vec![3, 4],
+            end: 5,
+            truncate_from: None,
+        });
+        assert!(session.dflash_ingest_pending());
+        // A proposal injects held rows first; with the draft gone they are
+        // simply dropped, never carried past it.
+        session.dflash_propose_at(5, 5, 4).unwrap();
+        assert!(!session.dflash_ingest_pending());
+
+        session.dflash.as_mut().unwrap().pending = Some(PendingIngest {
+            features: rows.to_vec(),
+            positions: vec![5, 6],
+            end: 7,
+            truncate_from: None,
+        });
+        session.dflash_defer_next_ingest();
+        // A replaced target state makes held rows moot, and the deferral too.
+        session.dflash_after_replace();
+        assert!(!session.dflash_ingest_pending());
+        assert!(!session.dflash.as_ref().unwrap().defer_next_ingest);
+    }
+
+    #[test]
+    fn a_stage_slice_must_hold_the_embeddings_the_draft_borrows() {
+        // A whole model loads every tensor.
+        assert_eq!(missing_borrowed_tensor(&[]), None);
+        // The final stage of an untied target: its layers and output head.
+        let final_stage = [
+            "blk.47.attn_norm.weight",
+            "output.weight",
+            "output_norm.weight",
+        ]
+        .map(String::from);
+        assert_eq!(
+            missing_borrowed_tensor(&final_stage),
+            Some("token_embd.weight")
+        );
+        let mut with_embeddings = final_stage.to_vec();
+        with_embeddings.push("token_embd.weight".to_string());
+        assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
     }
 
     #[test]

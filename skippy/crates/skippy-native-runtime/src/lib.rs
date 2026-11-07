@@ -6,6 +6,7 @@ pub mod host;
 mod load_plan;
 mod manifest;
 mod resolver;
+mod unused_gpu;
 
 pub use cache::{
     CachePrunePlan, GPU_BENCHMARK_TOOL_PATH, InstalledNativeRuntime, LenientInstalledScan,
@@ -29,6 +30,9 @@ pub use resolver::{
     NativeRuntimeSource, RuntimeSelection, evaluate_native_runtime_artifact,
     has_startup_compatibility_metadata, select_native_runtime,
     select_native_runtime_for_skippy_abi, select_native_runtime_from_artifacts,
+};
+pub use unused_gpu::{
+    UnusedGpuBackend, describe_unused_gpu_backends, describe_unused_gpus, unused_gpu_backends,
 };
 
 /// Native runtime artifact release, independent of the Mesh workspace package version.

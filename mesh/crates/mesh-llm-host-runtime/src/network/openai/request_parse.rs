@@ -40,9 +40,12 @@ pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
+const MAX_DOCUMENT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 const MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_AUDIO_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
+const MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES: usize =
+    MAX_DOCUMENT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
 const CRLF: &[u8] = b"\r\n";
 const LF: &[u8] = b"\n";
@@ -210,13 +213,18 @@ impl BufferedHttpRequest {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
     }
 
+    /// Document and typed image uploads are media, not model context.
+    pub fn is_document_ocr_request(&self) -> bool {
+        self.method == "POST" && is_document_ocr_path(&self.client_path)
+    }
+
     /// A System One read renders `state` into every question's own bounded
     /// sequence, so its body size does not describe the context it needs.
     pub fn is_system_one_request(&self) -> bool {
         self.method == "POST"
             && matches!(
                 self.client_path.split('?').next(),
-                Some("/systemone" | "/v1/decisions")
+                Some("/v1/systemone" | "/systemone" | "/v1/decisions")
             )
     }
 
@@ -472,7 +480,7 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?
                 .to_owned(),
         )
-    } else if is_audio_upload_path(&parsed.path) {
+    } else if is_audio_upload_path(&parsed.path) || is_document_ocr_path(&parsed.path) {
         match parsed.content_type.as_deref() {
             Some(content_type) => multipart_model_field(content_type, &body)
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
@@ -615,6 +623,20 @@ where
     Ok(raw[header_end..body_end].to_vec())
 }
 
+/// Forward canonical `/v1/systemone` requests on the legacy `/systemone`
+/// mount. Every System One-capable peer serves the legacy mount, while the
+/// canonical mount only exists on newer frontends; normalizing here keeps
+/// older peers reachable without per-peer negotiation. The client's
+/// original path is preserved on `client_path` for routing, capability
+/// checks, and telemetry.
+fn system_one_forward_path(path: &str) -> String {
+    match path.split_once('?') {
+        Some(("/v1/systemone", query)) => format!("/systemone?{query}"),
+        _ if path == "/v1/systemone" => "/systemone".to_string(),
+        _ => path.to_string(),
+    }
+}
+
 async fn rewrite_request_body_for_forwarding(
     path: &str,
     body: &[u8],
@@ -624,7 +646,7 @@ async fn rewrite_request_body_for_forwarding(
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
         request_object_request_ids: Vec::new(),
-        request_path: path.to_string(),
+        request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
     };
@@ -678,6 +700,12 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
             max_body_bytes: MAX_AUDIO_UPLOAD_BODY_BYTES,
             max_chunked_wire_bytes: MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES,
         }
+    } else if is_document_ocr_path(path_only) {
+        HttpReadLimits {
+            max_header_bytes: default.max_header_bytes,
+            max_body_bytes: MAX_DOCUMENT_UPLOAD_BODY_BYTES,
+            max_chunked_wire_bytes: MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES,
+        }
     } else {
         default
     }
@@ -688,6 +716,13 @@ fn is_audio_upload_path(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
         "/v1/audio/transcriptions" | "/v1/audio/translations"
+    )
+}
+
+fn is_document_ocr_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth"
     )
 }
 
@@ -1131,11 +1166,6 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
 pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {
     let header_end = raw.windows(4).position(|window| window == b"\r\n\r\n")? + 4;
     serde_json::from_slice(&raw[header_end..]).ok()
-}
-
-pub fn is_models_list_request(method: &str, path: &str) -> bool {
-    let path = path.split('?').next().unwrap_or(path);
-    method == "GET" && (path == "/v1/models" || path == "/models")
 }
 
 /// Legacy lifecycle paths formerly handled by the peer-reachable OpenAI

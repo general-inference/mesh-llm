@@ -22,8 +22,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+mod activation_codec;
 mod capacity_budget;
 mod content_attestation;
+mod coordinator_takeover;
 
 fn lifecycle_config() -> plugin::MeshConfig {
     toml::from_str(
@@ -223,6 +225,8 @@ layer_end = 40
             ctx_size_override: Some(1024),
             parallel_override: Some(1),
             placement: Default::default(),
+            final_stage_reserve_bytes: 0,
+            final_stage_kv_bytes_per_token: 0,
         },
         &assignments,
     )
@@ -457,6 +461,8 @@ fn resource_planner_keeps_canonical_coordinator_at_stage_zero() {
             ctx_size_override: Some(65_536),
             parallel_override: Some(1),
             placement: Default::default(),
+            final_stage_reserve_bytes: 0,
+            final_stage_kv_bytes_per_token: 0,
         },
         Some(canonical.node_id),
     )
@@ -1013,8 +1019,9 @@ fn runtime_model_planning_bytes_rejects_legacy_layer_package() {
     let dir = tempfile::tempdir().unwrap();
     write_test_layer_package(dir.path(), 4_800_000_000);
 
-    let error = runtime_model_planning_bytes(dir.path())
-        .unwrap_err()
+    let error = runtime_model_sizing(dir.path())
+        .err()
+        .expect("legacy layer package must be rejected")
         .to_string();
 
     assert!(error.contains("requires package schema 2"), "{error}");
@@ -1301,7 +1308,7 @@ fn split_participant_signature_includes_package_signals_for_claim_identity() {
 }
 
 #[test]
-fn new_split_generation_uses_automatic_lossless_activation_codecs() {
+fn new_split_generation_uses_f16_activations() {
     let generation = SplitTopologyGeneration::new(
         "topology-a".into(),
         "run-a".into(),
@@ -1312,11 +1319,11 @@ fn new_split_generation_uses_automatic_lossless_activation_codecs() {
 
     assert_eq!(
         generation.activation_codec,
-        skippy_protocol::StageActivationCodec::RawF32V1
+        skippy_protocol::StageActivationCodec::F16RneV1
     );
     assert_eq!(
         generation.activation_codec_policy,
-        skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1
+        skippy_protocol::StageActivationCodecPolicy::Fixed
     );
 }
 
@@ -1451,7 +1458,11 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
             let (request, resp) = match command {
-                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::Execute {
+                    request,
+                    requester: _,
+                    resp,
+                } => (request, resp),
                 skippy::StageControlCommand::ValidateLoad { resp, .. } => {
                     let _ = resp.send(None);
                     continue;
@@ -1475,6 +1486,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Load(load) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: false,
                         status: test_stage_status_from_load(load, skippy::StageRuntimeState::Ready),
                         error: None,
                     },
@@ -1482,6 +1494,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Stop(stop) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: true,
                         status: test_stage_status_from_stop(stop),
                         error: None,
                     },
@@ -2183,4 +2196,15 @@ async fn split_participants_exclude_a_blocked_peer() {
         .find(|e| e.node_id == peer_id)
         .expect("the operator's block is reported as an exclusion reason");
     assert_eq!(exclusion.reason.as_str(), "blocked");
+}
+
+#[test]
+fn a_split_drafts_short_dflash_blocks_unless_the_cap_is_configured() {
+    // Backend and catalog defaults are longer than a split's.
+    assert_eq!(split_dflash_max_draft_tokens(Some(15), false), Some(4));
+    assert_eq!(split_dflash_max_draft_tokens(None, false), Some(4));
+    assert_eq!(split_dflash_max_draft_tokens(Some(3), false), Some(3));
+    // A configured `draft_max_tokens` wins, longer or shorter.
+    assert_eq!(split_dflash_max_draft_tokens(Some(15), true), Some(15));
+    assert_eq!(split_dflash_max_draft_tokens(Some(2), true), Some(2));
 }

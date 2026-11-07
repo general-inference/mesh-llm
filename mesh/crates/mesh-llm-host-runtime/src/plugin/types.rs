@@ -9,7 +9,19 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PluginMeshEvent {
+    BoundOperation {
+        plugin_id: String,
+        generation: u64,
+        request: mesh_llm_plugin::operation_binding::BoundOperationRequest,
+        response_tx: oneshot::Sender<mesh_llm_plugin::operation_binding::BoundOperationResponse>,
+    },
     /// Host-private identity services use the authenticated connection name.
+    ModelRequirementsWithdraw { plugin_id: String },
+    ModelRequirement {
+        plugin_id: String,
+        request: proto::ModelRequirementRequest,
+        response_tx: oneshot::Sender<Result<proto::ModelRequirementResponse, proto::ErrorResponse>>,
+    },
     IdentityService {
         plugin_id: String,
         request: proto::RpcRequest,
@@ -67,6 +79,16 @@ pub enum PluginMeshEvent {
     /// withdraws what it announced for it. Not sent when the plugin restarts
     /// after a failure, so its key stays announced across a restart.
     PluginStopped { plugin_id: String },
+    /// The plugin process of `generation` started after the host's own
+    /// start: a restart after it exited or failed, or a lazy plugin's first
+    /// start. The node sends that process alone the mesh snapshot it would
+    /// otherwise only get from the next mesh change, then answers
+    /// `delivered`: `true` when the process took the whole snapshot.
+    PluginStarted {
+        plugin_id: String,
+        generation: u64,
+        delivered: oneshot::Sender<bool>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -90,6 +112,22 @@ pub struct RpcResult {
 pub(crate) type BridgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 pub trait PluginRpcBridge: Send + Sync {
+    fn handle_invocation_request(
+        &self,
+        plugin_name: String,
+        request: proto::RpcRequest,
+    ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+        self.handle_request(plugin_name, request.method, request.params_json)
+    }
+
+    fn handle_invocation_notification(
+        &self,
+        plugin_name: String,
+        notification: proto::RpcNotification,
+    ) -> BridgeFuture<()> {
+        self.handle_notification(plugin_name, notification.method, notification.params_json)
+    }
+
     fn handle_request(
         &self,
         plugin_name: String,
@@ -238,6 +276,7 @@ impl PluginCapabilityProvider {
 pub struct InferenceEndpointRoute {
     pub plugin_name: String,
     pub endpoint_id: String,
+    pub protocol: Option<String>,
     pub address: String,
     pub models: Vec<String>,
 }

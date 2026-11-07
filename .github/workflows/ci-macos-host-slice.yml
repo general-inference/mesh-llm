@@ -69,6 +69,10 @@ permissions:
   packages: read
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "true"
@@ -111,7 +115,7 @@ jobs:
     needs: runner_policy
     if: ${{ inputs.hosts_matrix != '[]' }}
     runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}

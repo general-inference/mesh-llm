@@ -8,9 +8,11 @@ fn private_host_mode() -> PluginHostMode {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_startup_policy_is_resolved() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "metrics".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -21,6 +23,7 @@ fn external_plugin_startup_policy_is_resolved() {
             command: Some("mesh-llm-plugin-metrics".into()),
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: PluginStartupConfig {
                 connect_timeout_secs: Some(75),
@@ -47,9 +50,11 @@ fn external_plugin_startup_policy_is_resolved() {
 }
 
 #[test]
+#[serial_test::serial]
 fn optional_missing_installed_plugin_becomes_inactive_summary() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "missing-optional".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -60,6 +65,7 @@ fn optional_missing_installed_plugin_becomes_inactive_summary() {
             command: None,
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: PluginStartupConfig {
                 optional: true,
@@ -103,15 +109,18 @@ fn optional_missing_installed_plugin_becomes_inactive_summary() {
 async fn required_plugin_load_failure_stops_manager_startup() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "broken".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: vec!["--stdio".into()],
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),
@@ -173,27 +182,33 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
     let specs = ResolvedPlugins {
         externals: vec![
             ExternalPluginSpec {
+                operation_bindings: Vec::new(),
                 openai_exchange_grant: None,
                 name: "first".into(),
                 command: String::new(),
                 args: Vec::new(),
                 url: Some(format!("test+tcp://{address}")),
                 env: BTreeMap::new(),
+                settings: Default::default(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
+                endpoint_models: None,
                 installed_metadata: None,
             },
             ExternalPluginSpec {
+                operation_bindings: Vec::new(),
                 openai_exchange_grant: None,
                 name: "broken".into(),
                 command: "mesh-llm-definitely-missing-plugin-binary".into(),
                 args: Vec::new(),
                 url: None,
                 env: BTreeMap::new(),
+                settings: Default::default(),
                 startup: PluginStartupOptions::default(),
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
+                endpoint_models: None,
                 installed_metadata: None,
             },
         ],
@@ -218,18 +233,21 @@ async fn required_plugin_failure_rolls_back_plugins_loaded_earlier() {
 async fn optional_plugin_load_failure_becomes_inactive_summary() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "optional-broken".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 ..PluginStartupOptions::default()
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),
@@ -261,18 +279,21 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
     let address = listener.local_addr().expect("listener address");
     drop(listener);
     let remote_spec = |name: &str, optional| ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.into(),
         command: String::new(),
         args: Vec::new(),
         url: Some(format!("tcp://{address}")),
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional,
             ..PluginStartupOptions::default()
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     };
 
@@ -309,12 +330,14 @@ async fn remote_connect_failures_honor_required_and_optional_policy() {
 async fn lazy_start_plugin_does_not_block_manager_startup() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "lazy".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 lazy_start: true,
@@ -322,6 +345,7 @@ async fn lazy_start_plugin_does_not_block_manager_startup() {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
         }],
         inactive: Vec::new(),

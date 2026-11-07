@@ -428,11 +428,25 @@ pub fn run_native_runtime_doctor(
         .count();
     let readiness =
         native_runtime_doctor_readiness(selected.map(|runtime| runtime.native_runtime_id.as_str()));
+    let warnings = selected_candidate
+        .as_ref()
+        .map(|candidate| {
+            unused_gpu_warnings(
+                &installed,
+                &profile,
+                selected_mesh_version,
+                skippy_abi_version,
+                &runtime_selection,
+                &candidate.artifact,
+            )
+        })
+        .unwrap_or_default();
 
     let report = NativeRuntimeDoctorReport {
         healthy: readiness.healthy,
         status: readiness.status,
         blockers: readiness.blockers,
+        warnings,
         recommendations: readiness.recommendations,
         running_mesh_version: CURRENT_MESH_VERSION.to_string(),
         selected_mesh_version: selected_mesh_version.to_string(),
@@ -460,6 +474,34 @@ pub fn run_native_runtime_doctor(
         );
     }
     Ok(())
+}
+
+/// Detected GPU backends that the `selected` runtime leaves unused, naming the
+/// runtimes of the selected version that don't fit and why, including those
+/// startup skips for missing compatibility metadata.
+fn unused_gpu_warnings(
+    installed: &[skippy_native_runtime::InstalledNativeRuntime],
+    profile: &skippy_native_runtime::HostRuntimeProfile,
+    mesh_version: &str,
+    skippy_abi_version: Option<&str>,
+    selection: &RuntimeSelection,
+    selected: &skippy_native_runtime::NativeRuntimeArtifact,
+) -> Vec<String> {
+    let artifacts = installed
+        .iter()
+        .filter(|runtime| runtime.release_version == mesh_version)
+        .map(|runtime| runtime.manifest.runtime.clone())
+        .collect::<Vec<_>>();
+    skippy_native_runtime::describe_unused_gpus(
+        &artifacts,
+        profile,
+        mesh_version,
+        skippy_abi_version,
+        selection,
+        selected,
+    )
+    .into_iter()
+    .collect()
 }
 
 pub fn native_runtime_selection(
@@ -529,6 +571,76 @@ mod tests {
             sha256: None,
             signature: None,
         }
+    }
+
+    #[test]
+    fn doctor_names_the_rejected_cuda_runtime_beside_the_cpu_fallback() {
+        let profile = skippy_native_runtime::HostRuntimeProfile {
+            os: "linux".to_string(),
+            arch: "aarch64".to_string(),
+            target_triple: None,
+            glibc_version: Some("2.39".to_string()),
+            available_flavors: std::collections::BTreeSet::from([
+                skippy_native_runtime::NativeRuntimeBackendKind::Cpu,
+                skippy_native_runtime::NativeRuntimeBackendKind::Cuda,
+            ]),
+            gpus: Vec::new(),
+            cuda: Some(skippy_native_runtime::HostCudaProfile {
+                driver_max_major: Some(12),
+                ..Default::default()
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        let installed = |id: &str, backend: NativeRuntimeBackend| {
+            let mut runtime = available_runtime_artifact(id, Some("0.76.1"), "0.1.71");
+            runtime.platform.os = "linux".to_string();
+            runtime.platform.arch = "aarch64".to_string();
+            runtime.platform.min_glibc = Some("2.17".to_string());
+            runtime.backend = backend;
+            skippy_native_runtime::InstalledNativeRuntime {
+                release_version: "0.76.1".to_string(),
+                native_runtime_id: id.to_string(),
+                flavor: runtime.backend.kind.to_string(),
+                path: format!("/cache/0.76.1/{id}").into(),
+                manifest: NativeRuntimeManifest { runtime },
+            }
+        };
+        let cuda13 = NativeRuntimeBackend {
+            kind: skippy_native_runtime::NativeRuntimeBackendKind::Cuda,
+            cuda: Some(skippy_native_runtime::CudaRuntimeRequirements {
+                toolkit_major: 13,
+                min_driver: None,
+                gpu_arches: Vec::new(),
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        let runtimes = [
+            installed("cpu", NativeRuntimeBackend::cpu()),
+            installed("cuda13", cuda13),
+        ];
+
+        let warnings = unused_gpu_warnings(
+            &runtimes,
+            &profile,
+            "0.76.1",
+            Some("0.1.71"),
+            &RuntimeSelection::Recommended,
+            &runtimes[0].manifest.runtime,
+        );
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("cuda GPU detected, but its runtimes don't fit: cuda13 ("),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("CUDA driver too old"),
+            "{}",
+            warnings[0]
+        );
     }
 
     fn write_test_runtime(path: &Path, runtime_id: &str) {
@@ -777,6 +889,9 @@ mod tests {
 
     #[test]
     fn available_runtime_bundle_dirs_expand_a_product_root() {
+        skippy_runtime_install::rerun_without_bundle_env!(
+            available_runtime_bundle_dirs_expand_a_product_root
+        );
         let temp = tempfile::tempdir().unwrap();
         let product_root = temp.path().join("mesh-bundle");
         let runtime_dir = product_root.join("native-runtimes/runtime-a");
@@ -793,6 +908,9 @@ mod tests {
 
     #[test]
     fn doctor_discovery_includes_a_bundle_when_the_cache_is_empty() {
+        skippy_runtime_install::rerun_without_bundle_env!(
+            doctor_discovery_includes_a_bundle_when_the_cache_is_empty
+        );
         let temp = tempfile::tempdir().unwrap();
         let product_root = temp.path().join("mesh-bundle");
         let runtime_dir = product_root.join("native-runtimes/runtime-a");

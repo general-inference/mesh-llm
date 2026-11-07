@@ -1,7 +1,4 @@
 #![cfg(feature = "automation-contracts")]
-#[cfg(unix)]
-#[path = "migration_process/canary_heartbeat.rs"]
-mod canary_heartbeat;
 #[path = "migration_process/driver_expectations.rs"]
 mod driver_expectations;
 #[path = "migration_process/driver_tests.rs"]
@@ -27,8 +24,7 @@ mod pipe_fixture;
 #[cfg(unix)]
 #[path = "migration_process/probe.rs"]
 mod probe;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[cfg(unix)]
 #[path = "migration_process/readiness.rs"]
 mod readiness;

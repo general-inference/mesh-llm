@@ -22,6 +22,8 @@ fn resolve(
 
 #[test]
 fn explicit_dflash_uses_the_pinned_catalog_even_when_native_mtp_is_available() {
+    let _catalog =
+        super::dflash_catalog::with_test_pairings(super::dflash_catalog::bootstrap_pairings());
     let directory = tempfile::tempdir().unwrap();
     let model = directory.path().join("target.gguf");
     let fixture = temp_model_file_with_tensor_names(&["blk.40.nextn.weight"], Some(1));
@@ -37,26 +39,22 @@ fn explicit_dflash_uses_the_pinned_catalog_even_when_native_mtp_is_available() {
     )
     .unwrap();
     let spec = &resolved.speculative;
-    let pairing = spec.default_dflash.unwrap();
-    assert_eq!(
-        pairing.draft.repo,
-        "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp"
-    );
-    assert_eq!(
-        pairing.draft.revision,
-        "2aa57b642f211d2639083954c5b66d9c1ee503fc"
-    );
+    let chosen = spec.default_dflash.as_ref().unwrap();
+    let pairing = &chosen.pairing;
+    let expected =
+        super::dflash_catalog::pairing_for_target(&meta, cfg!(target_os = "macos")).unwrap();
+    assert_eq!(pairing, &expected.pairing);
     assert_eq!(spec.decode.requested_strategy, "dflash");
     assert_eq!(spec.decode.effective_strategy, "dflash");
     assert!(!spec.native_mtp_enabled);
     assert!(!spec.decode.native_mtp.enabled);
     assert_eq!(
         spec.decode.dflash.as_ref().unwrap().draft_model_path,
-        pairing.draft.cache_path()
+        super::dflash_draft_cache_path(&pairing.draft)
     );
     assert_eq!(
         spec.draft_max_tokens,
-        if cfg!(target_os = "macos") { 6 } else { 15 }
+        super::dflash::dflash_max_draft_tokens(0, Some(chosen))
     );
     assert!(spec.draft_model_path.is_none());
 
@@ -70,6 +68,8 @@ fn explicit_dflash_uses_the_pinned_catalog_even_when_native_mtp_is_available() {
 
 #[test]
 fn catalog_selection_refuses_disabled_mode_and_unknown_targets() {
+    let _catalog =
+        super::dflash_catalog::with_test_pairings(super::dflash_catalog::bootstrap_pairings());
     let model = temp_model_file_with_tensor_names(&[], None);
     for (config, meta, expected) in [
         (

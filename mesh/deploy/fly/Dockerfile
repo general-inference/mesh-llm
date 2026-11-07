@@ -29,6 +29,10 @@ COPY mesh/crates/mesh-llm-ui/ ./
 RUN VITE_APP_VERSION="${VITE_APP_VERSION:-$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')}" pnpm run build
 
 FROM debian:bookworm-slim AS builder
+ENV CARGO_PROFILE_DEV_DEBUG=0 \
+    CARGO_PROFILE_TEST_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_BENCH_DEBUG=0
 ARG TARGETARCH
 ARG SCCACHE_VERSION=0.16.0
 RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
@@ -52,11 +56,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY mesh/crates/ mesh/crates/
 COPY skippy/crates/ skippy/crates/
 COPY tools/xtask/ tools/xtask/
+COPY tools/trajectory-reader/ tools/trajectory-reader/
 COPY scripts/ scripts/
 COPY skippy/scripts/ skippy/scripts/
 COPY mesh/scripts/ mesh/scripts/
 COPY scripts/lib/ scripts/lib/
 COPY skippy/llama_cpp/upstream.txt skippy/llama_cpp/upstream.txt
+COPY skippy/llama_cpp/whisper-upstream.txt skippy/llama_cpp/whisper-upstream.txt
 COPY skippy/llama_cpp/patches/ skippy/llama_cpp/patches/
 RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
     scripts/prepare-llama.sh pinned && \

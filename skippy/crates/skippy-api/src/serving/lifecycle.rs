@@ -258,6 +258,7 @@ mod tests {
             request.openai.speculative.dflash = Some(skippy_serving::DFlashProposalConfig {
                 draft_model_path: "draft-dflash.gguf".into(),
                 max_draft_tokens: Some(cap),
+                target_layers: Vec::new(),
             });
             request.size_recurrent_rollback();
             assert_eq!(
@@ -284,6 +285,7 @@ mod tests {
     fn stage_zero_with_an_upstream_is_rejected_before_native_loading() {
         let mut request = request();
         request.runtime.config.upstream = Some(skippy_protocol::PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "foreign-stage".into(),
             stage_index: 1,
             endpoint: "127.0.0.1:19001".into(),

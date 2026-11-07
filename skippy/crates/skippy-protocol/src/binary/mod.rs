@@ -4,6 +4,9 @@ mod codec;
 mod readout;
 mod types;
 
+#[cfg(test)]
+mod frame_budget_tests;
+
 pub use activation::{
     activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
     encode_activation_frame, encode_raw_activation_frame, select_lossless_activation_codec,
@@ -11,11 +14,11 @@ pub use activation::{
 pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
-    recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,
-    send_reply_message, send_reply_predicted, send_reply_predicted_tokens_with_stats,
-    send_reply_predicted_tokens_with_window_and_stats, send_reply_predicted_with_stats,
-    send_reply_predicted_with_tokens_and_stats, send_reply_predicted_with_tokens_window_and_stats,
-    write_stage_message,
+    read_stage_message_for_codec_policy_with_frame_budget, recv_ready, recv_reply, send_ready,
+    send_reply_ack, send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
+    send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
+    send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
+    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
 pub use types::sampling_flags;
 pub use types::{
@@ -25,12 +28,12 @@ pub use types::{
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_ACTIVATION_FRAME_VERSION, STAGE_ACTIVATION_IDENTITY_BYTES,
-    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-    STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
-    StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    WireStagePhase, state_flags,
+    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_REPLY_STATS_FIELD_COUNT,
+    STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
+    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageActivationDesc, StageActivationFrame,
+    StageActivationPartDesc, StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats,
+    StageReplyWindow, StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage,
+    WireMessageKind, WireReplyKind, WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -232,6 +235,129 @@ mod tests {
     }
 
     #[test]
+    fn dflash_health_rides_a_reply_after_its_stats() {
+        let stats = StageReplyStats {
+            kv_lookup_hits: 1,
+            dflash_feature_rows_missing: 37,
+            dflash_draft_context_resets: 2,
+            verify_rollbacks_in_place: 11,
+            verify_rollbacks_checkpointed: 3,
+            dflash_draft_us: 41_000,
+            dflash_drafts: 12,
+            dflash_ingest_us: 3_500,
+            ..StageReplyStats::default()
+        };
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 5,
+            predicted_tokens: vec![5],
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![6, 7],
+                proposal_compute_us: 9,
+                follows_correction: true,
+            }),
+            window: StageReplyWindow::default(),
+            stats,
+            log_probabilities: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
+        bytes.extend_from_slice(&[0xAB; 4]);
+        let mut cursor = Cursor::new(bytes);
+
+        let decoded = recv_reply(&mut cursor).unwrap();
+
+        assert_eq!(decoded, reply);
+        // The counters were consumed, and nothing after them.
+        assert_eq!(cursor.position() as usize, cursor.get_ref().len() - 4);
+    }
+
+    #[test]
+    fn an_early_verdict_says_its_draft_follows() {
+        let verdict = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 5,
+            predicted_tokens: vec![5, 6],
+            native_mtp_draft: None,
+            window: StageReplyWindow {
+                window_id: 9,
+                draft_follows: true,
+            },
+            stats: StageReplyStats::default(),
+            log_probabilities: Vec::new(),
+        };
+        let draft = StageReply {
+            predicted_tokens: Vec::new(),
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![7, 8, 9],
+                proposal_compute_us: 3_000,
+                follows_correction: false,
+            }),
+            window: StageReplyWindow {
+                window_id: 9,
+                draft_follows: false,
+            },
+            stats: StageReplyStats {
+                dflash_draft_us: 3_000,
+                dflash_drafts: 1,
+                ..StageReplyStats::default()
+            },
+            ..verdict.clone()
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &verdict).unwrap();
+        send_reply_message(&mut bytes, &draft).unwrap();
+        let mut cursor = Cursor::new(bytes);
+
+        assert_eq!(recv_reply(&mut cursor).unwrap(), verdict);
+        assert_eq!(recv_reply(&mut cursor).unwrap(), draft);
+        assert_eq!(cursor.position() as usize, cursor.get_ref().len());
+    }
+
+    #[test]
+    fn early_verdict_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        assert!(!state.split_dflash_early_verdict());
+        state.set_split_dflash(true);
+        state.set_split_dflash_early_verdict(true);
+        assert!(state.split_dflash_early_verdict());
+        state.set_native_mtp_draft_tokens(4);
+        assert!(state.split_dflash() && state.split_dflash_early_verdict());
+        state.set_split_dflash_early_verdict(false);
+        assert!(!state.split_dflash_early_verdict() && state.split_dflash());
+    }
+
+    #[test]
+    fn dflash_counters_merge_as_cumulative_maxima() {
+        let mut stats = StageReplyStats {
+            dflash_feature_rows_missing: 10,
+            dflash_draft_context_resets: 1,
+            ..StageReplyStats::default()
+        };
+        stats.merge(StageReplyStats {
+            dflash_feature_rows_missing: 4,
+            dflash_draft_context_resets: 3,
+            ..StageReplyStats::default()
+        });
+        assert_eq!(stats.dflash_feature_rows_missing, 10);
+        assert_eq!(stats.dflash_draft_context_resets, 3);
+        assert!(!stats.is_empty());
+    }
+
+    #[test]
+    fn split_dflash_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
+        assert!(!state.split_dflash());
+        state.set_split_dflash(true);
+        assert!(state.split_dflash());
+        state.set_native_mtp_draft_tokens(4);
+        assert!(state.split_dflash());
+        state.set_split_dflash(false);
+        assert!(!state.split_dflash());
+        assert_eq!(state.native_mtp_draft_tokens(), Some(4));
+    }
+
+    #[test]
     fn prefill_compute_calibration_ignores_short_tail_overhead() {
         let mut stats = StageReplyStats::default();
         stats.observe_prefill_compute(1, 48_000, 128);
@@ -260,7 +386,10 @@ mod tests {
         send_reply_predicted_tokens_with_window_and_stats(
             &mut bytes,
             &[1, 2, 3],
-            StageReplyWindow { window_id: 42 },
+            StageReplyWindow {
+                window_id: 42,
+                draft_follows: false,
+            },
             StageReplyStats::default(),
         )
         .unwrap();
@@ -455,12 +584,7 @@ mod tests {
         let frame = multipart_activation_frame(2);
         let i32_part = frame.desc.parts[1];
         let i32_start = usize::try_from(i32_part.payload_offset).unwrap();
-        for codec in [
-            crate::StageActivationCodec::RawF32V1,
-            crate::StageActivationCodec::F16RneV1,
-            crate::StageActivationCodec::Bf16RneV1,
-            crate::StageActivationCodec::S8RowF32RneV1,
-        ] {
+        for codec in crate::StageActivationCodec::ALL {
             let message = activation_message(&frame, codec);
             assert_eq!(
                 message.activation.len(),
@@ -476,6 +600,100 @@ mod tests {
                 &frame.payload[i32_start..],
                 "non-F32 parts must stay byte-exact for {codec:?}"
             );
+        }
+    }
+
+    /// One F32 part of `columns` values per token, tokens along `token_axis`.
+    fn f32_activation_frame(
+        columns: i64,
+        token_count: u32,
+        token_axis: i32,
+        values: &[f32],
+    ) -> StageActivationFrame {
+        let tokens = i64::from(token_count);
+        let dimensions = if token_axis == 0 {
+            [tokens, columns, 1, 1]
+        } else {
+            [columns, tokens, 1, 1]
+        };
+        let payload = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let bytes = u64::try_from(payload.len()).unwrap();
+        let inner = u64::try_from(dimensions[0]).unwrap() * 4;
+        StageActivationFrame {
+            desc: StageActivationDesc {
+                version: STAGE_ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count,
+                sequence_count: 1,
+                payload_bytes: bytes,
+                frontier_identity: [0x11; STAGE_ACTIVATION_IDENTITY_BYTES],
+                parts: vec![StageActivationPartDesc {
+                    identity: [0x22; STAGE_ACTIVATION_IDENTITY_BYTES],
+                    ggml_type: 0,
+                    rank: 2,
+                    token_axis,
+                    flags: 0,
+                    dimensions,
+                    byte_strides: [4, inner, bytes, bytes],
+                    payload_offset: 0,
+                    payload_bytes: bytes,
+                }],
+            },
+            payload,
+        }
+    }
+
+    fn decoded_f32(codec: crate::StageActivationCodec, frame: &StageActivationFrame) -> Vec<f32> {
+        let encoded = encode_activation_frame(codec, &frame.desc, &frame.payload).unwrap();
+        decode_activation_frame(codec, &encoded)
+            .unwrap()
+            .payload
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect()
+    }
+
+    #[test]
+    fn fp8_codecs_decode_each_token_independently_of_its_neighbours() {
+        // Token 0 is small; token 1 carries an outlier. A scale shared across
+        // tokens would quantize token 0 against the outlier.
+        let token0 = [0.01_f32; 32];
+        let mut token1 = [1.0_f32; 32];
+        token1[0] = 1000.0;
+        let both = token0.iter().chain(&token1).copied().collect::<Vec<_>>();
+        for codec in crate::StageActivationCodec::ALL
+            .into_iter()
+            .filter(|codec| codec.is_fp8())
+        {
+            let alone = decoded_f32(codec, &f32_activation_frame(32, 1, 1, &token0));
+            let together = decoded_f32(codec, &f32_activation_frame(32, 2, 1, &both));
+            assert_eq!(&together[..32], alone.as_slice(), "{codec:?}");
+        }
+    }
+
+    #[test]
+    fn fp8_codecs_refuse_parts_with_tokens_along_the_first_dimension() {
+        // Rows run along the first dimension, so with the token axis there one
+        // row, and its scale, would span several tokens.
+        let values = [0.01_f32, 1000.0, 0.02, 1.0];
+        let frame = f32_activation_frame(2, 2, 0, &values);
+        for codec in crate::StageActivationCodec::ALL {
+            if codec.is_fp8() {
+                assert_invalid_data(
+                    encode_activation_frame(codec, &frame.desc, &frame.payload),
+                    "FP8 activation codecs need the token axis outside the first dimension",
+                );
+                assert!(activation_frame_wire_bytes(codec, &frame.desc).is_err());
+            } else {
+                assert_eq!(decoded_f32(codec, &frame).len(), values.len(), "{codec:?}");
+            }
         }
     }
 
@@ -1264,5 +1482,101 @@ mod tests {
             ]
             .contains(&selected)
         );
+    }
+
+    // #2218 regression coverage: the documented stage frame budget must reject
+    // declared lengths before any frame buffer is committed.
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_state_import_before_payload() {
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        let bytes = stage_frame_prefix(WireMessageKind::StateImport, 9 * 1024 * 1024, 0, 0, state);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "state import byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_activation_payload_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.source_stage_index = 0;
+        let mut bytes = Vec::new();
+        push_i32(&mut bytes, WireMessageKind::VerifyWindow as i32);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 1);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 0);
+        push_state_header(&mut bytes, state);
+        push_i32(&mut bytes, 9 * 1024 * 1024); // declared activation wire bytes
+        push_u64(&mut bytes, 7);
+        push_u64(&mut bytes, 11);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "activation payload byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_sideband_counts_before_payload() {
+        // 1M + 1M sideband values declare exactly 8 MiB of sideband bytes on top
+        // of the fixed header: past the 8 MiB frame budget, inside the count caps.
+        let state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        let bytes = stage_frame_prefix(
+            WireMessageKind::VerifyWindow,
+            0,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            state,
+        );
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "sideband value count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_chat_metadata_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.flags |= super::state_flags::CHAT_SAMPLING_METADATA;
+        let mut bytes = stage_frame_prefix(WireMessageKind::VerifyWindow, 0, 0, 0, state);
+        bytes.extend_from_slice(&(9 * 1024 * 1024u32).to_le_bytes());
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "chat sampling metadata length exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_round_trips_in_budget_frames() {
+        let frame = multipart_activation_frame(2);
+        let message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        )
+        .expect("an in-budget frame must decode through the budgeted entry point");
+        assert_eq!(decoded.request_id, 7);
     }
 }

@@ -16,9 +16,11 @@ use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::attach_dflash_draft;
 use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
+use crate::frontend::generation::generation_admission_lane_count;
 use crate::frontend::generation::open_draft_runner;
 use crate::frontend::generation::prewarm_generation_sessions;
 use crate::frontend::iteration_scheduler::IterationScheduler;
+use crate::frontend::native_mtp::apply_native_mtp_draft_cap;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::frontend::prefill::PrefillChunkPolicyArgs;
 use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_proposal_limit};
@@ -89,6 +91,10 @@ pub struct EmbeddedOpenAiArgs {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Scope this backend's request defaults register under, so
+    /// [`replace_live_request_defaults`] only reaches the owner that asked.
+    /// `0` for backends nobody swaps live.
+    pub live_defaults_scope: u64,
     pub generation_concurrency: usize,
     pub continuous_batching: bool,
     /// Decode-wave groups for this frontend's dispatcher. `None` keeps the
@@ -187,6 +193,8 @@ pub struct EmbeddedOpenAiRouter {
 
 pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn InferenceBackend>,
+    #[cfg(test)]
+    stage_backend: Arc<StageOpenAiBackend>,
     pub model_id: String,
     pub thinking: Option<ThinkingControls>,
     pub generation_concurrency: usize,
@@ -226,15 +234,28 @@ fn embedded_openai_backend_with_scheduler(
     args: EmbeddedOpenAiArgs,
     iteration_scheduler: Option<IterationScheduler>,
 ) -> Result<EmbeddedOpenAiBackend> {
+    let state_kind = loaded_model_state_kind(Some(&args.runtime));
+    embedded_openai_backend_with_state_kind(args, iteration_scheduler, state_kind)
+}
+
+fn embedded_openai_backend_with_state_kind(
+    mut args: EmbeddedOpenAiArgs,
+    iteration_scheduler: Option<IterationScheduler>,
+    state_kind: Option<skippy_runtime::ModelStateKind>,
+) -> Result<EmbeddedOpenAiBackend> {
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
     if args.generation_concurrency == 0 {
         bail!("--generation-concurrency must be greater than zero");
     }
+    // Admission is measured against the loaded runtime, not the configured
+    // `lane_count`: an encoder-decoder model serves one lane however many the
+    // stage config asks for (#1954).
+    let admission_lane_count = generation_admission_lane_count(&args.runtime);
     ensure_generation_concurrency_fits_lanes(
         args.generation_concurrency,
-        args.config.lane_count,
+        admission_lane_count,
         "--generation-concurrency",
     )?;
     if args.draft_model_path.is_some() && args.speculative_window == 0 {
@@ -262,6 +283,7 @@ fn embedded_openai_backend_with_scheduler(
     {
         bail!("a DFlash draft cannot be combined with native MTP or a separate draft model");
     }
+    apply_native_mtp_draft_cap(&mut args.speculative, state_kind);
     attach_native_mtp_draft_model(
         args.native_mtp_draft_model_path.as_deref(),
         &args.runtime,
@@ -300,6 +322,15 @@ fn embedded_openai_backend_with_scheduler(
     // Render-only probe of the selected chat template, run once at load. This is
     // where every input is in hand: the loaded runtime, the stage config, and the
     // selected template. `/v1/models` publishes the result as `thinking`.
+    #[cfg(test)]
+    let modelless = args
+        .runtime
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_modelless_for_test();
+    #[cfg(test)]
+    let thinking = (!modelless).then(|| probe_thinking_controls(&args));
+    #[cfg(not(test))]
     let thinking = Some(probe_thinking_controls(&args));
     let model_id = ModelId::new(
         args.model_id
@@ -349,6 +380,18 @@ fn embedded_openai_backend_with_scheduler(
     );
     args.telemetry
         .emit("stage.openai_server_start", server_start_attrs);
+    #[cfg(test)]
+    if !modelless {
+        prewarm_generation_sessions(
+            &args.runtime,
+            args.generation_concurrency,
+            &args.telemetry,
+            &args.config,
+            "stage.openai_runtime_prewarm",
+        )
+        .context("prewarm embedded OpenAI runtime sessions")?;
+    }
+    #[cfg(not(test))]
     prewarm_generation_sessions(
         &args.runtime,
         args.generation_concurrency,
@@ -409,14 +452,18 @@ fn embedded_openai_backend_with_scheduler(
         .context("load decision calibration beside model")?
         .flatten()
         .map(std::sync::Arc::new);
-    let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
+    let stage_backend = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
-        request_defaults: args.request_defaults,
+        request_defaults: super::LiveRequestDefaults::register(
+            args.live_defaults_scope,
+            model_id.as_str(),
+            args.request_defaults,
+        ),
         thinking: thinking.clone(),
         ctx_size,
         mode,
@@ -470,6 +517,7 @@ fn embedded_openai_backend_with_scheduler(
         iteration_scheduler,
         decision_calibration,
     });
+    let backend: Arc<dyn InferenceBackend> = stage_backend.clone();
     let openai_guardrails = args
         .openai_guardrails
         .as_ref()
@@ -483,6 +531,8 @@ fn embedded_openai_backend_with_scheduler(
 
     Ok(EmbeddedOpenAiBackend {
         backend,
+        #[cfg(test)]
+        stage_backend,
         model_id,
         thinking,
         generation_concurrency: args.generation_concurrency,
@@ -643,6 +693,30 @@ mod tests {
     use crate::serving_hooks::ModelServingHooks;
     use std::io::Write;
     use std::sync::Arc;
+
+    #[test]
+    fn backend_setup_stores_capped_native_mtp_plan() {
+        for (state_kind, expected_min, expected_max) in [
+            (skippy_runtime::ModelStateKind::Hybrid, 1, 1),
+            (skippy_runtime::ModelStateKind::Recurrent, 1, 1),
+            (skippy_runtime::ModelStateKind::Dense, 2, 3),
+        ] {
+            let mut args =
+                crate::frontend::tests::enc_dec_lane_admission::modelless_stage_openai_args();
+            args.generation_concurrency = 1;
+            args.native_mtp_enabled = true;
+            args.speculative.native_mtp.enabled = true;
+            args.speculative.native_mtp.max_draft_tokens = 3;
+            args.speculative.native_mtp.min_draft_tokens = 2;
+            let binding =
+                super::embedded_openai_backend_with_state_kind(args, None, Some(state_kind))
+                    .expect("create backend with recurrent model state");
+            let plan = &binding.stage_backend.speculative.native_mtp;
+            assert!(plan.enabled);
+            assert_eq!(plan.min_draft_tokens, expected_min, "{state_kind:?}");
+            assert_eq!(plan.max_draft_tokens, expected_max, "{state_kind:?}");
+        }
+    }
 
     #[test]
     fn generation_receipts_require_local_single_stage_topology() {

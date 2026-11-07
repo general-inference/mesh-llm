@@ -30,6 +30,12 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
                 meta.parameter_size =
                     read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
             }
+            "general.basename" => {
+                meta.basename = read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
+            }
+            "general.name" => {
+                meta.name = read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
+            }
             "tokenizer.ggml.model" => {
                 meta.tokenizer_model_name =
                     read_gguf_value_as_string_opt(&mut reader, value_type).ok()??;
@@ -171,6 +177,14 @@ mod tests {
         string(bytes, "future");
     }
 
+    /// Parallel tests share the temp dir and macOS clocks tick in microseconds,
+    /// so a timestamp alone can name two tests' files identically.
+    fn unique_suffix() -> String {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{}-{n}", std::process::id())
+    }
+
     fn metadata(
         fields: &[(&str, u32)],
         architecture_first: Option<bool>,
@@ -191,10 +205,7 @@ mod tests {
         if architecture_first == Some(false) {
             architecture(&mut bytes);
         }
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let unique = unique_suffix();
         let path = std::env::temp_dir().join(format!("gguf-namespace-{unique}.gguf"));
         std::fs::write(&path, bytes).unwrap();
         let result = scan_gguf_compact_meta(&path);
@@ -216,10 +227,7 @@ mod tests {
         for layer in [2i32, 6, 30] {
             bytes.extend_from_slice(&layer.to_le_bytes());
         }
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let unique = unique_suffix();
         let path = std::env::temp_dir().join(format!("gguf-dflash-layers-{unique}.gguf"));
         std::fs::write(&path, bytes).unwrap();
         let layers = scan_gguf_dflash_target_layers(&path);

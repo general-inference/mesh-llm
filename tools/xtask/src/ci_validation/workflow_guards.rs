@@ -66,12 +66,13 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             .to_owned();
         let source = std::fs::read_to_string(&path)?;
         shell::check_expressions(&source).map_err(|error| format!("{name}: {error}"))?;
-        let document = if name == "llama-upstream-canary.yml" {
-            workflow_yaml::parse_resolved_aliases(&source)
-        } else {
-            workflow_yaml::parse(&source)
-        }
-        .map_err(|error| format!("{name}: {error}"))?;
+        let document =
+            if name == "llama-upstream-canary.yml" || name == "llama-canary-family-pass.yml" {
+                workflow_yaml::parse_resolved_aliases(&source)
+            } else {
+                workflow_yaml::parse(&source)
+            }
+            .map_err(|error| format!("{name}: {error}"))?;
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }
@@ -123,6 +124,10 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     let configure =
         std::fs::read_to_string(root.join(".github/actions/configure-sccache-gha/action.yml"))?;
     cache_evidence::configure_action(&workflow_yaml::parse(&configure)?)?;
+    let runtime_input = std::fs::read_to_string(
+        root.join(".github/actions/prepare-native-runtime-input/action.yml"),
+    )?;
+    cache_evidence::runtime_input_action(&workflow_yaml::parse(&runtime_input)?)?;
     for name in ["restore-windows-abi-cache", "setup-windows-rocm-sdk"] {
         let source =
             std::fs::read_to_string(root.join(format!(".github/actions/{name}/action.yml")))?;

@@ -459,8 +459,8 @@ async fn large_tokenize_request_routes_by_expected_identity_without_parsing_chat
     assert_eq!(&request.raw[forwarded_body_start..], body.as_slice());
 }
 
-// The paid path resolves the backend by this mapping: a catalog/HF-ref model
-// is priced under its public ID but registered under an internal one.
+// Gate plugins key their terms by this mapping: a catalog/HF-ref model is
+// advertised under its public ID but registered under an internal one.
 #[test]
 fn public_catalog_ref_resolves_to_internal_served_name() {
     let internal = "local-gguf/sha256-abc".to_owned();
@@ -652,6 +652,52 @@ async fn test_read_http_request_preserves_client_path_for_responses_capture() {
     assert_eq!(request.client_path, "/v1/responses?foo=1");
 }
 #[tokio::test]
+/// The canonical System One mount is forwarded on the legacy mount, which
+/// every System One-capable peer serves; the client path is preserved.
+async fn test_read_http_request_forwards_v1_systemone_on_legacy_mount() {
+    let body = br#"{"model":"openjev-latest","state":"s","questions":{}}"#;
+    for (client_path, forwarded_path) in [
+        ("/v1/systemone", "/systemone"),
+        ("/v1/systemone?trace=1", "/systemone?trace=1"),
+        ("/systemone", "/systemone"),
+    ] {
+        let request = format!(
+            "POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            client_path,
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+
+        let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+        assert_eq!(
+            request.path, forwarded_path,
+            "forwarded path for {client_path}"
+        );
+        assert_eq!(request.client_path, client_path);
+    }
+}
+
+#[tokio::test]
+/// Canonical `/v1/systemone` is normalized to the legacy `/systemone` mount
+/// for forwarding so older System One peers stay reachable, while the
+/// client path is preserved for routing, capability checks, and telemetry.
+async fn test_read_http_request_forwards_canonical_systemone_on_legacy_mount() {
+    let body = br#"{"model":"openjev-latest","state":"s","questions":{}}"#;
+    let request = format!(
+        "POST /v1/systemone?foo=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        std::str::from_utf8(body).unwrap()
+    );
+
+    let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+    assert_eq!(request.path, "/systemone?foo=1");
+    assert_eq!(request.client_path, "/v1/systemone?foo=1");
+    assert!(request.is_system_one_request());
+}
+
+#[tokio::test]
 async fn test_read_http_request_large_body_over_32k() {
     let large = "x".repeat(40_000);
     let body = serde_json::json!({
@@ -767,6 +813,29 @@ fn audio_upload_limits_are_path_scoped() {
 }
 
 #[tokio::test]
+async fn document_ocr_upload_extracts_model_from_multipart() {
+    let body = b"--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.png\"\r\n\r\nimage\r\n--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr--\r\n";
+    let headers = format!(
+        "POST /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let request = read_request_from_parts(vec![headers, body.to_vec()]).await;
+    assert_eq!(request.model_name.as_deref(), Some("datalab/indra-ocr"));
+    assert_eq!(request.body_len_bytes, body.len());
+}
+
+#[test]
+fn document_ocr_upload_limits_are_path_scoped() {
+    let limits = body_limits_for_path("/mesh/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
+    assert_eq!(limits.max_body_bytes, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
+    assert_eq!(
+        limits.max_chunked_wire_bytes,
+        MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES
+    );
+}
+
+#[tokio::test]
 async fn test_read_http_request_expect_100_continue() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -803,6 +872,8 @@ async fn test_read_http_request_expect_100_continue() {
     assert!(!raw.contains("Expect: 100-continue"));
     assert!(raw.contains("Connection: close"));
 }
+/// Keeps only the first HTTP request when a client pipelines another request
+/// on the same connection, then closes the connection to reject the remainder.
 #[tokio::test]
 async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     let request = read_request_from_parts(vec![
@@ -817,12 +888,8 @@ async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     assert!(raw.contains("Connection: close\r\n\r\n"));
 }
 
-/// `probe_http_response_local` uses a much longer timeout (10 min)
-/// than `probe_http_response` (5 min), because local prefill can
-/// legitimately take minutes under load.
-///
-/// This test sends a response after a 2s delay and verifies that
-/// `probe_http_response_local` waits for it (well within its 10-min
+/// Enables both Mesh and Skippy hook flags in an OpenAI chat request while
+/// keeping the rewritten body and `Content-Length` consistent.
 #[test]
 fn test_inject_skippy_hooks_enabled() {
     let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();

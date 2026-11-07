@@ -130,8 +130,10 @@ override its fields.
 given by `--draft-model-path` to the target model. The draft reads target
 hidden states, so it requires local serving of the complete target model, a
 DFlash GGUF trained for that target, and a runtime that exports the upstream
-draft-context API (not Windows builds). It drafts only for greedy requests
-that do not ask for logprobs; other requests decode normally. DSpark and
+draft-context API, under Itanium or MSVC C++ names. It drafts for greedy and sampled
+requests; requests that ask for logprobs decode normally. Block length adapts
+to measured verify cost and acceptance, up to `--dflash-max-tokens`;
+`SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap. DSpark and
 LiliCorr drafts are rejected. DFlash is opt-in: `--dflash-max-tokens` without
 `--speculative-strategy dflash` is an error, but a `--speculative-config` plan
 that already has a `dflash` field runs under `auto`.
@@ -371,7 +373,7 @@ with their runtime purpose; existing controls follow in the same sections.
 
 | CLI flag | TOML key | Purpose |
 |---|---|---|
-| `--activation-codec` | `activation_codec` | Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1 |
+| `--activation-codec` | `activation_codec` | Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1, fp8-e4m3-row-f32-rne-v1, fp8-e4m3-block32-e8m0-rne-v1, fp8-e5m2-row-f32-rne-v1 |
 | `--activation-codec-policy` | `activation_codec_policy` | Stage activation policy: fixed or auto-lossless-v1 |
 | `--config` | `config` | See `skippy serve --help` for values and defaults. |
 | `--topology` | `topology` | See `skippy serve --help` for values and defaults. |

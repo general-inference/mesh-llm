@@ -1,4 +1,5 @@
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 const MM_MODEL_ENV: &str = "SKIPPY_MM_MODEL";
 const MM_PROJECTOR_ENV: &str = "SKIPPY_MM_PROJECTOR";
@@ -208,6 +209,7 @@ fn multimodal_stage_config(
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
@@ -236,14 +238,14 @@ fn multimodal_stage_config(
     config
 }
 
-fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompletionRequest> {
+fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<GenerationRequest> {
     multimodal_chat_request_with_max_tokens(fixture, fixture.max_tokens)
 }
 
 fn multimodal_chat_request_with_max_tokens(
     fixture: &MultimodalSmokeFixture,
     max_tokens: u32,
-) -> Result<ChatCompletionRequest> {
+) -> Result<GenerationRequest> {
     let image = fs::read(&fixture.image_path)
         .with_context(|| format!("read smoke image {}", fixture.image_path.display()))?;
     let mime_type = match fixture
@@ -259,7 +261,7 @@ fn multimodal_chat_request_with_max_tokens(
         _ => "image/png",
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(image);
-    serde_json::from_value(json!({
+    serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "mm-smoke",
             "messages": [{
                 "role": "user",
@@ -274,11 +276,12 @@ fn multimodal_chat_request_with_max_tokens(
             "reasoning_format": "auto",
             "chat_template_kwargs": {"reasoning_strength": "none"}
         }))
+        .map(Into::into)
         .context("build multimodal smoke request")
 }
 
-fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
-    serde_json::from_value(json!({
+fn malformed_multimodal_chat_request() -> GenerationRequest {
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "mm-smoke",
         "messages": [{
             "role": "user",
@@ -293,9 +296,10 @@ fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
         "temperature": 0.0
     }))
     .expect("malformed multimodal request should deserialize")
+    .into()
 }
 
-fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
+fn validate_image_response(response: &GenerationResponse) -> Result<()> {
     let choice = response
         .choices
         .first()
@@ -353,7 +357,7 @@ fn image_response_validation_distinguishes_truncation_from_completion() {
         (Some("A red square"), None, "tool_calls", 16, false),
     ] {
         let finish_reason = serde_json::from_value(json!(finish)).expect("finish reason");
-        let mut response = ChatCompletionResponse::new_with_reason(
+        let mut response = GenerationResponse::new_with_reason(
             "fixture",
             "",
             Usage::new(10, tokens),
@@ -409,7 +413,7 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
     let probe = crate::thinking_probe::probe_loaded_model(
         &backend.runtime,
         &crate::thinking_probe::ThinkingProbeInputs {
-            defaults: &backend.request_defaults,
+            defaults: &backend.request_defaults.snapshot(),
             model_id: "mm-smoke",
             artifact: None,
             template_override: None,
@@ -551,6 +555,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         stage1_addr,
     );
     stage1_config.upstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         endpoint: stage0_addr.to_string(),
@@ -562,6 +567,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     stage0_config.n_batch = Some(256);
     stage0_config.n_ubatch = Some(32);
     stage0_config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-1".to_string(),
         stage_index: 1,
         endpoint: stage1_addr.to_string(),
@@ -585,6 +591,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             last_stage_decode_batch: None,
             continuous_batching: true,
             compute_meter: None,
+            split_dflash: None,
             openai: None,
             l3_manager: None,
         });
@@ -650,7 +657,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         config: stage0_config.clone(),
         model_id: "mm-smoke".to_string(),
         default_max_tokens: 16,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::EmbeddedStageZero {
@@ -761,7 +768,7 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
 
 #[test]
 fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -775,7 +782,8 @@ fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let media = skippy_inference_api::first_chat_media(&request.messages).expect("media");
 
     apply_chat_hook_outcome(
@@ -796,7 +804,7 @@ fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
 
 #[test]
 fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -813,7 +821,8 @@ fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let media = skippy_inference_api::first_chat_media(&request.messages).expect("media");
 
     apply_chat_hook_outcome(

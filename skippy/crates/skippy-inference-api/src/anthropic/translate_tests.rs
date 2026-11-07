@@ -1,10 +1,10 @@
 use super::*;
-use crate::chat::{ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta};
+use crate::generation::{GenerationDelta, GenerationEvent, GenerationEventChoice};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-fn chat_request_from(value: serde_json::Value) -> ChatCompletionRequest {
-    messages_request_to_chat_request(serde_json::from_value(value).expect("request parses"))
+fn chat_request_from(value: serde_json::Value) -> GenerationRequest {
+    messages_request_to_generation(serde_json::from_value(value).expect("request parses"))
         .expect("translates")
 }
 
@@ -79,7 +79,48 @@ fn claude_code_default_request_surface_translates() {
             .iter()
             .map(|message| message.role.as_str())
             .collect::<Vec<_>>(),
-        vec!["system", "user", "system"]
+        vec!["system", "user"]
+    );
+    let Some(MessageContent::Text(system)) = chat.messages[0].content.as_ref() else {
+        panic!("the folded system turn must stay a single text message");
+    };
+    assert!(system.contains("You are a Claude agent, built on Anthropic's Claude Agent SDK."));
+    assert!(
+        system.contains("Today's date is 2026-09-26."),
+        "the inline system turn is folded into the leading system message, got {system:?}"
+    );
+}
+
+#[test]
+fn inline_system_turns_fold_into_the_leading_system_message_in_order() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 20,
+        "system": "You are terse.",
+        "messages": [
+            {"role": "user", "content": "Say ok."},
+            {"role": "system", "content": "Environment: macOS."},
+            {"role": "assistant", "content": "ok"},
+            {"role": "system", "content": [
+                {"type": "text", "text": "Today is Monday."},
+                {"type": "text", "text": "Stay terse."}
+            ]}
+        ]
+    }));
+
+    assert_eq!(
+        chat.messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["system", "user", "assistant"]
+    );
+    let Some(MessageContent::Text(system)) = chat.messages[0].content.as_ref() else {
+        panic!("folded system content must be one text message");
+    };
+    assert_eq!(
+        system,
+        "You are terse.\nEnvironment: macOS.\nToday is Monday.\nStay terse."
     );
 }
 
@@ -120,7 +161,7 @@ fn tool_input_schema_is_required_and_must_be_an_object() {
             "tools": [{"name": "Read", "input_schema": schema}]
         }))
         .expect("request parses");
-        let error = messages_request_to_chat_request(request).expect_err("schema rejected");
+        let error = messages_request_to_generation(request).expect_err("schema rejected");
         assert!(error.to_string().contains("input_schema"), "{error}");
     }
 }
@@ -250,7 +291,7 @@ fn tools_and_tool_choice_translate_to_openai_shapes() {
 
 #[test]
 fn tool_choice_tool_requires_name() {
-    let result = messages_request_to_chat_request(
+    let result = messages_request_to_generation(
         serde_json::from_value(json!({
             "model": "m",
             "max_tokens": 4,
@@ -265,7 +306,7 @@ fn tool_choice_tool_requires_name() {
 
 #[test]
 fn empty_messages_rejected() {
-    let result = messages_request_to_chat_request(
+    let result = messages_request_to_generation(
         serde_json::from_value(json!({
             "model": "m",
             "max_tokens": 4,
@@ -287,13 +328,13 @@ fn response_translates_to_content_blocks_and_stop_reason() {
             "function": {"name": "get_weather", "arguments": "{\"city\":\"oslo\"}"}
         }]),
     );
-    let response = ChatCompletionResponse::from_parts(
+    let response = GenerationResponse::from_parts(
         "chatcmpl-x",
         1,
         "m",
-        vec![crate::chat::ChatCompletionChoice {
+        vec![crate::generation::GenerationChoice {
             index: 0,
-            message: crate::chat::AssistantMessage {
+            message: crate::generation::GeneratedMessage {
                 role: "assistant",
                 content: Some("checking".to_string()),
                 reasoning_content: None,
@@ -306,7 +347,7 @@ fn response_translates_to_content_blocks_and_stop_reason() {
         None,
     );
     let _ = assistant_extra;
-    let message = messages_response_from_chat_response(&response).expect("translates");
+    let message = messages_response_from_generation(&response).expect("translates");
     assert!(message.id.starts_with("msg_"));
     assert_eq!(message.kind, "message");
     assert_eq!(message.stop_reason, Some(STOP_REASON_END_TURN));
@@ -329,13 +370,13 @@ fn tool_call_response_becomes_tool_use_block() {
             "function": {"name": "get_weather", "arguments": "{\"city\":\"oslo\"}"}
         }]),
     );
-    let response = ChatCompletionResponse::from_parts(
+    let response = GenerationResponse::from_parts(
         "chatcmpl-y",
         1,
         "m",
-        vec![crate::chat::ChatCompletionChoice {
+        vec![crate::generation::GenerationChoice {
             index: 0,
-            message: crate::chat::AssistantMessage {
+            message: crate::generation::GeneratedMessage {
                 role: "assistant",
                 content: None,
                 reasoning_content: None,
@@ -347,7 +388,7 @@ fn tool_call_response_becomes_tool_use_block() {
         Usage::new(11, 3),
         None,
     );
-    let message = messages_response_from_chat_response(&response).expect("translates");
+    let message = messages_response_from_generation(&response).expect("translates");
     assert_eq!(message.stop_reason, Some(STOP_REASON_TOOL_USE));
     match &message.content[0] {
         AnthropicResponseBlock::ToolUse { id, name, input } => {
@@ -359,18 +400,14 @@ fn tool_call_response_becomes_tool_use_block() {
     }
 }
 
-fn delta_chunk(
-    content: Option<&str>,
-    tool_calls: Option<serde_json::Value>,
-) -> ChatCompletionChunk {
-    ChatCompletionChunk {
+fn delta_chunk(content: Option<&str>, tool_calls: Option<serde_json::Value>) -> GenerationEvent {
+    GenerationEvent {
         id: "chatcmpl-1".to_string(),
-        object: "chat.completion.chunk",
         created: 0,
         model: "m".to_string(),
-        choices: vec![ChatCompletionChunkChoice {
+        choices: vec![GenerationEventChoice {
             index: 0,
-            delta: ChatCompletionDelta {
+            delta: GenerationDelta {
                 role: None,
                 content: content.map(str::to_string),
                 reasoning_content: None,

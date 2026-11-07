@@ -5,7 +5,9 @@ use std::collections::HashMap;
 fn runtime_with(generation: u64, declaration: StatusDeclaration) -> PluginRuntime {
     let (outbound_tx, _outbound_rx) = mpsc::channel(4);
     PluginRuntime {
+        managed_models: Vec::new(),
         generation,
+        started: true,
         authenticated_peer: false,
         initialized_lifecycle: None,
         status_declaration: declaration,

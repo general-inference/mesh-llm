@@ -27,6 +27,19 @@ Always use `just`. Never build manually. Bare `just` (or `just build`) builds Sk
 
 `cargo check` and `cargo build` do not count as complete product builds: they skip native ABI preparation and the console, and `cargo check` produces no binary. Choose the owning product's `AGENTS.md` for product-specific build and packaging commands. See `CONTRIBUTING.md` for the full workflow.
 
+### Distribution builds
+
+Packagers build MeshLLM and Skippy from source in a clean environment and install them as system packages. Keep that possible:
+
+- No build step downloads when its input is already provided (a pinned source checkout, vendored crates and node modules). Packagers can supply their own tools instead of bundled binaries: a tool the build needs is taken from the environment when it is set, as `PROTOC` is; the bundled fallback stays for builds that don't set one.
+- The code compiles with the newer compilers distributions ship, not only with CI's: include what you use.
+- Build steps work with read-only inputs, and installed files stay read-only: keep state under the user's or service's directories. Replacing the binary in place is for release-bundle installs only.
+- Every connection to an outside service a packaged node doesn't need (the update check, release and model catalogs, analytics) can be turned off by a setting, and local features work without a CA bundle.
+- A distribution build can keep the runpaths of native libraries, and compatibility is checked against the libraries the process actually loads.
+- Prefer platform APIs to spawning system tools (`ps`, `sysctl`, `hostname`); a minimal system may not have them.
+- An empty path or endpoint variable counts as unset: service units and environment files produce them. Validated overrides keep rejecting an empty value (`MESH_LLM_NO_RUNTIME_DOWNLOAD=` fails closed), and presence flags keep their meaning.
+- Anything that refers to an installed binary, such as a service unit, uses the stable command on `PATH`, not a versioned path behind it.
+
 ## Shared module design
 
 Do not introduce generic buckets.
@@ -102,7 +115,7 @@ Product crate documentation.
 Run Cargo commands serially. Do not run multiple Cargo commands in parallel: this workspace frequently hits package-cache and artifact-directory lock conflicts.
 
 - For a touched workspace crate, run focused `cargo check -p <crate>` and `cargo test -p <crate> --lib` during iteration.
-- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — CI may test everything or nothing depending on the file — so use `just test-all` there.
+- Before a PR, run the full `cargo test -p <crate>` for every crate CI will test: usually the crates you changed plus their workspace dependents. Root build files and llama pin/patch changes escalate to the whole workspace (the command below prints that). Changes with no crate path (workflows, CI config, just recipes) leave the command's list empty — validate them per the minimum-validation table below instead, and run `just test-all` when the change alters which tests or build options CI invokes or changes the `test-all` recipe itself.
 - `cargo xtool repository affected-crates <paths from your diff against the PR base>` prints CI's list in its `affected` field (a bare invocation prints an empty list), and `just test-all` is the broad fallback, though it runs skippy-runtime and skippy-serving lib-only there.
 - `--lib` skips the integration-test binaries and the doc tests, and CI runs both for the crates it executes (`ci-rust-tests-slice.yml`), so a `--lib`-only run can be green while CI is red.
 - Exceptions: `xtask` runs its suites through `just ci-automation-contracts`; `skippy-ffi` is skipped by that slice and no CI job runs its own tests, so run `cargo test -p skippy-ffi --lib` yourself if you touched it; and CI additionally runs one feature-gated `claude-code-integration` real-client test for `mesh-llm-host-runtime` inline.
@@ -121,6 +134,18 @@ Do not commit Python emulation or differential tests that invoke Python; delete
 each legacy implementation with its last caller switch and validate in normal
 CI. Preserve real consumed outputs and failure semantics.
 
+### Tests in clean build environments
+
+Distribution packagers run the test suite while building MeshLLM and Skippy, in a clean environment that has only the declared build dependencies, often on busy or slow machines. Every test that runs by default must pass there; a test that really needs the network or particular hardware is opt-in, behind a feature gate (as `claude-live-model-integration` is) or `#[ignore]`d with the reason.
+
+- No network: no DNS, no outgoing connections, no CA bundle. Serve fixtures locally, as the lifecycle tests do with a local `HF_ENDPOINT`.
+- Only declared tools: no fixed paths such as `/usr/bin/true` or `/bin/bash`, and no system tools a minimal environment lacks (`ps`, `sysctl`). Use the standard library, or find a tool on `PATH`.
+- No usable home: `HOME` may be read-only or missing. Keep all state in the test's own temporary directories and pass those paths to child processes.
+- A foreign environment: the builder may set any variable, including MeshLLM's own `MESH_LLM_*` ones, and there may be no terminal. Set or remove what a test depends on for the child process (`Command::env`, `env_remove`); otherwise follow the process-environment mutation contract in `mesh/docs/design/TESTING.md`.
+- Slow and busy machines: don't let a result depend on machine speed. Wait for the event or state itself instead of sleeping, give each wait a generous bound, and retry only failures that are transient by nature, such as `ETXTBSY` right after writing an executable.
+- Build options: tests also run with the options packagers use, such as the dynamic native runtime.
+- Large test binaries: a debug test binary can be gigabytes, so code on the startup path doesn't read its own executable in full when it has no release attestation; verifying a stamped binary still reads it all.
+
 ## Pre-Commit Checklist
 
 Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
@@ -135,7 +160,7 @@ Choose validation from the changed surface, not merely from the directory that c
 - External Python SDK or research interface change — use the owning external component's declared interpreter, source pin and locked dependencies. The SDK component command is `"$SDK_PYTHON" -I -B "$MESH_PYTHON_SDK_SOURCE/sdk/tests/test_client.py"`; its mock FFI coverage is separate from the four genuine SDK clients and their preserved required compatibility or embedding-workload cadence. Set `MESH_PYTHON_SDK_SOURCE` to the admitted external checkout before local source contract gates. Binding generation belongs to that external SDK, with explicit Mesh source and existing UniFFI 0.32.0 generator inputs; native bridge staging requires an already built target library and has no consumer compiler fallback. Reader constructor fixtures use native `just agentic-trajectory-reader-contracts`. Generic repository policy and CI planning use `just ci-validate`, including `ci-automation-contracts` and the native `ci-legacy-contracts`; do not restore the retired generic Python unittest gate.
 - UI-only change — follow `mesh/AGENTS.md` and run `just build`.
 - CI workflow, planner fixture, or CI script change — run `just ci-validate` plus any additional checks required by the CI section below.
-- Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface.
+- Documentation, non-build configuration, or non-CI shell-only change — run the targeted formatter, generator check, contract test, or syntax check for the changed surface, plus tests that consume the changed surface when such tests exist.
 - Mixed change — run the union of the checks required for each changed surface.
 
 Do not rerun otherwise unchanged validation solely because a commit is about to be pushed. Rerun affected checks when the validated diff or commit has changed.
@@ -180,6 +205,39 @@ Do not leave Rust compiler warnings behind in code you touched.
 
 - Fix or remove unused code, dead code, and other warnings introduced or surfaced by your change before committing.
 - Do not silence warnings with `#[allow(...)]` unless there is a clear reason and the developer has asked for that tradeoff.
+
+## SDK parity invariant
+
+Rust, Node.js, Python, Swift, and Kotlin must support the same public SDK
+capabilities. Language conventions may change names or async syntax, but not
+the supported operations, filters, pagination, metadata, availability semantics,
+or error behavior. A public SDK API change is incomplete until its native bridge,
+all five language surfaces, tests, product docs, and maintained website examples
+are updated together. Do not silently substitute an HTTP compatibility call for
+an API documented as native, or expose fewer model workloads in one binding.
+
+Website SDK examples are part of this invariant: each supported public SDK
+capability must have equivalent, current examples for Rust, Node.js, Python,
+Swift, and Kotlin. Keep constructors, option defaults, request/response shapes,
+pagination, streaming/error handling, and resource cleanup consistent with the
+shipped APIs. An implementation change is not complete with source code alone;
+update and validate the corresponding examples under `mesh/website/src/docs/`
+and the owning SDK guides in the same change or coordinated companion PR.
+
+The invariant has a completion condition: a public SDK API change is complete
+only when every language surface's own checks and maintained examples pass
+against the same native API revision — Rust, Node.js, Swift, and Kotlin inside
+this repository, and Python through a companion PR in
+`Mesh-LLM/mesh-llm-python-sdk` that has merged with its admitted immutable
+native checkpoint pinning that same revision. Until that condition holds, the
+change is in progress, not shippable, regardless of which surfaces have landed.
+
+The Python SDK is maintained in `Mesh-LLM/mesh-llm-python-sdk`; changes that cross
+that boundary require a coordinated companion PR and matching generated native
+bindings. Generate bindings from the exact native library metadata with the
+pinned generator; do not hand-edit generated bindings. Document any unavoidable
+platform restriction explicitly, with its reason and parity follow-up, rather
+than claiming parity based only on a common method name.
 
 ## Pull Requests
 

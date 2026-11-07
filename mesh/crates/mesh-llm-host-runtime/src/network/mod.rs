@@ -1,5 +1,6 @@
 pub(crate) mod affinity;
 pub(crate) mod discovery;
+pub(crate) mod exclusive_listener;
 pub(crate) mod lan_beacon;
 pub(crate) mod lan_bootstrap;
 pub(crate) mod local_http;
@@ -14,6 +15,3 @@ pub(crate) mod reservations;
 pub(crate) mod router;
 pub(crate) mod target_health;
 pub(crate) mod tunnel;
-
-#[cfg(feature = "payments")]
-pub(crate) mod payments;

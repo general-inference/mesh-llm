@@ -74,8 +74,24 @@ pub struct RuntimeState {
     /// Sessions discarded by panic recovery whose requests have not cleaned
     /// up yet; see `panic_recovery`.
     sessions_reset_by_panic: BTreeSet<String>,
+    /// Split DFlash drafts a final stage owes stage 0 after an early verdict,
+    /// by session.
+    dflash_deferred_drafts: BTreeMap<String, DeferredDFlashDraft>,
     #[cfg(test)]
     modelless_for_test: bool,
+    /// Lets modelless tests exercise a split DFlash final stage.
+    #[cfg(test)]
+    pub(crate) dflash_drafts_for_test: bool,
+}
+
+/// What a split DFlash final stage needs to draft the block after a verify
+/// window it already answered: the window and the target's predictions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeferredDFlashDraft {
+    pub(crate) window: Vec<i32>,
+    pub(crate) predicted_tokens: Vec<i32>,
+    pub(crate) max_tokens: usize,
+    pub(crate) accepts_after_correction: bool,
 }
 
 struct RuntimeLaneSession {
@@ -208,6 +224,22 @@ impl RuntimeState {
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         self.model.output_activation_boundary()
     }
+
+    /// A modelless split DFlash final stage with one idle lane whose draft
+    /// is already gone, for tests of draft bookkeeping above the runtime.
+    #[cfg(test)]
+    pub(crate) fn split_dflash_final_stage_for_test() -> Self {
+        let mut runtime = Self::new_modelless_for_test(1);
+        runtime.dflash_drafts_for_test = true;
+        runtime.idle_sessions.push(RuntimeLaneSession {
+            index: 0,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        });
+        runtime.next_lane_index = 1;
+        runtime
+    }
+
     /// A runtime with no model behind it, for tests that exercise code paths
     /// which never touch the model.
     ///
@@ -235,10 +267,12 @@ impl RuntimeState {
             max_idle_sessions: None,
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
+            dflash_deferred_drafts: BTreeMap::new(),
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
             modelless_for_test: true,
+            dflash_drafts_for_test: false,
         }
     }
 
@@ -389,11 +423,14 @@ fn runtime_from_loaded_model(
         max_idle_sessions: max_idle_sessions_from_stage_config(config),
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
+        dflash_deferred_drafts: BTreeMap::new(),
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
         #[cfg(test)]
         modelless_for_test: false,
+        #[cfg(test)]
+        dflash_drafts_for_test: false,
     })))
 }
 
@@ -509,7 +546,7 @@ fn reject_legacy_serving_package(config: &StageConfig) -> Result<()> {
     Ok(())
 }
 
-fn runtime_config_from_stage_config(
+pub(crate) fn runtime_config_from_stage_config(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
 ) -> Result<RuntimeConfig> {
@@ -553,6 +590,9 @@ fn runtime_config_from_stage_config(
             SplitMode::Row => RuntimeSplitMode::Row,
             SplitMode::Tensor => RuntimeSplitMode::Tensor,
         },
+        host_expert_layers: config
+            .host_expert_layers
+            .and_then(|layers| skippy_runtime::HostExpertLayers::new(layers.start, layers.end)),
         selected_backend_device: config
             .selected_device
             .as_ref()
@@ -694,6 +734,97 @@ mod tests {
         );
     }
 
+    /// A modelless split DFlash final stage with one idle lane.
+    fn split_dflash_final_stage() -> RuntimeState {
+        RuntimeState::split_dflash_final_stage_for_test()
+    }
+
+    fn frame_with_dflash_rows(rows: &skippy_runtime::DFlashFeatureRows) -> ActivationFrame {
+        let mut parts =
+            [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+        parts[0] = skippy_runtime::ActivationPartDesc {
+            ggml_type: skippy_runtime::GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [1, 1, 0, 0],
+            byte_strides: [4, 4, 0, 0],
+            payload_bytes: 4,
+            ..Default::default()
+        };
+        let mut frame = ActivationFrame {
+            desc: skippy_runtime::ActivationDesc {
+                version: skippy_runtime::ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count: 1,
+                sequence_count: 1,
+                part_count: 1,
+                payload_bytes: 4,
+                frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+                parts,
+            },
+            payload: vec![0; 4],
+        };
+        rows.append_to_frame_as(&mut frame, skippy_runtime::DFlashFeatureEncoding::Bf16)
+            .unwrap();
+        frame
+    }
+
+    /// The first message of a session reaches the final stage before anything
+    /// has created the session. Its feature rows must still reach the draft;
+    /// dropping them cleared the draft's context on every new request.
+    #[test]
+    fn split_dflash_rows_reach_a_session_on_its_first_message() {
+        let mut runtime = split_dflash_final_stage();
+        let mut rows = skippy_runtime::DFlashFeatureRows::new(1, 1);
+        rows.insert(2, vec![0.25]).unwrap();
+
+        runtime.dflash_split_input("first", Some(&frame_with_dflash_rows(&rows)));
+
+        let lane = runtime.sessions.get("first").expect("session created");
+        assert_eq!(lane.session.dflash_remote_features_for_test(), Some(&rows));
+    }
+
+    #[test]
+    fn split_dflash_counters_go_only_to_senders_that_read_them() {
+        skippy_runtime::test_support::require_native_runtime();
+        let mut runtime = split_dflash_final_stage();
+        runtime.dflash_split_input("s", None);
+        runtime
+            .sessions
+            .get_mut("s")
+            .unwrap()
+            .session
+            .dflash_lose_rows_for_test(12);
+        let mut state = skippy_protocol::binary::StageStateHeader::new(
+            skippy_protocol::binary::WireMessageKind::DecodeEmbd,
+        );
+
+        assert!(!runtime.dflash_reply_stats("s", state).has_dflash_health());
+        state.set_split_dflash(true);
+        let stats = runtime.dflash_reply_stats("s", state);
+        assert_eq!(stats.dflash_feature_rows_missing, 12);
+        assert_eq!(stats.dflash_draft_context_resets, 1);
+    }
+
+    #[test]
+    fn dropping_a_session_forgets_the_draft_it_was_owed() {
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        runtime.dflash_defer_draft(
+            "s",
+            super::DeferredDFlashDraft {
+                window: vec![1, 2],
+                predicted_tokens: vec![3],
+                max_tokens: 4,
+                accepts_after_correction: false,
+            },
+        );
+        assert!(runtime.dflash_draft_deferred("s"));
+        runtime.drop_session_timed("s").unwrap();
+        assert!(!runtime.dflash_draft_deferred("s"));
+    }
+
     #[test]
     fn modelless_runtime_reports_zero_kv_pool_so_scheduler_uses_fallback() {
         // The scheduler derives its admission budget from `kv_pool_tokens()` and
@@ -780,6 +911,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Enabled,
@@ -904,6 +1036,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -983,6 +1116,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1002,6 +1136,7 @@ mod tests {
             load_mode: LoadMode::LayerPackage,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {
+                persistent_lane_marker: false,
                 stage_id: "stage-1".to_string(),
                 stage_index: 1,
                 endpoint: "tcp://127.0.0.1:19001".to_string(),
@@ -1111,6 +1246,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Disabled,
@@ -1130,6 +1266,7 @@ mod tests {
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {
+                persistent_lane_marker: false,
                 stage_id: "stage-prev".to_string(),
                 stage_index: 0,
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
@@ -1335,6 +1472,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -1439,6 +1577,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "auto".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

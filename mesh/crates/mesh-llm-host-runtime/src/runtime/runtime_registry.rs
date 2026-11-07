@@ -9,17 +9,35 @@ use super::{
 };
 use crate::{mesh, models};
 use anyhow::Result;
+use skippy_inference_api::thinking::ThinkingControls;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 pub(super) type RuntimeInstanceRegistry =
-    Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
+    Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, RuntimeInstanceMetadata>>>>;
+
+pub(super) struct RuntimeInstanceMetadata {
+    context_length: Option<u32>,
+    thinking_efforts: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RuntimeCapacityTarget<'a> {
+    pub(super) compact_meta: Option<&'a models::gguf::GgufCompactMeta>,
+    pub(super) pinned_gpu: Option<&'a StartupPinnedGpuTarget>,
+    pub(super) device_override: Option<&'a str>,
+    pub(super) node_capacity_bytes: u64,
+    pub(super) host_ram_capacity_bytes: u64,
+}
 
 pub(super) struct RuntimeModelRegistration<'a> {
     pub primary_model_name: &'a str,
     pub model_name: &'a str,
     pub instance_id: &'a str,
     pub context_length: Option<u32>,
+    pub thinking: Option<&'a ThinkingControls>,
+    pub backend: Option<Arc<dyn skippy_inference_api::InferenceBackend>>,
+    pub port: u16,
     pub capabilities: models::ModelCapabilities,
     pub workload_class: mesh::ModelWorkloadClass,
 }
@@ -38,18 +56,61 @@ pub(super) fn runtime_capacity_pool(
         .unwrap_or(RuntimeCapacityPool::Node)
 }
 
+pub(super) fn runtime_capacity_pool_for_model(
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
+    pinned_gpu: Option<&StartupPinnedGpuTarget>,
+    device_override: Option<&str>,
+    host_ram_capacity_bytes: u64,
+) -> RuntimeCapacityPool {
+    if super::local_laya::is_laya(compact_meta) {
+        if device_override.is_none_or(|device| device.eq_ignore_ascii_case("cpu")) {
+            return if host_ram_capacity_bytes > 0 {
+                RuntimeCapacityPool::HostRam
+            } else {
+                RuntimeCapacityPool::Node
+            };
+        }
+        if pinned_gpu
+            .zip(device_override)
+            .is_some_and(|(gpu, device)| gpu.backend_device.eq_ignore_ascii_case(device))
+        {
+            return runtime_capacity_pool(pinned_gpu);
+        }
+        return RuntimeCapacityPool::Node;
+    }
+
+    runtime_capacity_pool(pinned_gpu)
+}
+
+pub(super) fn runtime_capacity_limit_for_model(target: RuntimeCapacityTarget<'_>) -> u64 {
+    match runtime_capacity_pool_for_model(
+        target.compact_meta,
+        target.pinned_gpu,
+        target.device_override,
+        target.host_ram_capacity_bytes,
+    ) {
+        RuntimeCapacityPool::HostRam => target.host_ram_capacity_bytes,
+        RuntimeCapacityPool::Node | RuntimeCapacityPool::PinnedGpu(_) => target.node_capacity_bytes,
+    }
+}
+
 pub(super) fn runtime_capacity_request_for_model(
     instance_id: &str,
     model_name: &str,
-    pinned_gpu: Option<&StartupPinnedGpuTarget>,
-    capacity_bytes: u64,
+    target: RuntimeCapacityTarget<'_>,
     model_bytes: u64,
 ) -> RuntimeCapacityRequest {
+    let pool = runtime_capacity_pool_for_model(
+        target.compact_meta,
+        target.pinned_gpu,
+        target.device_override,
+        target.host_ram_capacity_bytes,
+    );
     RuntimeCapacityRequest {
         instance_id: instance_id.to_string(),
         model_name: model_name.to_string(),
-        pool: runtime_capacity_pool(pinned_gpu),
-        capacity_bytes,
+        capacity_bytes: runtime_capacity_limit_for_model(target),
+        pool,
         required_bytes: runtime_model_required_bytes(model_bytes),
     }
 }
@@ -58,16 +119,14 @@ pub(super) fn reserve_runtime_capacity_for_model(
     ledger: &RuntimeCapacityLedger,
     instance_id: &str,
     model_name: &str,
-    pinned_gpu: Option<&StartupPinnedGpuTarget>,
-    capacity_bytes: u64,
+    target: RuntimeCapacityTarget<'_>,
     model_bytes: u64,
 ) -> Result<RuntimeCapacityReservation> {
     ledger
         .reserve(runtime_capacity_request_for_model(
             instance_id,
             model_name,
-            pinned_gpu,
-            capacity_bytes,
+            target,
             model_bytes,
         ))
         .map_err(Into::into)
@@ -83,17 +142,39 @@ pub(super) async fn register_runtime_instance(
         model_name,
         instance_id,
         context_length,
+        thinking,
+        backend,
+        port,
         capabilities,
         workload_class,
     } = registration;
-    let (was_empty, context_changed, next_context) = {
+    node.register_native_backend(
+        model_name,
+        instance_id,
+        port,
+        backend,
+        thinking.map(|controls| controls.efforts.clone()),
+    )
+    .await;
+    let (was_empty, context_changed, next_context, next_efforts) = {
         let mut guard = registry.lock().await;
         let instances = guard.entry(model_name.to_string()).or_default();
         let previous_context = runtime_registry_model_context(instances);
         let was_empty = instances.is_empty();
-        instances.insert(instance_id.to_string(), context_length);
+        instances.insert(
+            instance_id.to_string(),
+            RuntimeInstanceMetadata {
+                context_length,
+                thinking_efforts: thinking.map(|controls| controls.efforts.clone()),
+            },
+        );
         let next_context = runtime_registry_model_context(instances);
-        (was_empty, previous_context != next_context, next_context)
+        (
+            was_empty,
+            previous_context != next_context,
+            next_context,
+            model_thinking_efforts(instances),
+        )
     };
 
     if context_changed {
@@ -109,6 +190,9 @@ pub(super) async fn register_runtime_instance(
             workload_class,
         )
         .await;
+    }
+    set_advertised_thinking_efforts(node, model_name, next_efforts).await;
+    if was_empty {
         advertise_model_ready(node, primary_model_name, model_name, "").await;
     }
 }
@@ -119,7 +203,7 @@ pub(super) async fn unregister_runtime_instance(
     model_name: &str,
     instance_id: &str,
 ) -> bool {
-    let (removed, became_empty, context_changed, next_context) = {
+    let (removed, became_empty, context_changed, next_context, next_efforts) = {
         let mut guard = registry.lock().await;
         let Some(instances) = guard.get_mut(model_name) else {
             return false;
@@ -127,6 +211,7 @@ pub(super) async fn unregister_runtime_instance(
         let previous_context = runtime_registry_model_context(instances);
         let removed = instances.remove(instance_id).is_some();
         let next_context = runtime_registry_model_context(instances);
+        let next_efforts = model_thinking_efforts(instances);
         let became_empty = instances.is_empty();
         if became_empty {
             guard.remove(model_name);
@@ -136,12 +221,15 @@ pub(super) async fn unregister_runtime_instance(
             became_empty,
             previous_context != next_context,
             next_context,
+            next_efforts,
         )
     };
 
     if !removed {
         return false;
     }
+    node.unregister_native_backend(model_name, instance_id)
+        .await;
     if became_empty {
         set_advertised_model_context(node, model_name, None).await;
         withdraw_advertised_model(node, model_name, "").await;
@@ -149,6 +237,7 @@ pub(super) async fn unregister_runtime_instance(
         crate::inference::skippy::forget_local_thinking(model_name);
         true
     } else {
+        set_advertised_thinking_efforts(node, model_name, next_efforts).await;
         if context_changed {
             set_advertised_model_context(node, model_name, next_context).await;
         }
@@ -169,7 +258,243 @@ pub(super) async fn runtime_registry_has_model(
 }
 
 pub(super) fn runtime_registry_model_context(
-    instances: &BTreeMap<String, Option<u32>>,
+    instances: &BTreeMap<String, RuntimeInstanceMetadata>,
 ) -> Option<u32> {
-    instances.values().filter_map(|context| *context).max()
+    instances
+        .values()
+        .filter_map(|instance| instance.context_length)
+        .max()
+}
+
+/// A serving ID may select several loaded profiles. Advertise levels only when
+/// the same observed list applies to every instance that can receive a request.
+fn model_thinking_efforts(
+    instances: &BTreeMap<String, RuntimeInstanceMetadata>,
+) -> Option<Vec<String>> {
+    let efforts = instances.values().next()?.thinking_efforts.as_ref()?;
+    instances
+        .values()
+        .all(|instance| instance.thinking_efforts.as_ref() == Some(efforts))
+        .then(|| efforts.clone())
+}
+
+async fn set_advertised_thinking_efforts(
+    node: &mesh::Node,
+    model_name: &str,
+    efforts: Option<Vec<String>>,
+) {
+    node.update_served_model_descriptor(model_name, |existing| {
+        let mut descriptor = existing.unwrap_or_else(|| mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: model_name.to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        descriptor
+            .metadata
+            .get_or_insert_with(Default::default)
+            .thinking_efforts = efforts;
+        descriptor
+    })
+    .await;
+    node.regossip().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn register(
+        registry: &RuntimeInstanceRegistry,
+        node: &mesh::Node,
+        instance_id: &str,
+        efforts: &[&str],
+    ) {
+        let thinking = ThinkingControls {
+            efforts: efforts.iter().map(|effort| (*effort).to_string()).collect(),
+            ..Default::default()
+        };
+        register_runtime_instance(
+            registry,
+            node,
+            RuntimeModelRegistration {
+                primary_model_name: "test-model",
+                model_name: "test-model",
+                instance_id,
+                context_length: Some(8192),
+                thinking: Some(&thinking),
+                backend: None,
+                port: 0,
+                capabilities: Default::default(),
+                workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            },
+        )
+        .await;
+    }
+
+    async fn advertised_efforts(node: &mesh::Node) -> Option<Vec<String>> {
+        node.served_model_descriptors()
+            .await
+            .into_iter()
+            .find(|descriptor| descriptor.identity.model_name == "test-model")
+            .and_then(|descriptor| descriptor.metadata)
+            .and_then(|metadata| metadata.thinking_efforts)
+    }
+
+    #[tokio::test]
+    async fn advertised_efforts_follow_registration_disagreement_unload_and_reload() {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let registry = Arc::default();
+        register(&registry, &node, "one", &["high", "low"]).await;
+        assert_eq!(
+            advertised_efforts(&node).await,
+            Some(vec!["high".into(), "low".into()])
+        );
+        register(&registry, &node, "two", &["max"]).await;
+        assert_eq!(advertised_efforts(&node).await, None);
+        assert!(!unregister_runtime_instance(&registry, &node, "test-model", "two").await);
+        assert_eq!(
+            advertised_efforts(&node).await,
+            Some(vec!["high".into(), "low".into()])
+        );
+        assert!(unregister_runtime_instance(&registry, &node, "test-model", "one").await);
+        assert!(node.served_model_descriptors().await.is_empty());
+        register(&registry, &node, "three", &[]).await;
+        assert_eq!(advertised_efforts(&node).await, Some(vec![]));
+    }
+
+    fn observed(efforts: &[&str]) -> RuntimeInstanceMetadata {
+        RuntimeInstanceMetadata {
+            context_length: Some(8192),
+            thinking_efforts: Some(efforts.iter().map(|effort| (*effort).into()).collect()),
+        }
+    }
+
+    #[test]
+    fn thinking_efforts_preserve_probe_order_and_unknown_presence() {
+        let mut instances = BTreeMap::from([("one".into(), observed(&["high", "low"]))]);
+        assert_eq!(
+            model_thinking_efforts(&instances),
+            Some(vec!["high".into(), "low".into()])
+        );
+        instances.insert("one".into(), observed(&[]));
+        assert_eq!(model_thinking_efforts(&instances), Some(vec![]));
+        instances.get_mut("one").unwrap().thinking_efforts = None;
+        assert_eq!(model_thinking_efforts(&instances), None);
+        instances.clear();
+        assert_eq!(model_thinking_efforts(&instances), None);
+    }
+
+    #[test]
+    fn thinking_efforts_require_agreement_across_loaded_instances() {
+        let mut instances = BTreeMap::from([
+            ("one".into(), observed(&["low", "high"])),
+            ("two".into(), observed(&["low", "high"])),
+        ]);
+        assert!(model_thinking_efforts(&instances).is_some());
+        instances.insert("two".into(), observed(&["max"]));
+        assert_eq!(model_thinking_efforts(&instances), None);
+        instances.get_mut("two").unwrap().thinking_efforts = None;
+        assert_eq!(model_thinking_efforts(&instances), None);
+        instances.remove("two");
+        assert_eq!(
+            model_thinking_efforts(&instances),
+            Some(vec!["low".into(), "high".into()])
+        );
+    }
+
+    fn metadata(architecture: &str) -> models::gguf::GgufCompactMeta {
+        models::gguf::GgufCompactMeta {
+            architecture: architecture.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn laya_pool_uses_architecture_and_resolved_device() {
+        let laya = metadata("laya");
+        let llama_named_laya = metadata("llama");
+        let gpu = StartupPinnedGpuTarget {
+            index: 0,
+            stable_id: "gpu-a".to_string(),
+            backend_device: "CUDA0".to_string(),
+            vram_bytes: 1_000,
+            reserved_bytes: None,
+        };
+
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&laya), None, None, 800),
+            RuntimeCapacityPool::HostRam
+        );
+        assert_eq!(
+            runtime_capacity_limit_for_model(RuntimeCapacityTarget {
+                compact_meta: Some(&laya),
+                pinned_gpu: None,
+                device_override: None,
+                node_capacity_bytes: 1_000,
+                host_ram_capacity_bytes: 800,
+            }),
+            800,
+        );
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&laya), None, Some("auto"), 800),
+            RuntimeCapacityPool::Node,
+            "the resolved accelerator target must use accelerator capacity"
+        );
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&laya), Some(&gpu), Some("CUDA0"), 800),
+            RuntimeCapacityPool::PinnedGpu("gpu-a".to_string())
+        );
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&laya), Some(&gpu), Some("CPU"), 800),
+            RuntimeCapacityPool::HostRam
+        );
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&llama_named_laya), None, None, 800),
+            RuntimeCapacityPool::Node,
+            "a display name cannot turn a non-Laya architecture into a Laya runtime"
+        );
+        let named_laya_request = runtime_capacity_request_for_model(
+            "llama",
+            "Laya-compatible display name",
+            RuntimeCapacityTarget {
+                compact_meta: Some(&llama_named_laya),
+                pinned_gpu: None,
+                device_override: None,
+                node_capacity_bytes: 1_000,
+                host_ram_capacity_bytes: 800,
+            },
+            700,
+        );
+        assert_eq!(named_laya_request.pool, RuntimeCapacityPool::Node);
+        assert_eq!(named_laya_request.capacity_bytes, 1_000);
+        assert_eq!(
+            runtime_capacity_pool_for_model(Some(&laya), None, None, 0),
+            RuntimeCapacityPool::Node,
+            "missing host-RAM capacity remains unknown"
+        );
+    }
+
+    #[test]
+    fn laya_request_uses_host_ram_capacity_for_cpu_target() {
+        let laya = metadata("laya");
+        let request = runtime_capacity_request_for_model(
+            "laya-cpu",
+            "model-with-arbitrary-name",
+            RuntimeCapacityTarget {
+                compact_meta: Some(&laya),
+                pinned_gpu: None,
+                device_override: None,
+                node_capacity_bytes: 4_000,
+                host_ram_capacity_bytes: 800,
+            },
+            700,
+        );
+
+        assert_eq!(request.pool, RuntimeCapacityPool::HostRam);
+        assert_eq!(request.capacity_bytes, 800);
+    }
 }

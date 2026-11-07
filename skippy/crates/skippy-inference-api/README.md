@@ -25,6 +25,36 @@ is advertised or rejected explicitly by the runtime adapter.
 For the concrete benchy command and contract, see
 [`skippy/docs/LLAMA_BENCHY.md`](../../docs/LLAMA_BENCHY.md).
 
+## Generation boundary
+
+[`generation`](src/generation.rs) owns the shared generation request, result, and
+ordered event stream. OpenAI Chat Completions and Anthropic Messages adapt their
+wire types at the frontend boundary. Backends, hooks, guardrails, and embedded
+callers use `GenerationRequest`, `GenerationResponse`, and `GenerationEventStream`;
+import these from `skippy_inference_api::generation`.
+
+The generation envelopes deliberately do not implement Serde. HTTP object tags,
+JSON field omission, and SSE framing belong to protocol adapters. The OpenAI
+adapter provides explicit owned conversions to/from the existing `chat` wire
+types. Anthropic translates directly to/from generation types. Mesh's raw
+OpenAI upstream adapter and native template inputs retain their existing wire
+representations.
+
+This boundary preserves existing controls and their precedence, ordered content,
+tool-call/result identifiers, finish reasons, usage, and extension values.
+Flexible roles, tool schemas/arguments, media payloads, and unknown fields retain
+their existing representations and validation; introducing stricter enums or
+rejecting ignored fields is outside this migration. The two token-limit controls
+remain distinct because request defaults and hooks rely on their provenance.
+SystemOne remains a separate `system_one` operation with its own request/response.
+Cancellation, request identity, and lifecycle observation remain in
+`InferenceRequestContext` and the existing wrappers.
+
+Rust backend implementors must migrate their signatures and hooks to the new
+owned types. HTTP clients require no changes. The recorded
+[wire characterization](tests/fixtures/README.md) compares actual routes against
+the pre-migration main, including ordered SSE output and backend context.
+
 ## Supported API Surface
 
 `GET /v1/models` can include a `thinking` summary from the loaded template probe:
@@ -47,9 +77,9 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | `POST /v1/chat/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/completions` | Supported | Handles streaming and non-streaming response shapes. |
 | `POST /v1/responses` | Supported | Adapts OpenAI responses requests onto chat/completion backend calls and preserves response metadata where possible. |
-| `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared chat backend and returns Anthropic JSON or SSE. |
+| `POST /v1/messages` | Supported | Translates Anthropic Messages requests through the shared generation backend and returns Anthropic JSON or SSE. |
 | `POST /v1/messages/count_tokens` | Supported | Uses the shared backend token counting operation. |
-| `POST /systemone` | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
+| `POST /v1/systemone` (canonical; legacy alias `POST /systemone`) | Backend-gated | Dispatches to the backend's `system_one` operation; the default implementation reports unsupported. |
 | `POST /v1/embeddings` | Supported | String and token inputs, float or base64 vectors, usage accounting. Runtime support is model-gated. |
 | `POST /v1/rerank` | Supported | Cross-encoder query/document scoring with optional document return. Runtime support is model-gated. |
 | `POST /v1/audio/speech` | Supported | Binary response with format-specific content type. The native backend currently produces WAV or PCM and accepts only `voice: "default"`; speaker selection fails with a structured unsupported error. |
@@ -74,7 +104,7 @@ off by `max_tokens` can therefore contain reasoning with no final answer.
 | Request body limit | Supported | Configurable via `InferenceFrontendConfig`; defaults to 4 MiB. |
 | Request IDs | Supported | Reuses only a valid UUID `x-request-id`; missing or invalid values are replaced with a generated UUID. Every response returns the canonical hyphenated UUID and the frontend emits a tracing event with method, URI, status, and request ID. |
 | Client nonce | Supported | Accepts `x-capsule-client-nonce` only when it is exactly one valid UUIDv4; a missing, invalid, non-UUIDv4, or duplicated value is replaced with a freshly minted UUIDv4. When this frontend mints the value it stamps `x-capsule-nonce-origin: frontend`; a forwarded (client-supplied) nonce carries no origin marker, and any inbound `x-capsule-nonce-origin` is always stripped so a caller cannot forge it. Both headers are echoed on covered responses: the axum router and, via the host runtime's forwarding rebuild, the public `:9337` proxy JSON/SSE paths (including the pipeline/MoA strong-model path and remapped upstream error responses). Locally synthesized error responses (e.g. no-target `503`s and `/v1/models` listings) do not yet carry the headers; threading the request nonce onto those senders is a cross-cutting signature change tracked as a follow-up. The origin marker asserts only that *this* frontend minted the value, not that it is the original ingress for a remote-routed request. |
-| Backend timeout | Supported | Configurable via `InferenceFrontendConfig` or the `MESH_OPENAI_BACKEND_TIMEOUT_SECS` environment variable; defaults to 600 seconds (`0` disables it) and maps timeouts to OpenAI-shaped 504 errors. |
+| Backend timeout | Supported | Configurable via `InferenceFrontendConfig` or the `MESH_OPENAI_BACKEND_TIMEOUT_SECS` environment variable; defaults to 600 seconds (`0` disables it) and maps timeouts to OpenAI-shaped 504 errors. A long non-streaming prefill needs this deadline to cover the whole completion, not just the first token. The MeshLLM host proxy in front of this frontend honours the same setting: it raises its own local first-byte budget to cover it (and drops that budget when this one is disabled), or takes `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` when the operator names that layer directly. |
 | Agent session header | Supported | Set `MESH_AGENT_SESSION_HEADER` to accept a trusted upstream header as the stable agent-session identity. |
 | Vision input | Supported | Preserved through chat/Responses content parts and executed by projector-backed runtimes. |
 | Non-chat staging | Fail closed | Embedding, rerank, encoder-decoder, and speech-synthesis models currently require an unsplit full-model runtime. |
@@ -108,18 +138,18 @@ pub trait InferenceBackend: Send + Sync + 'static {
     async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse>;
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse>;
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse>;
+    ) -> InferenceResult<GenerationResponse>;
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream>;
+    ) -> InferenceResult<GenerationEventStream>;
     async fn completion(
         &self,
         request: CompletionRequest,

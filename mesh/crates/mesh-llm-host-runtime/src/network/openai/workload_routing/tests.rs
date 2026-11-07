@@ -1,5 +1,65 @@
 use super::*;
 
+/// The inference surface the OpenAI frontend router recognizes: every route
+/// the router can dispatch to a model target, plus the metadata routes it
+/// serves without model execution. The coverage test below requires every
+/// entry to be workload-classified, System One, or explicitly exempt — a new
+/// route fails CI until it is classified.
+const ROUTER_INFERENCES_PATHS: [&str; 20] = [
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/messages",
+    "/v1/embeddings",
+    "/v1/rerank",
+    "/v1/audio/speech",
+    "/v1/audio/transcriptions",
+    "/v1/audio/translations",
+    "/v1/realtime",
+    "/v1/models",
+    "/models",
+    "/v1/tokenize",
+    "/v1/messages/count_tokens",
+    "/v1/systemone",
+    "/systemone",
+    "/v1/decisions",
+    "/mesh/v1/documents/ocr",
+    "/mesh/v1/images/similarity",
+    "/mesh/v1/images/depth",
+];
+
+#[test]
+fn document_ocr_uses_only_the_mesh_namespace() {
+    for path in ["/mesh/v1/documents/ocr", "/mesh/v1/documents/ocr?trace=1"] {
+        assert!(is_document_ocr_path(path));
+        assert_eq!(
+            request_workload_class(path),
+            Some(ModelWorkloadClass::DocumentOcr)
+        );
+    }
+    assert!(!is_document_ocr_path("/v1/documents/ocr"));
+    assert_eq!(request_workload_class("/v1/documents/ocr"), None);
+}
+
+#[test]
+/// Every inference path the frontend router recognizes must carry a workload
+/// class (or be System One). An unclassified route gets no workload admission
+/// at all (fail-open), so a new route fails this gate until it is classified.
+fn router_inference_paths_are_all_classified() {
+    for path in ROUTER_INFERENCES_PATHS {
+        // Metadata routes are served without model execution: no workload class by design.
+        let exempt = matches!(
+            path,
+            "/v1/models" | "/models" | "/v1/tokenize" | "/v1/messages/count_tokens"
+        );
+        let classified = request_workload_class(path).is_some() || is_system_one_path(path);
+        assert!(
+            classified || exempt,
+            "inference path {path} is unclassified and unexempt: it would be admitted without workload filtering"
+        );
+    }
+}
+
 #[test]
 /// Distinguish unrecognized explicit metadata from the old absent-field contract.
 fn unknown_workloads_never_inherit_legacy_admission() {
@@ -172,8 +232,13 @@ fn decision_models_are_excluded_from_every_classed_endpoint() {
             "{path}"
         );
     }
+    assert_eq!(request_workload_class("/v1/systemone"), None);
     assert_eq!(request_workload_class("/systemone"), None);
     assert_eq!(request_workload_class("/v1/decisions"), None);
+    assert_eq!(
+        required_request_workload("/v1/systemone?trace=1"),
+        Some(mesh::ModelWorkloadClass::Decision)
+    );
     assert_eq!(
         required_request_workload("/systemone?trace=1"),
         Some(mesh::ModelWorkloadClass::Decision)
@@ -201,6 +266,11 @@ fn system_one_requires_its_own_advertised_capability() {
 
         assert!(model_satisfies_request(
             "system-one",
+            "/v1/systemone?trace=1",
+            std::slice::from_ref(&capable)
+        ));
+        assert!(model_satisfies_request(
+            "system-one",
             "/systemone?trace=1",
             std::slice::from_ref(&capable)
         ));
@@ -213,6 +283,11 @@ fn system_one_requires_its_own_advertised_capability() {
 
     let unsupported =
         descriptor_with_workload("plain-decision-model", mesh::ModelWorkloadClass::Decision);
+    assert!(!model_satisfies_request(
+        "plain-decision-model",
+        "/v1/systemone",
+        std::slice::from_ref(&unsupported)
+    ));
     assert!(!model_satisfies_request(
         "plain-decision-model",
         "/systemone",

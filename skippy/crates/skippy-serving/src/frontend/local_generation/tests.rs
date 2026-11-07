@@ -25,7 +25,7 @@ use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
-use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
+use skippy_inference_api::{InferenceBackend, generation::GenerationRequest};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
@@ -216,6 +216,7 @@ fn recurrent_test_backend(
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -260,7 +261,7 @@ fn recurrent_test_backend(
         telemetry,
         model_id: backend_model_id.to_string(),
         default_max_tokens,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::LocalRuntime,
@@ -318,7 +319,7 @@ fn local_generation_signal_window_uses_configured_value() {
         telemetry,
         model_id: "signal-window-test".to_string(),
         default_max_tokens: 1,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size: 4096,
         mode: InferenceBackendMode::LocalRuntime,
@@ -508,7 +509,9 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let first_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let first_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": [
                 {"role": "system", "content": "You are a deterministic cache test."},
@@ -518,12 +521,13 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache"
-        }))?;
+        }))?
+        .into();
         let first_prompt = backend.prepare_chat_prompt(
             &first_request,
             crate::frontend::request::chat_template_options(
                 &first_request,
-                &backend.request_defaults,
+                &backend.request_defaults.snapshot(),
             )?,
         )?;
         let first_prompt_tokens = backend.tokenize(&first_prompt.text)?;
@@ -630,19 +634,22 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             {"role": "assistant", "content": first_content},
             {"role": "user", "content": "Now reply with a short plain answer: CACHE_TAIL"}
         ]);
-        let cached_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let cached_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": second_messages.clone(),
             "max_tokens": 4,
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache"
-        }))?;
+        }))?
+        .into();
         let second_prompt = backend.prepare_chat_prompt(
             &cached_request,
             crate::frontend::request::chat_template_options(
                 &cached_request,
-                &backend.request_defaults,
+                &backend.request_defaults.snapshot(),
             )?,
         )?;
         let second_prompt_tokens = backend.tokenize(&second_prompt.text)?;
@@ -685,14 +692,17 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         let lookup_candidates = capture_trace::drain_lookup_candidates();
         let divergence = first_identity_divergence(&stored_identities, &lookup_candidates);
 
-        let uncached_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let uncached_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": second_messages,
             "max_tokens": 4,
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache-control"
-        }))?;
+        }))?
+        .into();
         let uncached_response = backend.chat_completion(uncached_request).await?;
         let uncached_content = uncached_response
             .choices
@@ -772,6 +782,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -803,7 +814,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         telemetry,
         model_id: "generation-receipt-test".to_string(),
         default_max_tokens: 1,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size: 128,
         mode: InferenceBackendMode::LocalRuntime,

@@ -697,6 +697,25 @@ impl StageOpenAiBackend {
                 ),
             );
             cache_stats.prompt_ms = prefill_timer.elapsed_ms();
+            if let Ok(mut last) = super::bench_dump::LAST_PREFILL.lock() {
+                let mut attrs = serde_json::Map::new();
+                for (key, value) in &prefill_attrs {
+                    if key.starts_with("llama_stage.") {
+                        attrs.insert(key.clone(), value.clone());
+                    }
+                }
+                attrs.insert("chunks".into(), json!(prefill_chunks));
+                attrs.insert("min_chunk".into(), json!(prefill_min_chunk_size));
+                attrs.insert("max_chunk".into(), json!(prefill_max_chunk_size));
+                attrs.insert("stage0_compute_ms".into(), json!(prefill_stage0_compute_ms));
+                attrs.insert(
+                    "downstream_wait_ms".into(),
+                    json!(prefill_downstream_wait_ms),
+                );
+                attrs.insert("credit_waits".into(), json!(prefill_credit_wait_count));
+                attrs.insert("prompt_ms".into(), json!(cache_stats.prompt_ms));
+                *last = Some(serde_json::Value::Object(attrs));
+            }
             cache_stats.activation_wire = Some(ActivationWireStats {
                 codec: request
                     .config

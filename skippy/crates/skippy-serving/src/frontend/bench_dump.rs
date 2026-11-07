@@ -10,6 +10,10 @@ use skippy_runtime::ActivationFrame;
 const CAP_BYTES: usize = 48 << 20;
 const MIN_TOKENS: u32 = 512;
 
+/// Bench only: the last prefill's stage-0 telemetry, reported in the next
+/// response's timings as `bench_prefill`.
+pub(super) static LAST_PREFILL: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+
 static WRITTEN: Mutex<(usize, usize)> = Mutex::new((0, 0));
 
 pub(super) fn record(output: &ActivationFrame) {

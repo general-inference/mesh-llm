@@ -168,11 +168,13 @@ fi
 # One config file carries both the codec and the dflash arm's draft, since a serve takes one.
 ARM_CONFIG="$ART/split-arm.toml"
 : > "$ARM_CONFIG"
-if [ -n "${SPLIT_CODEC:-}" ] || [ -n "${SPLIT_PREFILL_CHUNK:-}" ]; then
+if [ -n "${SPLIT_CODEC:-}" ] || [ -n "${SPLIT_PREFILL_CHUNK:-}" ] || [ -n "${SPLIT_PREFILL_POLICY:-}" ]; then
   printf '[defaults.skippy]\n' >> "$ARM_CONFIG"
   [ -n "${SPLIT_CODEC:-}" ] && printf 'activation_codec = "%s"\n' "$SPLIT_CODEC" >> "$ARM_CONFIG"
   # Bench only: a fixed prefill chunk size instead of the adaptive ramp.
   [ -n "${SPLIT_PREFILL_CHUNK:-}" ] && printf 'prefill_chunking = "fixed"\nprefill_chunk_size = %s\n' "$SPLIT_PREFILL_CHUNK" >> "$ARM_CONFIG"
+  # Bench only: a prefill chunk policy (adaptive-ramp) instead of the default.
+  [ -n "${SPLIT_PREFILL_POLICY:-}" ] && printf 'prefill_chunking = "%s"\n' "$SPLIT_PREFILL_POLICY" >> "$ARM_CONFIG"
 fi
 [ -n "${DFLASH_TOML:-}" ] && cat "$DFLASH_TOML" >> "$ARM_CONFIG"
 

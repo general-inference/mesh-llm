@@ -76,6 +76,7 @@ def once(prompt, seed):
             "dec_tokens": max(out - 1, 0) if decode_s > 0 else 0, "dec_s": decode_s, "e2e_s": time.monotonic() - t0,
             "draft": t.get("draft_n") or 0, "accepted": t.get("draft_n_accepted") or 0,
             "sha": hashlib.sha256("".join(parts).encode()).hexdigest()[:12],
+            **({"text": "".join(parts)} if os.environ.get("SAVE_TEXT") == "1" else {}),
             "timings": {k: v for k, v in t.items() if isinstance(v, (int, float))}}
 
 

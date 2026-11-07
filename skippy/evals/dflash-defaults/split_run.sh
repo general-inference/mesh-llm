@@ -184,6 +184,8 @@ case "${SPLIT_ARM:?}" in
 esac
 [ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
+# Bench only: dump forwarded prefill payloads to measure their compressibility.
+[ "${SPLIT_DUMP:-0}" = 1 ] && [ "$ROLE" = coordinator ] && export MESH_LLM_BENCH_DUMP_DIR="$ART"
 [ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64

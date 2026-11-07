@@ -374,6 +374,7 @@ impl StageOpenAiBackend {
                         request.activation_width,
                     )
                     .map_err(openai_backend_error)?;
+                    super::bench_dump::record(&output);
                     prefill_output_activation_bytes =
                         prefill_output_activation_bytes.saturating_add(output.payload.len());
                     prefill_forward_activation_bytes =

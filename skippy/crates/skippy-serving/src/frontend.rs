@@ -2,6 +2,7 @@ use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 
 mod admission;
 mod backend;
+mod bench_dump;
 mod decode_scheduler;
 mod embedded_execution;
 mod embedded_generation;

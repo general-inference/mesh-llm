@@ -648,6 +648,13 @@ impl GeneratedText {
         if let Some(stats) = self.speculative_stats.as_ref() {
             stats.insert_response_timings(&mut timings);
         }
+        if let Some(bench) = super::super::bench_dump::LAST_PREFILL
+            .lock()
+            .ok()
+            .and_then(|mut last| last.take())
+        {
+            timings.insert("bench_prefill".to_string(), bench);
+        }
         if let Some(wire) = self.activation_wire.as_ref() {
             // Stage 0 prefills all but the last prompt token, which the first
             // decode carries; a prefix-cache hit forwards only the suffix.

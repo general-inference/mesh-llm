@@ -1386,6 +1386,7 @@ impl StageSession {
         }
         if let Some(split) = self.dflash_split.as_mut() {
             split.rows_dropped = 0;
+            split.unattended = false;
         }
     }
 }

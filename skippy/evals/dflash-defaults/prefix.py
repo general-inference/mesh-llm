@@ -24,10 +24,11 @@ URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
 MAX_PROMPT_CHARS = int(os.environ.get("MAX_PROMPT_CHARS", "24000"))
 PRIME_FRACTION = float(os.environ.get("PRIME_FRACTION", "0.7"))
 LIMIT = int(os.environ.get("LIMIT") or 8)
+MAX_TOKENS = int(os.environ.get("PREFIX_MAX_TOKENS") or 16)
 
 
 def first_token(prompt):
-    body = {"model": MODEL_ID, "messages": [{"role": "user", "content": prompt}], "max_tokens": 16,
+    body = {"model": MODEL_ID, "messages": [{"role": "user", "content": prompt}], "max_tokens": MAX_TOKENS,
             "temperature": 0, "stream": True, "stream_options": {"include_usage": True}}
     request = urllib.request.Request(URL, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
     t0 = time.monotonic()
@@ -43,7 +44,7 @@ def first_token(prompt):
             if ttft is None and any((c.get("delta") or {}).get("content") or (c.get("delta") or {}).get("reasoning_content")
                                     for c in event.get("choices") or []):
                 ttft = (time.monotonic() - t0) * 1000
-    return ttft, {k: v for k, v in timings.items() if isinstance(v, (int, float)) and "prefix" in k}
+    return ttft, {k: v for k, v in timings.items() if isinstance(v, (int, float)) and ("prefix" in k or k.startswith("draft_n") or k in ("prompt_ms", "predicted_n", "predicted_per_second"))}
 
 
 items = [json.loads(line) for line in open(os.environ["PROMPTS"]) if line.strip()]
@@ -65,7 +66,9 @@ summary = {"n": len(rows), "cold_ttft_ms_p50": statistics.median(r["cold_ms"] fo
            "warm_hit_tokens_mean": statistics.mean(r["warm"].get("prefix_cache_hit_tokens", 0) for r in rows),
            "warm_bytes_saved_mean": statistics.mean(r["warm"].get("prefix_cache_bytes_saved", 0) for r in rows),
            "cold_prefill_bytes_mean": statistics.mean(r["cold"].get("prefix_cache_prefill_bytes_sent", 0) for r in rows),
-           "warm_prefill_bytes_mean": statistics.mean(r["warm"].get("prefix_cache_prefill_bytes_sent", 0) for r in rows)}
+           "warm_prefill_bytes_mean": statistics.mean(r["warm"].get("prefix_cache_prefill_bytes_sent", 0) for r in rows),
+           "cold_accept": sum(r["cold"].get("draft_n_accepted", 0) for r in rows) / max(1, sum(r["cold"].get("draft_n", 0) for r in rows)),
+           "warm_accept": sum(r["warm"].get("draft_n_accepted", 0) for r in rows) / max(1, sum(r["warm"].get("draft_n", 0) for r in rows))}
 with open(os.path.join(os.environ.get("ART", "."), "prefix.jsonl"), "a") as f:
     f.write(json.dumps({"rows": rows, "summary": summary}) + "\n")
 print("PREFIX_BENCH " + json.dumps(summary), flush=True)

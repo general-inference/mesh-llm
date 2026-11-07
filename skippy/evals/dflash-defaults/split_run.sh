@@ -188,6 +188,7 @@ export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
 [ "${SPLIT_DUMP:-0}" = 1 ] && [ "$ROLE" = coordinator ] && { export MESH_LLM_BENCH_DUMP_DIR="$HOME/.cache/split-dump"; rm -rf "$MESH_LLM_BENCH_DUMP_DIR"; mkdir -p "$MESH_LLM_BENCH_DUMP_DIR"; }
 [ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
+[ -n "${SPLIT_FEATURE_ENC:-}" ] && export SKIPPY_DFLASH_FEATURE_ENCODING="$SPLIT_FEATURE_ENC"
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64
 # layers), which measures a split that barely exists. An explicit cut levels the
 # stages; --auto-balance is what honours it, and its re-cut loop has nothing to fix on

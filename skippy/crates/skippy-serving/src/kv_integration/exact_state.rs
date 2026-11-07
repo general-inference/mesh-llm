@@ -622,6 +622,9 @@ impl KvStageIntegration {
             return Ok(None);
         };
         admission_credit.snapshot_reservation = reservation;
+        // splitarch-stalls instrumentation: how long the lock-held export takes.
+        let export_started = std::time::Instant::now();
+        let mut kv_export_ms = 0.0_f64;
         let exported = match exact_state_payload {
             StagePrefixCachePayload::FullState => {
                 runtime.export_full_state(session_id).map(|state| {
@@ -632,11 +635,13 @@ impl KvStageIntegration {
                 })
             }
             StagePrefixCachePayload::KvRecurrent => (|| {
+                let kv_started = std::time::Instant::now();
                 let kv = match runtime.export_kv_page(session_id, 0, token_count) {
                     Ok(kv) => Some(kv),
                     Err(error) if is_native_kv_unavailable(&error) => None,
                     Err(error) => return Err(error),
                 };
+                kv_export_ms = kv_started.elapsed().as_secs_f64() * 1000.0;
                 let recurrent = match runtime.export_recurrent_state(session_id) {
                     Ok(recurrent) => recurrent,
                     // A known-dense model has no recurrent memory to export;
@@ -672,6 +677,14 @@ impl KvStageIntegration {
         };
         let payload_kind = payload.kind();
         let logical_bytes = payload.byte_len();
+        tracing::info!(
+            session_id,
+            token_count,
+            logical_bytes,
+            kv_export_ms,
+            export_ms = export_started.elapsed().as_secs_f64() * 1000.0,
+            "splitarch-stalls: exact-state export finished"
+        );
         match self.enqueue_exact_state_record(PendingExactStateRecord {
             page_id: identity.page_id.clone(),
             payload,

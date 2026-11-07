@@ -245,9 +245,25 @@ impl SplitTopologyCoordinator {
     }
 
     async fn evaluate_replan(&mut self, reason: &'static str) -> bool {
+        // splitarch-stalls instrumentation: time each phase of the tick.
+        let tick_started = Instant::now();
+        let should_continue = self.evaluate_replan_timed(reason).await;
+        tracing::info!(
+            model_ref = self.model_ref,
+            reason,
+            total_ms = tick_started.elapsed().as_secs_f64() * 1000.0,
+            "splitarch-stalls: split coordinator tick finished"
+        );
+        should_continue
+    }
+
+    async fn evaluate_replan_timed(&mut self, reason: &'static str) -> bool {
+        let phase = Instant::now();
         if let Some(should_continue) = self.withdraw_if_superseded(reason).await {
             return should_continue;
         }
+        let superseded_ms = phase.elapsed().as_secs_f64() * 1000.0;
+        let phase = Instant::now();
         let local_capacity_override = split_replan_local_capacity_override(
             self.capacity_budget_bytes,
             self.pinned_gpu
@@ -264,10 +280,14 @@ impl SplitTopologyCoordinator {
             self.local_source_required,
         )
         .await;
+        let collect_ms = phase.elapsed().as_secs_f64() * 1000.0;
+        let phase = Instant::now();
         let connected_node_ids = split_connected_node_ids(&self.node).await;
         self.node
             .refresh_stage_runtime_statuses(Duration::from_secs(2))
             .await;
+        let status_ms = phase.elapsed().as_secs_f64() * 1000.0;
+        let phase = Instant::now();
         let runtime_statuses = self.node.stage_runtime_statuses().await;
         let missing_stage_nodes =
             split_missing_active_stage_nodes(&self.active, &connected_node_ids);
@@ -295,6 +315,16 @@ impl SplitTopologyCoordinator {
             );
             None
         };
+        tracing::info!(
+            model_ref = self.model_ref,
+            reason,
+            superseded_ms,
+            collect_ms,
+            status_ms,
+            plan_ms = phase.elapsed().as_secs_f64() * 1000.0,
+            candidate = candidate.is_some(),
+            "splitarch-stalls: split coordinator tick phases"
+        );
 
         if let Some(should_continue) = self
             .handle_loss_recovery(

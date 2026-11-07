@@ -185,7 +185,7 @@ esac
 [ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
 # Bench only: dump forwarded prefill payloads to measure their compressibility.
-[ "${SPLIT_DUMP:-0}" = 1 ] && [ "$ROLE" = coordinator ] && { export MESH_LLM_BENCH_DUMP_DIR="$HOME/.cache/split-dump"; rm -rf "$MESH_LLM_BENCH_DUMP_DIR"; mkdir -p "$MESH_LLM_BENCH_DUMP_DIR"; }
+[ "${SPLIT_DUMP:-0}" = 1 ] && { export MESH_LLM_BENCH_DUMP_DIR="$HOME/.cache/split-dump"; rm -rf "$MESH_LLM_BENCH_DUMP_DIR"; mkdir -p "$MESH_LLM_BENCH_DUMP_DIR"; }
 [ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 [ -n "${SPLIT_FEATURE_ENC:-}" ] && export SKIPPY_DFLASH_FEATURE_ENCODING="$SPLIT_FEATURE_ENC"
@@ -254,6 +254,7 @@ if [ "$ROLE" = joiner ] && [ -n "${SPLIT_JOIN_TOKEN:-}" ]; then
     sleep 10
   done
   curl -sf -m 10 "http://127.0.0.1:$CONSOLE/api/diagnostics/network" > "$ART/network-joiner-end.json" 2>/dev/null || true
+  [ -n "${MESH_LLM_BENCH_DUMP_DIR:-}" ] && { ls -la "$MESH_LLM_BENCH_DUMP_DIR"; python3 "$HERE/compress.py" "$MESH_LLM_BENCH_DUMP_DIR" || echo "COMPRESS failed"; }
   echo "joiner finished"
   exit 0
 fi
@@ -284,6 +285,7 @@ if [ "$ROLE" = joiner ]; then
     else MISSES=$((MISSES + 1)); [ "$MISSES" -ge 6 ] && break; fi
     sleep 10
   done
+  [ -n "${MESH_LLM_BENCH_DUMP_DIR:-}" ] && { ls -la "$MESH_LLM_BENCH_DUMP_DIR"; python3 "$HERE/compress.py" "$MESH_LLM_BENCH_DUMP_DIR" || echo "COMPRESS failed"; }
   echo "joiner finished"
   exit 0
 fi

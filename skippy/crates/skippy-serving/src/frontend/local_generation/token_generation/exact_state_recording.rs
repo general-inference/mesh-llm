@@ -1,5 +1,15 @@
 use super::*;
 
+/// When a KV-plus-recurrent checkpoint copies its KV rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::frontend) enum CheckpointKvExport {
+    /// Copy them with the recurrent state, holding the runtime.
+    Now,
+    /// Copy them when the session ends, keeping a decoding request's runtime
+    /// free. See `KvStageIntegration::record_exact_state_at_session_end`.
+    AtSessionEnd,
+}
+
 /// Owns one unit of the test-only outstanding-capture counter for a single
 /// detached capture task. Construction increments the counter, so the unit is
 /// accounted for from before the task is submitted; dropping the guard — on
@@ -58,6 +68,7 @@ impl StageOpenAiBackend {
             checkpoint_tokens,
             "post_decode_checkpoint",
             write_through_l3,
+            CheckpointKvExport::Now,
         );
         #[cfg(test)]
         if !scheduled {
@@ -74,6 +85,7 @@ impl StageOpenAiBackend {
         checkpoint_tokens: Vec<i32>,
         decision_prefix: &'static str,
         write_through_l3: bool,
+        kv_export: CheckpointKvExport,
     ) -> bool {
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
@@ -110,6 +122,7 @@ impl StageOpenAiBackend {
                     &checkpoint_tokens,
                     decision_prefix,
                     write_through_l3,
+                    kv_export,
                 );
             },
         );
@@ -149,6 +162,7 @@ impl StageOpenAiBackend {
         checkpoint_tokens: &[i32],
         decision_prefix: &str,
         write_through_l3: bool,
+        kv_export: CheckpointKvExport,
     ) -> bool {
         let Some(kv) = self.kv.as_ref() else {
             return false;
@@ -241,6 +255,36 @@ impl StageOpenAiBackend {
             .generation_service_estimator
             .estimated_prefill_ms(checkpoint_tokens.len());
         let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
+        if kv_export == CheckpointKvExport::AtSessionEnd {
+            let pending = kv.record_exact_state_at_session_end(
+                runtime,
+                session_id,
+                &identity,
+                admission,
+                l3_cost,
+                write_through_l3,
+            );
+            let mut attrs = self.openai_attrs(ids);
+            let decision = match &pending {
+                Ok(true) => "deferred_to_session_end",
+                Ok(false) => "record_none",
+                Err(error) => {
+                    attrs.insert("skippy.kv.error".to_string(), json!(error.to_string()));
+                    "error"
+                }
+            };
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!(format!("{decision_prefix}_{decision}")),
+            );
+            attrs.insert(
+                "skippy.exact_cache.recorded_tokens".to_string(),
+                json!(checkpoint_token_count),
+            );
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
+            return matches!(pending, Ok(true));
+        }
         match kv.record_exact_state_with_cost_and_durability(
             runtime,
             session_id,

@@ -588,50 +588,28 @@ pub(in crate::binary_transport) fn maybe_record_binary_prefill(
                 continue;
             }
             if token_count_usize == token_ids.len() {
-                match kv.record_exact_state(
+                match kv.record_exact_state_at_session_end(
                     runtime,
                     session_id,
                     &identity,
                     crate::kv_integration::CaptureAdmission::BestEffort,
+                    None,
+                    true,
                 ) {
-                    Ok(Some(record)) => {
+                    Ok(true) => {
                         result.recorded_pages = result.recorded_pages.saturating_add(1);
-                        result.recorded_tokens = result
-                            .recorded_tokens
-                            .saturating_add(record.token_count as u64);
-                        result.evicted_entries = result
-                            .evicted_entries
-                            .saturating_add(record.evicted_entries);
-                        result.evicted_tokens = result
-                            .evicted_tokens
-                            .saturating_add(record.evicted_logical_bytes);
+                        result.recorded_tokens = result.recorded_tokens.saturating_add(token_count);
                         attrs.insert(
                             "skippy.exact_cache.recorded_page_id".to_string(),
-                            json!(record.page_id),
+                            json!(identity.page_id),
                         );
                         attrs.insert(
-                            "skippy.exact_cache.payload_kind".to_string(),
-                            json!(record.payload_kind.to_string()),
-                        );
-                        attrs.insert(
-                            "skippy.exact_cache.logical_bytes".to_string(),
-                            json!(record.logical_bytes),
-                        );
-                        attrs.insert(
-                            "skippy.exact_cache.physical_bytes".to_string(),
-                            json!(record.physical_bytes),
-                        );
-                        attrs.insert(
-                            "skippy.exact_cache.entries".to_string(),
-                            json!(record.entries),
-                        );
-                        attrs.insert(
-                            "skippy.exact_cache.dedupe_reused_block_count".to_string(),
-                            json!(record.dedupe.reused_block_count),
+                            "skippy.exact_cache.deferred_to_session_end".to_string(),
+                            json!(true),
                         );
                         continue;
                     }
-                    Ok(None) => {}
+                    Ok(false) => {}
                     Err(error) => {
                         attrs.insert(
                             "skippy.exact_cache.record_error_class".to_string(),
@@ -843,48 +821,32 @@ pub(in crate::binary_transport) fn maybe_record_binary_full_prefill(
             .unwrap_or(usize::MAX)
             .min(token_ids.len());
         if exact_state_record_allowed && token_count_usize == token_ids.len() {
-            match kv.record_exact_state(
+            match kv.record_exact_state_at_session_end(
                 runtime,
                 session_id,
                 &identity,
                 crate::kv_integration::CaptureAdmission::BestEffort,
+                None,
+                true,
             ) {
-                Ok(Some(record)) => {
+                Ok(true) => {
                     result.recorded_pages = result.recorded_pages.saturating_add(1);
                     result.recorded_tokens = result
                         .recorded_tokens
-                        .saturating_add(record.token_count as u64);
-                    result.evicted_entries = result
-                        .evicted_entries
-                        .saturating_add(record.evicted_entries);
-                    result.evicted_tokens = result
-                        .evicted_tokens
-                        .saturating_add(record.evicted_logical_bytes);
+                        .saturating_add(identity.identity.token_count);
                     attrs.insert(
                         "skippy.exact_cache.recorded_page_id".to_string(),
-                        json!(record.page_id),
+                        json!(identity.page_id),
                     );
                     attrs.insert(
-                        "skippy.exact_cache.payload_kind".to_string(),
-                        json!(record.payload_kind.to_string()),
-                    );
-                    attrs.insert(
-                        "skippy.exact_cache.logical_bytes".to_string(),
-                        json!(record.logical_bytes),
-                    );
-                    attrs.insert(
-                        "skippy.exact_cache.physical_bytes".to_string(),
-                        json!(record.physical_bytes),
-                    );
-                    attrs.insert(
-                        "skippy.exact_cache.entries".to_string(),
-                        json!(record.entries),
+                        "skippy.exact_cache.deferred_to_session_end".to_string(),
+                        json!(true),
                     );
                     if !kv.records_resident_prefixes() {
                         continue;
                     }
                 }
-                Ok(None) => {}
+                Ok(false) => {}
                 Err(error) => {
                     attrs.insert(
                         "skippy.exact_cache.record_error_class".to_string(),

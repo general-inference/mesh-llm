@@ -14,6 +14,7 @@ mod token_generation;
 pub(in crate::frontend) use dflash_decode::AdaptiveBlocks;
 #[cfg(test)]
 pub(crate) use token_generation::CaptureTaskOutstandingGuard;
+pub(in crate::frontend) use token_generation::CheckpointKvExport;
 #[cfg(test)]
 pub(crate) use token_generation::capture_trace;
 

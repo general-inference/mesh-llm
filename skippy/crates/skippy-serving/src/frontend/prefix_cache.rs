@@ -12,6 +12,7 @@ use crate::frontend::generation::InferenceGenerationIds;
 use crate::frontend::generation::MAX_EXACT_REPLAY_TOKENS;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::local_generation::CheckpointKvExport;
 use crate::frontend::sampling_cache_key::{sampling_replay_safe, sampling_semantic_fingerprint};
 use crate::frontend::util::openai_backend_error;
 use crate::frontend::util::openai_io_error;
@@ -567,6 +568,7 @@ impl StageOpenAiBackend {
                 token_ids.to_vec(),
                 "embedded_full_prefill_state",
                 kv.full_exact_state_writes_through_l3(token_ids.len()),
+                CheckpointKvExport::AtSessionEnd,
             );
         let mut recorded_any = exact_record_queued;
         for record in records.into_iter().flatten() {
@@ -640,6 +642,7 @@ impl StageOpenAiBackend {
                     &scheduler_checkpoint_tokens,
                     "embedded_shared_checkpoint",
                     write_through_l3,
+                    CheckpointKvExport::AtSessionEnd,
                 ))
             },
         )

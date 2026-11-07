@@ -46,7 +46,7 @@ PY
 nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader || true
 for SET in ${TRACE_SETS:-chat agent}; do
   T0=$(date +%s)
-  SPEC_SKIP_BASELINE=1 SPEC_TRACE_OUT="$ART/trace-$SET.jsonl" "$BIN" \
+  SPEC_TRACE_MODE="${TRACE_MODE:-every}" SPEC_SKIP_BASELINE=1 SPEC_TRACE_OUT="$ART/trace-$SET.jsonl" "$BIN" \
     --target-model-path "$TARGET" --draft-model-path "$DRAFT" --dflash \
     --prompt-corpus "$ART/corpus-$SET.jsonl" --max-new-tokens "${MAX_NEW:-256}" \
     --speculative-window "${WINDOW:-15}" --ctx-size 65536 --allow-mismatch \

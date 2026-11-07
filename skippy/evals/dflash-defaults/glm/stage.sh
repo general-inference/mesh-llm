@@ -27,7 +27,7 @@ xargs -P 6 -n 2 bash -c 'fetch "$0" "$1"' < list.txt || exit 1
 echo "source verified in $(( $(date +%s) - T0 ))s"
 T0=$(date +%s)
 OUT="$HOME/.cache/glm-src/renamed"
-ls *.gguf */*.gguf | xargs -P 6 -n 8 python3 "$HERE/glm_rename.py" "$SRC" "$OUT" || exit 1
+find . -name "*.gguf" | sed "s#^\./##" | sort | xargs -P 6 -n 8 python3 "$HERE/glm_rename.py" "$SRC" "$OUT" || exit 1
 echo "rewritten in $(( $(date +%s) - T0 ))s"
 cp "$HERE/model-package-1341078e.json" "$OUT/model-package.json"
 cd "$OUT"

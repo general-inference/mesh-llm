@@ -32,8 +32,10 @@ echo "models verified"
 python3 - "$ART" <<'PY'
 import json, sys
 art = sys.argv[1]
+import os
+THINK = os.environ.get("TRACE_THINK", "1") == "1"
 def render(p):
-    return f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n<think>\n"
+    return f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n" + ("<think>\n" if THINK else "")
 chat = [json.loads(l) for l in open("skippy/evals/spec-prompts/spec-prompts.jsonl") if l.strip()]
 chat = [c for c in chat if c["split"] == "report"]
 agent = [json.loads(l) for l in open("skippy/evals/agent-transcripts/agent-transcripts.jsonl") if l.strip()]

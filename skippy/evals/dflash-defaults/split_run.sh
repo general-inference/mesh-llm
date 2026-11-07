@@ -185,7 +185,7 @@ esac
 [ -s "$ARM_CONFIG" ] && ARM_FLAGS="$ARM_FLAGS --config $ARM_CONFIG"
 export MESH_LLM_BENCH_DOWNSTREAM_WIRE_DELAY_MS="${SPLIT_WIRE_DELAY_MS:-0}"
 # Bench only: dump forwarded prefill payloads to measure their compressibility.
-[ "${SPLIT_DUMP:-0}" = 1 ] && [ "$ROLE" = coordinator ] && export MESH_LLM_BENCH_DUMP_DIR="$ART"
+[ "${SPLIT_DUMP:-0}" = 1 ] && [ "$ROLE" = coordinator ] && { export MESH_LLM_BENCH_DUMP_DIR="$HOME/.cache/split-dump"; rm -rf "$MESH_LLM_BENCH_DUMP_DIR"; mkdir -p "$MESH_LLM_BENCH_DUMP_DIR"; }
 [ -n "${SPLIT_WIRE_MBPS:-}" ] && export MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS="$SPLIT_WIRE_MBPS"
 [ "${SPLIT_DFLASH_FIXED:-0}" = 1 ] && export SKIPPY_DFLASH_ADAPTIVE=0
 # Capacity-only placement packs a model that fits one node onto that node (63 of 64
@@ -364,6 +364,7 @@ for WORKLOAD in $(echo "${SPLIT_WORKLOADS:-chat}" | tr , ' '); do
   esac
 done
 net_paths after
+[ -n "${MESH_LLM_BENCH_DUMP_DIR:-}" ] && { ls -la "$MESH_LLM_BENCH_DUMP_DIR"; python3 "$HERE/compress.py" "$MESH_LLM_BENCH_DUMP_DIR" || echo "COMPRESS failed"; }
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

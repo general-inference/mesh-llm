@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use skippy_runtime::ActivationFrame;
 
 const CAP_BYTES: usize = 48 << 20;
-const MIN_TOKENS: u32 = 512;
+const MIN_TOKENS: u32 = 128;
 
 static WRITTEN: Mutex<(usize, usize)> = Mutex::new((0, 0));
 

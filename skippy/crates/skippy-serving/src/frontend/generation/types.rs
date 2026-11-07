@@ -651,7 +651,7 @@ impl GeneratedText {
         if let Some(bench) = super::super::bench_dump::LAST_PREFILL
             .lock()
             .ok()
-            .and_then(|mut last| last.take())
+            .and_then(|last| last.clone())
         {
             timings.insert("bench_prefill".to_string(), bench);
         }

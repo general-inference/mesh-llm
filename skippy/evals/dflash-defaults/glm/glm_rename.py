@@ -4,7 +4,7 @@
 Rewrites meshllm/GLM-5.3-Flash-UD-Q4_K_XL-layers@d1b3be77 layer-package GGUFs the way the
 au-mel-01 copy (manifest 1341078e) was rewritten to match Unsloth a38483c8: 'glm5next' keys
 and architecture become 'glm5-next', the boolean glm5-next.attention.indexer.index_share_mtp=true
-is inserted before general.alignment, and skippy.package.tensor_offset moves by the header
+is inserted after general.repo_url, and skippy.package.tensor_offset moves by the header
 growth. Tensor data is copied byte for byte. Without paths, rewrites every .gguf in the manifest.
 """
 import json, os, struct, shutil, sys
@@ -49,11 +49,13 @@ def rewrite_kvs(kvs, offset_delta):
     for k, t, v in kvs:
         if k.startswith(OLD + b"."): k = NEW + k[len(OLD):]
         if t == 8 and v[1] == OLD: v = ("str", NEW)
-        if k == b"general.alignment" and not any(x[0] == INSERT_KEY for x in out):
-            out.append([INSERT_KEY, 7, ("s", True)])
         if k == b"skippy.package.tensor_offset" and offset_delta:
             v = ("arr", v[1], [x + offset_delta for x in v[2]])
         out.append([k, t, v])
+        # The new key closes the source model's keys, before the package's own skippy.* keys.
+        if k == b"general.repo_url":
+            out.append([INSERT_KEY, 7, ("s", True)])
+    assert sum(x[0] == INSERT_KEY for x in out) == 1
     return out
 
 def header(ver, kvs, tensors, align):

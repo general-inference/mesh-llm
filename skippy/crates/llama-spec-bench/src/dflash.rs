@@ -16,7 +16,10 @@ pub(crate) fn generate_dflash(
     let mut session = target.create_session()?;
     let target_prefill_started = Instant::now();
     if run.prompt_tokens.len() > 1 {
-        session.prefill_chunk(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
+        // Long prompts exceed the runtime batch; prefill in bounded chunks.
+        for chunk in run.prompt_tokens[..run.prompt_tokens.len() - 1].chunks(512) {
+            session.prefill_chunk(chunk)?;
+        }
     }
     let target_prefill_ms = elapsed_ms(target_prefill_started);
 

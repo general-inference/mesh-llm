@@ -149,6 +149,8 @@ struct SpecStats {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    // Load the packaged runtime named by MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR.
+    skippy_runtime::test_support::require_native_runtime();
     if args.max_new_tokens == 0 {
         bail!("--max-new-tokens must be greater than zero");
     }
@@ -289,8 +291,14 @@ fn run_baseline(args: &Args, target: &StageModel, prompt: &PromptCase) -> Result
     if target_tokens.is_empty() {
         bail!("prompt {} produced no tokens", prompt.id);
     }
-    let generation = generate_baseline(target, &target_tokens, args.max_new_tokens)
-        .with_context(|| format!("baseline target generation for {}", prompt.id))?;
+    // SPEC_SKIP_BASELINE=1: trace runs only need the speculative pass, whose
+    // committed tokens are the target's own greedy output.
+    let generation = if std::env::var("SPEC_SKIP_BASELINE").as_deref() == Ok("1") {
+        Generation { tokens: Vec::new(), prefill_ms: 0.0, decode_ms: 0.0, ttft_ms: 0.0 }
+    } else {
+        generate_baseline(target, &target_tokens, args.max_new_tokens)
+            .with_context(|| format!("baseline target generation for {}", prompt.id))?
+    };
     Ok(Baseline {
         target_tokens,
         generation,
@@ -395,7 +403,8 @@ fn run_prompt_pair(
     }
     .with_context(|| format!("speculative target/draft generation for {}", prompt.id))?;
 
-    let mismatch_index = first_mismatch(&baseline.tokens, &speculative.tokens);
+    dflash::trace_prompt(&prompt.id, prompt.category.as_deref(), &target_tokens, &speculative.tokens);
+    let mismatch_index = if baseline.tokens.is_empty() { None } else { first_mismatch(&baseline.tokens, &speculative.tokens) };
     let correct = tokenizer_match && mismatch_index.is_none();
     let accept_rate = if speculative.stats.draft_tokens == 0 {
         0.0

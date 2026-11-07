@@ -8,6 +8,6 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-skippy-runtime = { path = "../skippy-runtime" }
+skippy-runtime = { path = "../skippy-runtime", features = ["dynamic-native-runtime", "test-support"] }
 serde.workspace = true
 serde_json.workspace = true

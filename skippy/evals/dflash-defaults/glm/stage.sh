@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stages GLM-5.3-Flash as the au-mel-01 Sparks hold it (meshllm layers@d1b3be77 rewritten to
 # match Unsloth a38483c8; manifest 1341078e) on a node that cannot copy it from them: download
-# the Hugging Face package, rewrite it with glm_rename.py, and check every file against the
+# the Hugging Face package, rewrite its layers with glm_rename.py, take the projectors from
+# Unsloth, and check every file against the
 # manifest before installing it in the split harness's Hugging Face cache layout.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,7 +28,12 @@ xargs -P 6 -n 2 bash -c 'fetch "$0" "$1"' < list.txt || exit 1
 echo "source verified in $(( $(date +%s) - T0 ))s"
 T0=$(date +%s)
 OUT="$HOME/.cache/glm-src/renamed"
-ls *.gguf */*.gguf | xargs -P 6 -n 8 python3 "$HERE/glm_rename.py" "$SRC" "$OUT" || exit 1
+find shared layers -name "*.gguf" | sort | xargs -P 6 -n 8 python3 "$HERE/glm_rename.py" "$SRC" "$OUT" || exit 1
+# The Melbourne package carries Unsloth's fixed mmproj files as its projectors, unchanged.
+UNSLOTH=https://huggingface.co/unsloth/GLM-5.3-Flash-GGUF/resolve/a38483c8cd5df544f53d70fb281afe97369d5ab6
+mkdir -p "$OUT/projectors"
+curl -fsSL --retry 10 -o "$OUT/projectors/projector-00000.gguf" "$UNSLOTH/mmproj-BF16.gguf" || exit 1
+curl -fsSL --retry 10 -o "$OUT/projectors/projector-00001.gguf" "$UNSLOTH/mmproj-F16.gguf" || exit 1
 echo "rewritten in $(( $(date +%s) - T0 ))s"
 cp "$HERE/model-package-1341078e.json" "$OUT/model-package.json"
 cd "$OUT"

@@ -46,9 +46,9 @@ dense contract, which records only trunk layer inputs, does not.
  src/CMakeLists.txt                          |  27 +++
  src/models/glm5-next.cpp                    |  63 +++++--
  src/skippy/tests/graph_build_inputs.cpp     | 190 ++++++++++++++++++++
- src/skippy/tests/graph_contract_cases.cmake |  32 ++++
+ src/skippy/tests/graph_contract_cases.cmake |  45 ++++
  tests/test-llama-archs.cpp                  |   9 +-
- 5 files changed, 304 insertions(+), 17 deletions(-)
+ 5 files changed, 317 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 94f1fc871..09412c534 100644
@@ -481,10 +481,10 @@ index f02490889..f42a2a6ee 100644
          llama_backend_init();
          const int rc = check_stage_fused_ops_auto(argv[2]);
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
-index 4ee862411..9f2e50f49 100644
+index 4ee862411..77d0be453 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -118,3 +118,35 @@ add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contrac
+@@ -118,3 +118,48 @@ add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contrac
      "${glm53_contract_dir}/graph-contract.gguf" causal)
  set_tests_properties(skippy_graph_contract_glm53_synthetic PROPERTIES
      FIXTURES_REQUIRED contract-glm53-synthetic TIMEOUT 900)
@@ -520,6 +520,19 @@ index 4ee862411..9f2e50f49 100644
 +    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
 +set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
 +    FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
++
++# DeepSeek-V4-Flash-0731's DSpark draft reads target layers 41, 42 and 43:
++# layer 43 of the 43-layer trunk is its output, the output head's input, and
++# DeepSeek-V4 publishes it (the hyper-connection streams' mean) like every
++# trunk layer's input.
++add_test(NAME skippy_deepseek4_stage_layer_inputs COMMAND skippy-graph-build-inputs --stage-layer-inputs
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek4/graph-contract.gguf" 41,42,43)
++set_tests_properties(skippy_deepseek4_stage_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED contract-deepseek4 TIMEOUT 900)
++add_test(NAME skippy_deepseek4_head_input_published COMMAND skippy-graph-build-inputs --head-input-published
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-deepseek4/graph-contract.gguf" 1)
++set_tests_properties(skippy_deepseek4_head_input_published PROPERTIES
++    FIXTURES_REQUIRED contract-deepseek4 TIMEOUT 900)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
 index 4f7ea31ac..939cd2241 100644
 --- a/tests/test-llama-archs.cpp

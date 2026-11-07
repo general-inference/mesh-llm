@@ -40,7 +40,9 @@ HERE="$PWD/skippy/evals/dflash-defaults"
 ART="${JIANYANG_ARTIFACT_DIR:?}"
 ROLE="${JIANYANG_ROLE:?}"
 API=9447
-CONSOLE=3232
+# A run that pairs plain jobs by JIANYANG_LEADER_HOST can take its own console port, so a
+# joiner never picks up the invite of another run on the same coordinator node.
+CONSOLE="${SPLIT_CONSOLE_PORT:-3232}"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/mesh-llm-target}"
 BIN=""
@@ -298,13 +300,13 @@ fi
 if [ "$ROLE" = joiner ]; then
   LEAD="${JIANYANG_LEADER_HOST:?no leader host in the formation env}"
   TOKEN=""
-  for _ in $(seq 1 360); do
+  for _ in $(seq 1 $(( ${SPLIT_LEADER_WAIT_S:-1800} / 5 ))); do
     TOKEN=$(curl -sf -m 5 "http://$LEAD:$CONSOLE/api/status" 2>/dev/null \
       | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
     [ -n "$TOKEN" ] && break
     sleep 5
   done
-  [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after 30m" >&2; exit 1; }
+  [ -n "$TOKEN" ] || { echo "no invite token from $LEAD after ${SPLIT_LEADER_WAIT_S:-1800}s" >&2; exit 1; }
   echo "joining the mesh at $LEAD"
   "$BIN" --log-format json --parallel "${SPLIT_LANES:-1}" $VRAM_FLAGS $ARM_FLAGS serve --model "$MODEL" $SPLIT_FLAGS \
     --join "$TOKEN" --ctx-size "${SPLIT_CTX:-8192}" --port "$API" --console "$CONSOLE" --bind-port 7843 \

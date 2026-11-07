@@ -343,6 +343,14 @@ print("SPLIT_NET " + json.dumps({"when": sys.argv[2], "peers": peers, "verdict":
     || echo "SPLIT_NET {\"when\": \"$1\", \"error\": \"no diagnostics\"}"
 }
 net_paths before
+# iroh's RTT to each peer moves during a run on a real WAN, so sample it every 30s.
+( while kill -0 "$SERVE" 2>/dev/null; do
+    curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/diagnostics/network" 2>/dev/null \
+      | python3 -c 'import json,sys,time; d=json.load(sys.stdin); print(int(time.time()), " ".join("%s:%s:%s" % (p.get("short_node_id"), p.get("path"), p.get("rtt_ms")) for p in d.get("peers") or []))' \
+      >> "$ART/rtt-samples.txt" 2>/dev/null
+    sleep 30
+  done ) &
+RTT_SAMPLER=$!
 ARM_LABEL="$SPLIT_ARM${SPLIT_DFLASH_CAP:+-k$SPLIT_DFLASH_CAP}"
 if [ "${SPLIT_PREFIX:-0}" = 1 ]; then
   PORT="$API" MODEL_ID="$MODEL_ID" ART="$ART" LIMIT="${SPLIT_LIMIT:-8}" \
@@ -362,6 +370,20 @@ for WORKLOAD in $(echo "${SPLIT_WORKLOADS:-chat}" | tr , ' '); do
   esac
 done
 net_paths after
+kill "$RTT_SAMPLER" 2>/dev/null
+python3 - "$ART/rtt-samples.txt" <<'PY' || true
+import json, statistics, sys
+rtts, paths = [], set()
+for line in open(sys.argv[1]):
+    for peer in line.split()[1:]:
+        _, path, rtt = peer.rsplit(":", 2)
+        paths.add(path)
+        if rtt.isdigit(): rtts.append(int(rtt))
+if rtts:
+    rtts.sort()
+    print("SPLIT_RTT " + json.dumps({"n": len(rtts), "min": rtts[0], "p50": statistics.median(rtts),
+          "p90": rtts[int(len(rtts) * 0.9)], "max": rtts[-1], "paths": sorted(paths)}))
+PY
 # Errors from this node's serve log, so a failed arm explains itself in the job output.
 grep -E '"level":"error"' "$LOG" | tail -5 | cut -c1-600 | sed 's/^/serve error: /' || true
 SPANS_AFTER=$(curl -sf -m 5 "http://127.0.0.1:$CONSOLE/api/status" | python3 -c '

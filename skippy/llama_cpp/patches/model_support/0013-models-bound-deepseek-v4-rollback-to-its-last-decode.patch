@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Sun, 8 Nov 2026 16:55:40 +1100
+Subject: [PATCH] models: bound DeepSeek-V4 rollback to its last decode
+
+DeepSeek-V4's cache rewinds a trimmed suffix through rollback snapshots:
+plane d holds the state d tokens before the end of the last decode. A
+plane deeper than that decode was written as the state at its start, so
+a rollback reaching past it (a pipelined verify window rejected after the
+next window decoded) restored the wrong compressor state and decoding
+silently drifted from one-token-at-a-time output.
+
+The cache now records each sequence's token count in its last decode and
+refuses a rollback deeper than that, so the trim fails as unsupported
+instead. skippy-verify-rollback covers DeepSeek-V4 in its native-rollback
+mode: forced rejections inside a window commit the one-at-a-time tokens,
+and trims past the last decode or the snapshot depth are refused.
+---
+ src/CMakeLists.txt          |  3 +++
+ src/llama-kv-cache-dsv4.cpp | 22 +++++++++++++++++++++-
+ src/llama-kv-cache-dsv4.h   |  3 +++
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 446bdec92..620e844c5 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -514,6 +514,9 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     # lfm2's fixture slides its attention window, so it checkpoints every window.
+     add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
+     add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
++    # DeepSeek-V4 rewinds its derived compressor state through its own seq_rm,
++    # within the snapshots of the last decode.
++    add_skippy_verify_rollback_test(deepseek4 deepseek4-moe.gguf native-rollback)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     target_include_directories(skippy-sampling-history PRIVATE .)
+     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+diff --git a/src/llama-kv-cache-dsv4.cpp b/src/llama-kv-cache-dsv4.cpp
+index 4fd0aa6a9..903884a31 100644
+--- a/src/llama-kv-cache-dsv4.cpp
++++ b/src/llama-kv-cache-dsv4.cpp
+@@ -1234,7 +1234,8 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
+     hparams_lid(model.hparams),
+     n_seq_max(n_seq_max),
+     n_rs_seq(n_rs_seq),
+-    rs_idx(n_seq_max, 0) {
++    rs_idx(n_seq_max, 0),
++    rs_depth(n_seq_max, 0) {
+ 
+     const layer_filter_cb filter_raw = [&](int32_t il) {
+         if (filter && !filter(il)) {
+@@ -1493,6 +1494,12 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
+             return false;
+         }
+ 
++        // snapshot plane d holds the state d tokens before the end of the
++        // last decode, and only for d up to that decode's length
++        if (rollback > (llama_pos) rs_depth[seq_id]) {
++            return false;
++        }
++
+         // pending rollback is single-use: stacked partial removals don't compose
+         if (rs_idx[seq_id] != 0) {
+             return false;
+@@ -1529,6 +1536,7 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
+ 
+     if (seq_id_src != seq_id_dst) {
+         rs_idx[seq_id_dst] = 0;
++        rs_depth[seq_id_dst] = 0;
+     }
+ }
+ 
+@@ -1673,8 +1681,10 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id,
+     if (seq_id >= 0) {
+         GGML_ASSERT((uint32_t) seq_id < n_seq_max);
+         rs_idx[seq_id] = 0;
++        rs_depth[seq_id] = 0;
+     } else {
+         std::fill(rs_idx.begin(), rs_idx.end(), 0);
++        std::fill(rs_depth.begin(), rs_depth.end(), 0);
+     }
+ }
+ 
+@@ -1720,14 +1730,22 @@ void llama_kv_cache_dsv4::reset_rs_idx_for_ubatches(const std::vector<llama_ubat
+     }
+ 
+     for (const llama_ubatch & ubatch : ubatches) {
++        // each ubatch rewrites the snapshots of the sequences it holds
++        std::vector<uint32_t> n_seq_tokens(n_seq_max, 0);
+         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+             for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                 const llama_seq_id seq_id = ubatch.seq_id[i][s];
+                 if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
+                     rs_idx[seq_id] = 0;
++                    ++n_seq_tokens[seq_id];
+                 }
+             }
+         }
++        for (uint32_t seq_id = 0; seq_id < n_seq_max; ++seq_id) {
++            if (n_seq_tokens[seq_id] > 0) {
++                rs_depth[seq_id] = n_seq_tokens[seq_id];
++            }
++        }
+     }
+ }
+ 
+@@ -1761,8 +1779,10 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
+ 
+     if (seq_id >= 0) {
+         rs_idx[seq_id] = 0;
++        rs_depth[seq_id] = 0;
+     } else {
+         std::fill(rs_idx.begin(), rs_idx.end(), 0);
++        std::fill(rs_depth.begin(), rs_depth.end(), 0);
+     }
+ }
+ 
+diff --git a/src/llama-kv-cache-dsv4.h b/src/llama-kv-cache-dsv4.h
+index ce39867c0..782c7ae41 100644
+--- a/src/llama-kv-cache-dsv4.h
++++ b/src/llama-kv-cache-dsv4.h
+@@ -162,6 +162,9 @@ private:
+     const uint32_t n_rs_seq;
+ 
+     std::vector<uint32_t> rs_idx;
++    // Tokens of each sequence in its last decode: the rollback snapshots
++    // describe that decode only, so no rollback may reach past its start.
++    std::vector<uint32_t> rs_depth;
+ 
+     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
+     std::unique_ptr<llama_kv_cache>      kv_csa;
+-- 
+2.56.0
+

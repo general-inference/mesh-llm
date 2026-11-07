@@ -15,7 +15,7 @@ fn exact_checkpoint_writes_through_l3(
         .is_some_and(|(selected, shared)| selected == shared)
 }
 use crate::binary_transport::{
-    AsyncForwarder, BinaryStageExecutionOptions, forwarded_stage_message,
+    AsyncForwarder, BinaryStageExecutionOptions, forwarded_prefill_frames,
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
 };
 use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
@@ -97,6 +97,7 @@ impl StageOpenAiBackend {
             let prefill_token_count = request.prompt_token_ids.len().saturating_sub(1);
             let prefill_timer = PhaseTimer::start();
             let mut prefill_chunks = 0usize;
+            let mut prefill_frames = 0usize;
             let mut prefill_min_chunk_size = usize::MAX;
             let mut prefill_max_chunk_size = 0usize;
             let mut prefill_stage0_compute_ms = 0.0;
@@ -127,11 +128,6 @@ impl StageOpenAiBackend {
             let mut prefill_chain_cache_stats = StageReplyStats::default();
             let mut prefill_stage0_full_recorded = false;
             let mut fused_first_decode = None;
-            let output_boundary = self
-                .iteration_scheduler
-                .execute_runtime("prefill-frame-budget", |runtime| {
-                    Ok(runtime.output_activation_boundary())
-                })?;
             let mut prefill_planner = request.prefill_chunk_policy.planner();
             if let Some(estimate) = lane_pool.prefill_transport_estimate() {
                 prefill_planner.calibrate_slowest_stage_rate(estimate.slowest_compute_ms_per_token);
@@ -200,33 +196,8 @@ impl StageOpenAiBackend {
                         )?;
                         return Ok(());
                     }
-                    let mut chunk_size =
+                    let chunk_size =
                         prefill_planner.chunk_size_for(chunk_index, prefill_token_count);
-                    if let Some(boundary) = output_boundary.as_ref() {
-                        let template = embedded_prefill_message(OpenAiPrefillChunk {
-                            seq_id: chunk_index,
-                            pos_start,
-                            prefill_token_count,
-                            tokens: &prefill_tokens[pos_start..pos_start + 1],
-                            request_id,
-                            session_id,
-                        })?;
-                        let codec = match request.config.activation_codec_policy {
-                            skippy_protocol::StageActivationCodecPolicy::Fixed => {
-                                request.config.activation_codec
-                            }
-                            skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1 => {
-                                skippy_protocol::StageActivationCodec::RawF32V1
-                            }
-                        };
-                        chunk_size = super::prefill::bounded_chunk_size(
-                            chunk_size.min(prefill_tokens.len() - pos_start),
-                            boundary,
-                            codec,
-                            &template,
-                        )
-                        .map_err(openai_backend_error)?;
-                    }
                     let mut end = prefill_chunk_end(
                         pos_start,
                         chunk_size,
@@ -367,74 +338,83 @@ impl StageOpenAiBackend {
                         chunk_stage0_compute_ms,
                         chunk.len(),
                     );
-                    let forwarded = forwarded_stage_message(
+                    // The chunk ran as one batch; its output may still need
+                    // several frames to fit the stage frame budget.
+                    let forwarded_frames = forwarded_prefill_frames(
                         request.config,
                         &message,
                         &output,
                         request.activation_width,
+                        skippy_protocol::MAX_STAGE_FRAME_BYTES,
                     )
                     .map_err(openai_backend_error)?;
                     super::bench_dump::record(&output);
                     prefill_output_activation_bytes =
                         prefill_output_activation_bytes.saturating_add(output.payload.len());
-                    prefill_forward_activation_bytes =
-                        prefill_forward_activation_bytes.saturating_add(forwarded.activation.len());
+                    prefill_frames = prefill_frames.saturating_add(forwarded_frames.len());
                     request.record_forwarded_features(
                         true,
                         skippy_runtime::dflash_feature_payload_bytes(&output),
                     );
-                    let write_timer = PhaseTimer::start();
-                    crate::frontend::backend::write_downstream_or_emit_forward_error(
-                        &self.telemetry,
-                        request.config,
-                        request.ids,
-                        write_timer.start_unix_nanos,
-                        || {
-                            write_stage_message_conditioned(
-                                &mut *downstream,
-                                &forwarded,
-                                request.downstream_wire_condition,
-                            )
-                        },
-                    )
-                    .map_err(openai_io_error)?;
-                    let chunk_forward_write_ms = write_timer.elapsed_ms();
-                    prefill_forward_write_ms += chunk_forward_write_ms;
-                    prefill_forward_write_max_ms =
-                        prefill_forward_write_max_ms.max(chunk_forward_write_ms);
+                    let mut chunk_forward_write_ms = 0.0;
                     let mut chunk_downstream_wait_ms = 0.0;
                     let mut chunk_deferred_replies_drained = 0usize;
                     let mut chunk_credit_wait_count = 0usize;
-                    if request.prefill_reply_credit_limit == 0 {
-                        let wait_timer = PhaseTimer::start();
-                        let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-                        chunk_downstream_wait_ms = wait_timer.elapsed_ms();
-                        if reply.kind != WireReplyKind::Ack {
-                            return Err(InferenceError::backend(format!(
-                                "expected prefill ACK from downstream, got {:?}",
-                                reply.kind
-                            )));
+                    for forwarded in &forwarded_frames {
+                        let forwarded = &forwarded.message;
+                        prefill_forward_activation_bytes = prefill_forward_activation_bytes
+                            .saturating_add(forwarded.activation.len());
+                        let write_timer = PhaseTimer::start();
+                        crate::frontend::backend::write_downstream_or_emit_forward_error(
+                            &self.telemetry,
+                            request.config,
+                            request.ids,
+                            write_timer.start_unix_nanos,
+                            || {
+                                write_stage_message_conditioned(
+                                    &mut *downstream,
+                                    forwarded,
+                                    request.downstream_wire_condition,
+                                )
+                            },
+                        )
+                        .map_err(openai_io_error)?;
+                        chunk_forward_write_ms += write_timer.elapsed_ms();
+                        if request.prefill_reply_credit_limit == 0 {
+                            let wait_timer = PhaseTimer::start();
+                            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+                            chunk_downstream_wait_ms += wait_timer.elapsed_ms();
+                            if reply.kind != WireReplyKind::Ack {
+                                return Err(InferenceError::backend(format!(
+                                    "expected prefill ACK from downstream, got {:?}",
+                                    reply.kind
+                                )));
+                            }
+                            prefill_chain_cache_stats.merge(reply.stats);
+                        } else {
+                            while pending_prefill_replies >= request.prefill_reply_credit_limit {
+                                prefill_credit_wait_count =
+                                    prefill_credit_wait_count.saturating_add(1);
+                                chunk_credit_wait_count = chunk_credit_wait_count.saturating_add(1);
+                                let drained = drain_one_embedded_prefill_reply(
+                                    downstream,
+                                    &mut pending_prefill_replies,
+                                    &mut prefill_chain_cache_stats,
+                                )?;
+                                prefill_deferred_replies_drained = prefill_deferred_replies_drained
+                                    .saturating_add(drained.drained_replies);
+                                chunk_deferred_replies_drained = chunk_deferred_replies_drained
+                                    .saturating_add(drained.drained_replies);
+                                chunk_downstream_wait_ms += drained.downstream_wait_ms;
+                            }
+                            pending_prefill_replies = pending_prefill_replies.saturating_add(1);
+                            prefill_pending_replies_max =
+                                prefill_pending_replies_max.max(pending_prefill_replies);
                         }
-                        prefill_chain_cache_stats.merge(reply.stats);
-                    } else {
-                        while pending_prefill_replies >= request.prefill_reply_credit_limit {
-                            prefill_credit_wait_count = prefill_credit_wait_count.saturating_add(1);
-                            chunk_credit_wait_count = chunk_credit_wait_count.saturating_add(1);
-                            let drained = drain_one_embedded_prefill_reply(
-                                downstream,
-                                &mut pending_prefill_replies,
-                                &mut prefill_chain_cache_stats,
-                            )?;
-                            prefill_deferred_replies_drained = prefill_deferred_replies_drained
-                                .saturating_add(drained.drained_replies);
-                            chunk_deferred_replies_drained = chunk_deferred_replies_drained
-                                .saturating_add(drained.drained_replies);
-                            chunk_downstream_wait_ms += drained.downstream_wait_ms;
-                        }
-                        pending_prefill_replies = pending_prefill_replies.saturating_add(1);
-                        prefill_pending_replies_max =
-                            prefill_pending_replies_max.max(pending_prefill_replies);
                     }
+                    prefill_forward_write_ms += chunk_forward_write_ms;
+                    prefill_forward_write_max_ms =
+                        prefill_forward_write_max_ms.max(chunk_forward_write_ms);
                     prefill_downstream_wait_ms += chunk_downstream_wait_ms;
                     prefill_downstream_wait_max_ms =
                         prefill_downstream_wait_max_ms.max(chunk_downstream_wait_ms);
@@ -467,7 +447,16 @@ impl StageOpenAiBackend {
                     );
                     chunk_attrs.insert(
                         "llama_stage.forward_activation_bytes".to_string(),
-                        json!(forwarded.activation.len()),
+                        json!(
+                            forwarded_frames
+                                .iter()
+                                .map(|forwarded| forwarded.message.activation.len())
+                                .sum::<usize>()
+                        ),
+                    );
+                    chunk_attrs.insert(
+                        "llama_stage.forward_frame_count".to_string(),
+                        json!(forwarded_frames.len()),
                     );
                     chunk_attrs.insert(
                         "skippy.prefill_credit_limit".to_string(),
@@ -525,6 +514,10 @@ impl StageOpenAiBackend {
             prefill_attrs.insert(
                 "llama_stage.prefill_chunk_count".to_string(),
                 json!(prefill_chunks),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_frame_count".to_string(),
+                json!(prefill_frames),
             );
             attrs_insert_prefill_chunk_policy(
                 &mut prefill_attrs,

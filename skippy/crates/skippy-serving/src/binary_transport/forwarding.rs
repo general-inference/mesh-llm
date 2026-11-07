@@ -25,6 +25,62 @@ pub(crate) struct ForwardedStageMessage {
     pub dflash_feature_bytes: usize,
 }
 
+/// Forwards one computed prefill chunk as one or more stage messages, each
+/// within `frame_budget` wire bytes. The chunk computes as one batch whatever
+/// its size; only its output is cut along the token axis, into consecutive
+/// prefill messages that downstream stages run in order, as they would
+/// smaller chunks. Every part of the frame is cut by token, so feature rows
+/// stay with their tokens.
+pub(crate) fn forwarded_prefill_frames(
+    config: &StageConfig,
+    incoming: &StageWireMessage,
+    output: &ActivationFrame,
+    activation_width: i32,
+    frame_budget: usize,
+) -> Result<Vec<ForwardedStageMessage>> {
+    let whole = forwarded_stage_message_timed(config, incoming, output, activation_width)?;
+    if whole.message.estimated_wire_bytes() <= frame_budget {
+        return Ok(vec![whole]);
+    }
+    let tokens = usize::try_from(output.desc.token_count).context("output token count")?;
+    let sliceable_positions = incoming.positions.is_empty() || incoming.positions.len() == tokens;
+    if tokens <= 1 || incoming.tokens.len() != tokens || !sliceable_positions {
+        bail!(
+            "a {tokens}-token prefill frame of {} bytes exceeds the {frame_budget}-byte stage frame budget",
+            whole.message.estimated_wire_bytes()
+        );
+    }
+    // Two halves, each cut again until it fits: the encoded size of a frame
+    // can depend on its values (an exact lossless codec), so it is measured
+    // rather than predicted.
+    let half = tokens / 2;
+    let mut frames = Vec::new();
+    for (start, count) in [(0, half), (half, tokens - half)] {
+        let piece_output = crate::runtime_state::slice_activation_frame(output, start, count)?;
+        let mut piece = incoming.clone();
+        piece.pos_start = incoming
+            .pos_start
+            .checked_add(i32::try_from(start).context("prefill slice start")?)
+            .context("prefill slice position")?;
+        piece.token_count = i32::try_from(count).context("prefill slice tokens")?;
+        piece.tokens = incoming.tokens[start..start + count].to_vec();
+        if !incoming.positions.is_empty() {
+            piece.positions = incoming.positions[start..start + count].to_vec();
+        }
+        if let Some(&last) = piece.tokens.last() {
+            piece.state.current_token = last;
+        }
+        frames.extend(forwarded_prefill_frames(
+            config,
+            &piece,
+            &piece_output,
+            activation_width,
+            frame_budget,
+        )?);
+    }
+    Ok(frames)
+}
+
 /// Forward stage execution metadata while substituting the produced activation frame.
 pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
@@ -213,6 +269,135 @@ mod tests {
             readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
+    }
+
+    fn prefill_message(tokens: &[i32], pos_start: i32) -> StageWireMessage {
+        let mut message = incoming_message();
+        message.kind = WireMessageKind::PrefillEmbd;
+        message.state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
+        message.pos_start = pos_start;
+        message.token_count = tokens.len() as i32;
+        message.tokens = tokens.to_vec();
+        message
+    }
+
+    /// A `tokens`-token frame: a 64-wide F32 part and a 2-wide I32 optional
+    /// part, every value distinct.
+    fn wide_prefill_frame(tokens: u32) -> ActivationFrame {
+        let rows = tokens as usize;
+        frame(
+            tokens,
+            vec![
+                PartBytes {
+                    identity: 1,
+                    ggml_type: GGML_TYPE_F32,
+                    flags: 0,
+                    bytes: (0..rows * 64)
+                        .flat_map(|index| (index as f32 * 0.37).to_le_bytes())
+                        .collect(),
+                },
+                PartBytes {
+                    identity: 2,
+                    ggml_type: GGML_TYPE_I32,
+                    flags: ACTIVATION_PART_OPTIONAL,
+                    bytes: (0..rows * 2)
+                        .flat_map(|index| (index as i32).to_le_bytes())
+                        .collect(),
+                },
+            ],
+        )
+    }
+
+    /// Each part's bytes of the activation frame `message` decodes to.
+    fn decoded_parts(message: &StageWireMessage, config: &StageConfig) -> Vec<Vec<u8>> {
+        let mut wire = Vec::new();
+        skippy_protocol::binary::write_stage_message(&mut wire, message).unwrap();
+        let decoded = skippy_protocol::binary::read_stage_message_for_codec(
+            std::io::Cursor::new(wire),
+            2,
+            config.activation_codec,
+        )
+        .unwrap();
+        let frame = decoded.activation_frame().unwrap().unwrap();
+        frame
+            .desc
+            .parts
+            .iter()
+            .map(|part| {
+                frame.payload[part.payload_offset as usize..][..part.payload_bytes as usize]
+                    .to_vec()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_prefill_chunk_within_the_budget_leaves_as_one_frame() {
+        let config = stage_config();
+        let frames = forwarded_prefill_frames(
+            &config,
+            &prefill_message(&[1, 2, 3, 4, 5, 6], 10),
+            &wide_prefill_frame(6),
+            2,
+            skippy_protocol::MAX_STAGE_FRAME_BYTES,
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].message.token_count, 6);
+    }
+
+    #[test]
+    fn a_prefill_chunk_over_the_budget_leaves_in_consecutive_frames() {
+        let config = stage_config();
+        let incoming = prefill_message(&[1, 2, 3, 4, 5, 6, 7], 10);
+        let source = wide_prefill_frame(7);
+        let whole = forwarded_stage_message(&config, &incoming, &source, 2).unwrap();
+        // Room for about two tokens a frame.
+        let budget = whole.estimated_wire_bytes() * 2 / 7 + 64;
+
+        let frames = forwarded_prefill_frames(&config, &incoming, &source, 2, budget).unwrap();
+
+        assert!(frames.len() > 2);
+        let mut next_position = 10;
+        let mut tokens = Vec::new();
+        let mut primary = Vec::new();
+        let mut optional = Vec::new();
+        for forwarded in &frames {
+            let message = &forwarded.message;
+            assert!(message.estimated_wire_bytes() <= budget);
+            assert_eq!(message.pos_start, next_position);
+            assert_eq!(message.token_count as usize, message.tokens.len());
+            assert_eq!(message.state.current_token, *message.tokens.last().unwrap());
+            next_position += message.token_count;
+            tokens.extend_from_slice(&message.tokens);
+            let parts = decoded_parts(message, &config);
+            primary.extend_from_slice(&parts[0]);
+            optional.extend_from_slice(&parts[1]);
+        }
+        assert_eq!(tokens, incoming.tokens);
+        let source_parts = source.desc.parts().unwrap();
+        assert_eq!(
+            primary,
+            source.payload[..source_parts[0].payload_bytes as usize]
+        );
+        assert_eq!(
+            optional,
+            source.payload[source_parts[1].payload_offset as usize..]
+        );
+    }
+
+    #[test]
+    fn a_single_token_over_the_budget_is_an_error() {
+        let config = stage_config();
+        assert!(
+            forwarded_prefill_frames(
+                &config,
+                &prefill_message(&[1], 3),
+                &wide_prefill_frame(1),
+                2,
+                16
+            )
+            .is_err()
+        );
     }
 
     fn two_f32_part_frame(values: &[f32]) -> ActivationFrame {

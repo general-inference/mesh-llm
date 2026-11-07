@@ -172,6 +172,9 @@ if [ -n "${SPLIT_CODEC:-}" ]; then
   printf '[defaults.skippy]\nactivation_codec = "%s"\n' "$SPLIT_CODEC" >> "$ARM_CONFIG"
 fi
 [ -n "${DFLASH_TOML:-}" ] && cat "$DFLASH_TOML" >> "$ARM_CONFIG"
+# splitarch: extra TOML for this arm (escaped newlines), e.g. pipelining or stall knobs.
+[ -n "${SPLIT_EXTRA_TOML:-}" ] && printf '%b\n' "$SPLIT_EXTRA_TOML" >> "$ARM_CONFIG"
+[ -s "$ARM_CONFIG" ] && { echo "arm config:"; cat "$ARM_CONFIG"; }
 
 case "${SPLIT_ARM:?}" in
   off) ARM_FLAGS="--speculative-strategy disabled" ;;
@@ -363,7 +366,7 @@ for WORKLOAD in $(echo "${SPLIT_WORKLOADS:-chat}" | tr , ' '); do
     chat) ARM="$ARM_LABEL" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=report \
             PROMPTS="$PWD/skippy/evals/spec-prompts/spec-prompts.jsonl" python3 "$HERE/measure.py" \
             || echo "DFLASH_BENCH {\"arm\": \"$ARM_LABEL\", \"error\": \"measurement failed\"}" ;;
-    agent) ARM="agent_$ARM_LABEL" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=all \
+    agent) SAVE_TEXT=1 ARM="agent_$ARM_LABEL" LIMIT="${SPLIT_LIMIT:-0}" PORT="$API" MODEL_ID="$MODEL_ID" TEMP=0 SPLIT=all \
             PROMPTS="$PWD/skippy/evals/agent-transcripts/agent-transcripts.jsonl" python3 "$HERE/measure.py" \
             || echo "DFLASH_BENCH {\"arm\": \"agent_$ARM_LABEL\", \"error\": \"measurement failed\"}" ;;
     *) echo "unknown workload $WORKLOAD" >&2 ;;

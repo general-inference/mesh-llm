@@ -37,7 +37,9 @@ TARGET_SHA="5e416a2020fe63e76ea13c8979be35fc6070aaf3578f7876400c55c2f5c3eb30"
 DFLASH_URL="https://huggingface.co/jamesdumay/qwen3-8b-spec-drafts-gguf/resolve/main/qwen3-8b-dflash-b16.gguf"
 DFLASH_SHA="cc55453612f0e1ffc37b1a97ddc04ee8ba8a67a75be25ff9678f8d072e4fe0b6"
 DSPINE_URL="https://huggingface.co/jamesdumay/qwen3-8b-spec-drafts-gguf/resolve/main/qwen3-8b-dspine-b16.gguf"
+DSPINE_Q8_URL="https://huggingface.co/jamesdumay/qwen3-8b-spec-drafts-gguf/resolve/main/qwen3-8b-dspine-q8_0.gguf"
 DSPINE_SHA="1ec893b4ee16a836837ee05058bc6a5c9bdfe8214768344491fb1036b513eed2"
+DSPINE_Q8_SHA="7f2252b9eb31886a351eed1580d1d52471d14e3c30cb9e2a49e585766281f5d9"
 
 fetch() { # fetch <url> <sha256> <dest>
   local url="$1" sha="$2" dest="$3"
@@ -57,7 +59,8 @@ fetch() { # fetch <url> <sha256> <dest>
 echo "=== fetch + verify weights"
 fetch "$TARGET_URL" "$TARGET_SHA" "$W/models/qwen3-8b-bf16.gguf"
 case " $ARMS " in *" dflash "*) fetch "$DFLASH_URL" "$DFLASH_SHA" "$W/models/qwen3-8b-dflash-b16.gguf";; esac
-case " $ARMS " in *" dspine "*) fetch "$DSPINE_URL" "$DSPINE_SHA" "$W/models/qwen3-8b-dspine-b16.gguf";; esac
+case " $ARMS " in *dspine*) fetch "$DSPINE_URL" "$DSPINE_SHA" "$W/models/qwen3-8b-dspine-b16.gguf";; esac
+case " $ARMS " in *dspine-q8*) fetch "$DSPINE_Q8_URL" "$DSPINE_Q8_SHA" "$W/models/qwen3-8b-dspine-q8_0.gguf";; esac
 
 gpu_state() { nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw,pstate --format=csv,noheader 2>/dev/null | sed "s/^/gpu: $1 /" || true; }
 
@@ -103,6 +106,20 @@ for arm in $ARMS; do
     dspine)
       run_arm dspine -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-b16.gguf" \
         --spec-type draft-dspine --spec-draft-n-max 15 -fa on -c "$CTX";;
+    dspine16)
+      # paper configuration: 16 drafted tokens per step
+      run_arm dspine16 -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-b16.gguf" \
+        --spec-type draft-dspine --spec-draft-n-max 16 -fa on -c "$CTX";;
+    dspine-q8)
+      # quantized draft: Q8_0 weights, paper block width
+      run_arm dspine-q8 -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-q8_0.gguf" \
+        --spec-type draft-dspine --spec-draft-n-max 16 -fa on -c "$CTX";;
+    dspine-p05|dspine-p10)
+      # walk early-exit sweep: truncate the chain when transition confidence
+      # drops below p_min
+      pmin="0.${arm##dspine-p}"
+      run_arm "$arm" -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-b16.gguf" \
+        --spec-type draft-dspine --spec-draft-n-max 16 --spec-draft-p-min "$pmin" -fa on -c "$CTX";;
     *) echo "unknown arm: $arm" >&2; exit 1;;
   esac
 done

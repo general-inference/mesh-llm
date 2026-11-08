@@ -5,7 +5,7 @@
 #   WORKLOADS  space-separated: chat agent                   (default: both)
 #   CONCS      space-separated concurrencies                 (default: "1 8")
 #   LIMIT      first N prompts only (smoke)                  (default: all)
-#   DFLASH2_REPLAYSSM  1 to give DFlash2 ReplaySSM rollback as DSpine has (default 1)
+#   DFLASH2_REPLAYSSM  1 to request ReplaySSM for DFlash2 (default 0: SGLang 0.5.22 allows it only for KDA models with DFLASH)
 set -euo pipefail
 HERE="$PWD/mesh-llm/skippy/evals/dspine-ab"
 EVALS="$PWD/mesh-llm/skippy/evals"
@@ -68,7 +68,7 @@ arm_flags() {
     ar) echo "";;
     dflash2)
       echo "--speculative-algorithm DFLASH --speculative-draft-model-path /w/hf/z-lab/Qwen3.8-27B-DFlash2 --speculative-num-draft-tokens 8 --speculative-draft-attention-backend fa4"
-      [ "${DFLASH2_REPLAYSSM:-1}" = 1 ] && echo "--enable-linear-replayssm-spec" || true;;
+      [ "${DFLASH2_REPLAYSSM:-0}" = 1 ] && echo "--enable-linear-replayssm-spec" || true;;
     dspine)
       echo "--speculative-algorithm DSPINE --speculative-draft-model-path /w/hf/tencent/Qwen3.8-27B-DSpine-b16 --speculative-num-draft-tokens 16 --speculative-draft-attention-backend fa4 --enable-linear-replayssm-spec --min-free-slots-delay 1";;
   esac

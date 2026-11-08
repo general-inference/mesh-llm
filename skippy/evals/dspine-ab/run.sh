@@ -44,6 +44,15 @@ git -C "$W/DSpine" clean -qfdx -e '*.egg-info' || true
 # plugin's own worker check already accepts fa_impl_ver 4. The target itself must use
 # flashinfer: SGLang allows only flashinfer/triton/trtllm_mha for hybrid GDN on SM12x.
 sed -i 's/^BACKENDS = frozenset(("fa3",))$/BACKENDS = frozenset(("fa3", "fa4"))/' "$W/DSpine/sglang_dspine/layers/attention.py"
+if [ "${DSPINE_UNIFORM_VERIFY:-1}" = 1 ]; then
+  # DSpine's dynamic verification (RaggedSpsCaps) needs a target attention backend with
+  # ragged verify graphs. On SM12x SGLang allows only flashinfer/triton/trtllm_mha for a
+  # hybrid GDN target: the first two have no ragged graphs and trtllm_mha's XQA kernel
+  # rejects them. Use the plugin's own uniform-width controller instead. At the default
+  # policy (uniform width 16 at bs 1-7, 128 tokens = 8 x 16 at bs 8) both verify every
+  # drafted token, so the verified rows are the same.
+  sed -i 's/from sglang_dspine.verification.sps import RaggedSpsCaps/from sglang_dspine.verification.caps import VerifyCaps as RaggedSpsCaps/' "$W/DSpine/sglang_dspine/runtime/worker.py"
+fi
 git --no-pager -C "$W/DSpine" diff --stat
 git --no-pager -C "$W/DSpine" diff > "$ART/dspine-gb10.patch"
 

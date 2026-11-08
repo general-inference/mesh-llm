@@ -358,6 +358,8 @@ impl KvStageIntegration {
             exact_state_records_pending,
             admission_outstanding,
             admission_best_effort_outstanding,
+            pending_publications: Arc::default(),
+            admission_lanes: usize::try_from(config.lane_count.max(1)).unwrap_or(1),
             #[cfg(test)]
             exact_state_captures_outstanding: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]

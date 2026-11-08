@@ -67,6 +67,7 @@ PORT=8399
 SRV_PID=""
 stop_server() {
   [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; SRV_PID=""; }
+  return 0
 }
 trap stop_server EXIT
 
@@ -94,8 +95,11 @@ for arm in $ARMS; do
     off)
       run_arm off -m "$W/models/qwen3-8b-bf16.gguf" -fa on -c "$CTX" --spec-type none;;
     dflash)
+      # plain DFlash needs CPU sampling: backend sampling rejects the
+      # multi-output noise block at this pin ("at most one output token per
+      # sequence"); DSpine bypasses backend sampling on its own
       run_arm dflash -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dflash-b16.gguf" \
-        --spec-type draft-dflash --spec-draft-n-max 15 -fa on -c "$CTX";;
+        --spec-type draft-dflash --spec-draft-n-max 15 --no-spec-draft-backend-sampling -fa on -c "$CTX";;
     dspine)
       run_arm dspine -m "$W/models/qwen3-8b-bf16.gguf" -md "$W/models/qwen3-8b-dspine-b16.gguf" \
         --spec-type draft-dspine --spec-draft-n-max 15 -fa on -c "$CTX";;

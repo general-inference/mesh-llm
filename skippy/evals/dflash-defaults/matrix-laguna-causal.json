@@ -51,7 +51,7 @@
  },
  "models": [
   {
-   "id": "laguna-s-causal",
+   "id": "laguna-s-causal-log",
    "name": "Laguna-S-2.1 Q4_K_M (Poolside BF16 draft, causal check)",
    "target": {
     "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-Q4_K_M.gguf",

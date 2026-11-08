@@ -129,7 +129,7 @@ run_arm() { # arm extra-args...
       python3 "$HERE/measure.py" || echo "DFLASH_BENCH {\"arm\": \"$arm\", \"error\": \"measurement failed\"}"
   fi
   # How the draft attached (variant, block, causal), from the native log note.
-  grep -o 'dflash draft attached[^"\\]*' "$ART/serve-$arm.log" 2>/dev/null | head -1 | sed "s/^/$arm: /" || true
+  cat "$HOME/.mesh-llm/runtime/$SERVER/logs/"* 2>/dev/null | grep -o 'dflash draft attached.*' | head -1 | sed "s/^/$arm: /" || true
   kill "$SERVER" 2>/dev/null || true; wait "$SERVER" 2>/dev/null || true
   sleep 5
 }

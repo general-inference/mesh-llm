@@ -30,7 +30,7 @@ pub const STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1: &str = "decode-batch
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
-pub const MAX_STAGE_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_STAGE_FRAME_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of unresolved verify windows covered by native checkpoints.
 pub const MAX_VERIFY_WINDOW_PIPELINE_DEPTH: usize = 64;
 /// Sanity bound on the run-ahead speculative-token budget. Every in-flight

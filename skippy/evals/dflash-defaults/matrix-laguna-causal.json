@@ -1,0 +1,79 @@
+{
+ "prompt_split": "report",
+ "agent_transcripts": true,
+ "machines": {
+  "Spark": {
+   "backend": "cuda",
+   "nodes": [
+    "spark-000280"
+   ],
+   "placeholder_package": {
+    "ref": "skippy://smoketest/noop",
+    "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+   },
+   "fixed_blocks": [
+    3,
+    7,
+    15
+   ]
+  },
+  "M3 Ultra": {
+   "backend": "metal",
+   "nodes": [
+    "macstudio-4f19n3"
+   ],
+   "placeholder_package": {
+    "ref": "skippy://smoketest/noop",
+    "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+   },
+   "fixed_blocks": [
+    4,
+    6
+   ]
+  }
+ },
+ "drafts": {
+  "xs-q8": {
+   "url": "https://huggingface.co/meshllm/Laguna-XS-2.1-DFlash-GGUF/resolve/7197343f8f8b29c3a50b72647ca4606edcfc70f1/Laguna-XS-2.1-DFlash-Q8_0.gguf",
+   "sha256": "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8",
+   "bytes": 494735360
+  },
+  "s-bf16": {
+   "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-DFlash-BF16.gguf",
+   "sha256": "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4",
+   "bytes": 2233764224
+  },
+  "s-q8": {
+   "url": "https://huggingface.co/wimmmm/poolside-Laguna-S-2.1-DFlash-GGUF/resolve/5788bc865e0d2726267ead1bc15ce64c5253b7dc/laguna-s-2.1-dflash-Q8_0.gguf",
+   "sha256": "d4e698ad542a66a961a7194f858193708db32546c5786de2bc5ed6addabc9075",
+   "bytes": 1188531360
+  }
+ },
+ "models": [
+  {
+   "id": "laguna-s-causal",
+   "name": "Laguna-S-2.1 Q4_K_M (Poolside BF16 draft, causal check)",
+   "target": {
+    "url": "https://huggingface.co/poolside/Laguna-S-2.1-GGUF/resolve/19036076775e9ba6758595f78af99cb976ef8ff0/laguna-s-2.1-Q4_K_M.gguf",
+    "sha256": "a8b55c75714ea73fd90ec85de5defdc0b8d88ca0ad2108343cdd8fc22f7583e4",
+    "bytes": 96031829760
+   },
+   "env": {
+    "BENCH_AGENT": "0",
+    "BENCH_AGENT_CAP": "15",
+    "LIMIT": "20"
+   },
+   "machines": {
+    "Spark": {
+     "draft": "s-bf16",
+     "default": false,
+     "node": "spark-000280",
+     "fixed_blocks": []
+    },
+    "M3 Ultra": {
+     "skip": "CUDA check only"
+    }
+   }
+  }
+ ]
+}

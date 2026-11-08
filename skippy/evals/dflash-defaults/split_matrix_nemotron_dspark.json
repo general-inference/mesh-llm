@@ -1,0 +1,21 @@
+{
+  "id": "nemotron-3.5-lightning-dspark",
+  "name": "Nemotron-3.5-Lightning-30B-A3B UD-Q4_K_M (DSpark draft)",
+  "gguf": ".cache/dflash-bench-models/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+  "gguf_sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+  "nodes": [
+    "spark-000280",
+    "spark-000499"
+  ],
+  "lanes": 1,
+  "ctx": 8192,
+  "cuts": {
+    "2": "26"
+  },
+  "draft": {
+    "repo": "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF",
+    "revision": "ed35fc990759330e325ab9e41bcf80737ab4dafc",
+    "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark.gguf",
+    "sha256": "14fcc5296ca9be2fa2156275fd1811de966835e2894729907a03cf7f80634856"
+  }
+}

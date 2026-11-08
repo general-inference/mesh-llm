@@ -1,0 +1,669 @@
+{
+  "prompt_split": "report",
+  "agent_transcripts": true,
+  "machines": {
+    "Spark": {
+      "backend": "cuda",
+      "nodes": [
+        "spark-000280",
+        "spark-000499"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        3,
+        7,
+        15
+      ]
+    },
+    "M4": {
+      "backend": "metal",
+      "nodes": [
+        "macmini-qkvx2j"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        4,
+        6
+      ]
+    },
+    "M3 Ultra": {
+      "backend": "metal",
+      "nodes": [
+        "macstudio-4f19n3"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        4,
+        6
+      ]
+    },
+    "M1 Ultra": {
+      "backend": "metal",
+      "nodes": [
+        "macstudio-2l0352"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        4,
+        6
+      ]
+    },
+    "M6": {
+      "backend": "metal",
+      "nodes": [
+        "macmini-2x4jx1"
+      ],
+      "placeholder_package": {
+        "ref": "skippy://smoketest/noop",
+        "sha256": "cc00000000000000000000000000000000000000000000000000000000000001"
+      },
+      "fixed_blocks": [
+        6
+      ]
+    }
+  },
+  "drafts": {
+    "lightning-nvfp4": {
+      "url": "https://huggingface.co/magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash-GGUF/resolve/4f5b414b9388a4543dcc4b24758e09d68140a6fe/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash.gguf",
+      "sha256": "ca3b2a765da43234524c0c83669b4f552e31f0f226c7afa509f133cfd050bc19",
+      "bytes": 1185022880
+    },
+    "lightning-q8": {
+      "url": "https://huggingface.co/meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DFlash-GGUF/resolve/f09c5db1d97cd066685c413d887549136f0239d5/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DFlash-Q8_0.gguf",
+      "sha256": "0f729e97373799a9d597ebf7c1a757cbc79dbbfcc7b2b69c053b22bac71743a1",
+      "bytes": 893428640
+    },
+    "bolt-q8": {
+      "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF/resolve/b738967d6da3441a7d1c71fcec15e49e32e16ecd/dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
+      "sha256": "9a63662ae8395b8bfc1a1b00d7a9ef354120f172704bd6ba88d3870cf22d4d03",
+      "bytes": 398892256
+    },
+    "bolt-bf16": {
+      "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash/resolve/0949a2eb7152ec6fda1a91ff9302aecbcd464fbf/Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf",
+      "sha256": "8103aa42fd31fb661c3fbe8701d04d698ea2c5d09351dc3e8c9da639958de989",
+      "bytes": 736812096
+    },
+    "lightning-dspark": {
+      "url": "https://huggingface.co/magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF/resolve/ed35fc990759330e325ab9e41bcf80737ab4dafc/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark.gguf",
+      "sha256": "14fcc5296ca9be2fa2156275fd1811de966835e2894729907a03cf7f80634856",
+      "bytes": 1357001312
+    },
+    "bolt74-lilicorr": {
+      "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/resolve/182d2987939e12f458298b5d5f6ef98912f4ad6c/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf",
+      "sha256": "080e1ea41c9562a7804dbf30c6fbd4d17e216c6b8ff666f88e6edb1816010194",
+      "bytes": 998242560
+    },
+    "qwen3.5-9b": {
+      "url": "https://huggingface.co/AtomicChat/Qwen3.5-9B-DFlash-GGUF/resolve/c7c69923d77a9aa0004b410d3a7a3dbb64591d41/Qwen3.5-9B-DFlash.Q8_0.gguf",
+      "sha256": "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
+      "bytes": 1383768224
+    },
+    "lightning-dspark-q8": {
+      "url": "https://huggingface.co/meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF/resolve/5b7d4423fad884ef9a5a451c396b91bbd5f4d050/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-Q8_0.gguf",
+      "sha256": "0ca3174767e1ee35c193af9911de49fd2810a630fd7fa8b68fcab3137e72b5cf",
+      "bytes": 1036046944
+    }
+  },
+  "models": [
+    {
+      "id": "lightning-q8",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (Q8_0 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-q8",
+          "default": false,
+          "node": "spark-000280"
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-nvfp4",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (NVFP4 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-nvfp4",
+          "default": false,
+          "node": "spark-000499"
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "bolt-q8",
+      "name": "Nemotron-3.5-Bolt-E4B (Q8_0 draft)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            5,
+            7
+          ]
+        },
+        "M4": {
+          "draft": "bolt-q8",
+          "default": false,
+          "node": "macmini-qkvx2j"
+        }
+      }
+    },
+    {
+      "id": "bolt-bf16",
+      "name": "Nemotron-3.5-Bolt-E4B (BF16 draft)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-bf16",
+          "default": false,
+          "node": "spark-000499",
+          "fixed_blocks": [
+            3,
+            5,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Q8_0 draft only on the M4"
+        }
+      }
+    },
+    {
+      "id": "bolt-default",
+      "name": "Nemotron-3.5-Bolt-E4B",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "spark-000280",
+          "fixed_blocks": []
+        },
+        "M4": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "macmini-qkvx2j",
+          "fixed_blocks": []
+        }
+      }
+    },
+    {
+      "id": "bolt-default-280",
+      "name": "Nemotron-3.5-Bolt-E4B (rerun)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            7
+          ]
+        },
+        "M4": {
+          "skip": "rerun on the Spark only"
+        }
+      }
+    },
+    {
+      "id": "lightning-dspark",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-dspark-b",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000499",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "bolt74-lilicorr-headless",
+      "name": "Nemotron-3.5-Bolt-74B-A9B-24GB (LiLiCorr draft, no head)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF/resolve/e0fecb69cb3e5e4c5e8a056fa2aec98c78e91246/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
+        "sha256": "91d63363e782c8a3d5f4be42816eba8e0d42dd2530bd07a7d0d2dc440599af75",
+        "bytes": 22018326528
+      },
+      "env": {
+        "SKIPPY_DFLASH_LILICORR_HEADLESS": "1"
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt74-lilicorr",
+          "default": false,
+          "node": "spark-000468",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        },
+        "M6": {
+          "skip": "Doesn't fit"
+        }
+      }
+    },
+    {
+      "id": "bolt-probe-907",
+      "name": "Nemotron-3.5-Bolt-E4B (full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "spark-000907",
+          "fixed_blocks": [
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Spark only"
+        }
+      }
+    },
+    {
+      "id": "bolt-probe-280",
+      "name": "Nemotron-3.5-Bolt-E4B (full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Spark only"
+        }
+      }
+    },
+    {
+      "id": "bolt-probe-m4",
+      "name": "Nemotron-3.5-Bolt-E4B (full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "skip": "M4 only"
+        },
+        "M4": {
+          "draft": "bolt-q8",
+          "default": true,
+          "node": "macmini-qkvx2j",
+          "fixed_blocks": [
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": "qwen9b-probe",
+      "name": "Qwen3.5-9B (full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+        "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        "bytes": 5680522464
+      },
+      "machines": {
+        "Spark": {
+          "draft": "qwen3.5-9b",
+          "default": true,
+          "node": "spark-000265",
+          "fixed_blocks": [
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Spark only"
+        }
+      }
+    },
+    {
+      "id": "lightning-dspark-probe-280",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-dspark-probe-499",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-dspark",
+          "default": false,
+          "node": "spark-000499",
+          "fixed_blocks": [
+            3,
+            7
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "lightning-dflash-probe-280",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DFlash Q8_0 draft, full-block probes)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "draft": "lightning-q8",
+          "default": false,
+          "node": "spark-000280",
+          "fixed_blocks": [
+            3,
+            15
+          ]
+        },
+        "M4": {
+          "skip": "Doesn't fit in 16 GB"
+        }
+      }
+    },
+    {
+      "id": "metal-lightning-dspark-q8",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark Q8_0 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "draft": "lightning-dspark-q8",
+          "default": false
+        },
+        "M1 Ultra": {
+          "skip": "not on this run"
+        }
+      }
+    },
+    {
+      "id": "metal-lightning-dflash-q8",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DFlash Q8_0 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "draft": "lightning-q8",
+          "default": false
+        },
+        "M1 Ultra": {
+          "skip": "not on this run"
+        }
+      }
+    },
+    {
+      "id": "metal-lightning-dspark-nvfp4",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DSpark NVFP4 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "draft": "lightning-dspark",
+          "default": false
+        },
+        "M1 Ultra": {
+          "skip": "not on this run"
+        }
+      },
+      "env": {
+        "BENCH_AGENT": "0"
+      }
+    },
+    {
+      "id": "metal-lightning-dflash-nvfp4",
+      "name": "Nemotron-3.5-Lightning-30B-A3B (DFlash NVFP4 draft)",
+      "target": {
+        "url": "https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/f2d3fe3694501008786e81e5f20360cbf715496a/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+        "sha256": "edcb5d4650796ed2fb412498de6f83b585862312c747ddb74f0ea04b22206181",
+        "bytes": 25266255936
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "draft": "lightning-nvfp4",
+          "default": false
+        },
+        "M1 Ultra": {
+          "skip": "not on this run"
+        }
+      },
+      "env": {
+        "BENCH_AGENT": "0"
+      }
+    },
+    {
+      "id": "metal-bolt74-lilicorr-headless",
+      "name": "Nemotron-3.5-Bolt-74B-A9B-24GB (LiLiCorr draft, no head)",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF/resolve/e0fecb69cb3e5e4c5e8a056fa2aec98c78e91246/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
+        "sha256": "91d63363e782c8a3d5f4be42816eba8e0d42dd2530bd07a7d0d2dc440599af75",
+        "bytes": 22018326528
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "skip": "not on this run"
+        },
+        "M1 Ultra": {
+          "draft": "bolt74-lilicorr",
+          "default": false
+        }
+      },
+      "env": {
+        "SKIPPY_DFLASH_LILICORR_HEADLESS": "1"
+      }
+    },
+    {
+      "id": "metal-bolt-default",
+      "name": "Nemotron-3.5-Bolt-E4B",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "skip": "not on this run"
+        },
+        "M1 Ultra": {
+          "draft": "bolt-q8",
+          "default": true,
+          "fixed_blocks": [
+            6
+          ]
+        }
+      }
+    },
+    {
+      "id": "m6-bolt-default",
+      "name": "Nemotron-3.5-Bolt-E4B",
+      "target": {
+        "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+        "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+        "bytes": 6180446208
+      },
+      "machines": {
+        "Spark": {
+          "skip": "not on this run"
+        },
+        "M4": {
+          "skip": "not on this run"
+        },
+        "M3 Ultra": {
+          "skip": "not on this run"
+        },
+        "M1 Ultra": {
+          "skip": "not on this run"
+        },
+        "M6": {
+          "draft": "bolt-q8",
+          "default": true
+        }
+      }
+    }
+  ]
+}

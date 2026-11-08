@@ -1,0 +1,25 @@
+{
+ "id": "laguna-xs-minis",
+ "name": "Laguna-XS-2.1 Q4_K_M",
+ "machine_label": "Mac minis (M4 + M1)",
+ "gguf": ".cache/dflash-bench-models/Laguna-XS-2.1-Q4_K_M.gguf",
+ "gguf_sha256": "1ac7079101fca5a6df8c5a7523a3c30ea7d1c0e4b1258090e7d6d4039287f6cb",
+ "nodes": [
+  "macmini-qkvx2j",
+  "macmini-6wq6ny"
+ ],
+ "lanes": 1,
+ "ctx": 8192,
+ "cuts": {
+  "2": "21"
+ },
+ "draft": {
+  "repo": "meshllm/Laguna-XS-2.1-DFlash-GGUF",
+  "revision": "7197343f8f8b29c3a50b72647ca4606edcfc70f1",
+  "file": "Laguna-XS-2.1-DFlash-Q8_0.gguf",
+  "sha256": "40eb6bf48f42ebc1990a0ba8c74d2070a256e7f1842a58d8aa9b195e907b04e8"
+ },
+ "env": {
+  "SPLIT_REQUIRE_WIRED_MB": 13312
+ }
+}

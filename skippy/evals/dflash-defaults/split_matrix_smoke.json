@@ -1,0 +1,24 @@
+{
+  "id": "qwen3.8-27b",
+  "name": "Qwen3.8-27B UD-Q4_K_XL",
+  "repo": "meshllm/Qwen3.8-27B-UD-Q4_K_XL-layers",
+  "revision": "4f0de892fe0a1fe5c4a25fdbd1e1e5340e95d123",
+  "nodes": [
+    "spark-000280",
+    "spark-000468",
+    "spark-000499",
+    "spark-000907"
+  ],
+  "lanes": 1,
+  "ctx": 8192,
+  "cuts": {
+    "2": "32",
+    "4": "16,32,48"
+  },
+  "draft": {
+    "repo": "z-lab/Qwen3.8-27B-DFlash2-GGUF",
+    "revision": "2d9571f8ce46e151f61c6499c99dee6079e1d610",
+    "file": "Qwen3.8-27B-DFlash2-Q8_0.gguf",
+    "sha256": "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e"
+  }
+}

@@ -16,6 +16,7 @@ import json
 import os
 import statistics
 import time
+import urllib.error
 import urllib.request
 
 PORT = os.environ["PORT"]
@@ -27,6 +28,18 @@ LIMIT = int(os.environ.get("LIMIT") or 8)
 
 
 def first_token(prompt):
+    """first_token_once, retrying the 503 a single-lane split answers while it is still
+    releasing the previous request's lane or finishing its first route."""
+    for attempt in range(60):
+        try:
+            return first_token_once(prompt)
+        except urllib.error.HTTPError as error:
+            if error.code != 503 or attempt == 59:
+                raise
+            time.sleep(5)
+
+
+def first_token_once(prompt):
     body = {"model": MODEL_ID, "messages": [{"role": "user", "content": prompt}], "max_tokens": 16,
             "temperature": 0, "stream": True, "stream_options": {"include_usage": True}}
     request = urllib.request.Request(URL, data=json.dumps(body).encode(), headers={"content-type": "application/json"})

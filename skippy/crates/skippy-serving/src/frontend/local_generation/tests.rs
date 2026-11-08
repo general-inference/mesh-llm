@@ -162,7 +162,7 @@ fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
     panic!("timed out waiting for {expected} generation receipts");
 }
 
-fn recurrent_test_backend(
+pub(super) fn recurrent_test_backend(
     run_id: &str,
     backend_model_id: &str,
     ctx_size: usize,

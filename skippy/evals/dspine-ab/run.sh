@@ -41,13 +41,14 @@ git -C "$W/DSpine" checkout -q -f "$DSPINE_REV"
 git -C "$W/DSpine" clean -qfdx -e '*.egg-info' || true
 # The only change: let the draft's native sliding-window attention run on FA4 as well as
 # FA3. SGLang refuses FA3 on SM12x (GB10); its FA4 path has an SM12x kernel set, and the
-# plugin's own worker check already accepts fa_impl_ver 4.
+# plugin's own worker check already accepts fa_impl_ver 4. The target itself must use
+# flashinfer: SGLang allows only flashinfer/triton/trtllm_mha for hybrid GDN on SM12x.
 sed -i 's/^BACKENDS = frozenset(("fa3",))$/BACKENDS = frozenset(("fa3", "fa4"))/' "$W/DSpine/sglang_dspine/layers/attention.py"
-git -C "$W/DSpine" diff --stat
-git -C "$W/DSpine" diff > "$ART/dspine-gb10.patch"
+git --no-pager -C "$W/DSpine" diff --stat
+git --no-pager -C "$W/DSpine" diff > "$ART/dspine-gb10.patch"
 
 COMMON=(--model-path /w/hf/Qwen/Qwen3.8-27B --tp-size 1 --dtype bfloat16
-  --attention-backend fa4 --linear-attn-backend triton
+  --attention-backend "${TARGET_ATTN:-flashinfer}" --linear-attn-backend triton
   --mamba-ssm-dtype float32 --mamba-radix-cache-strategy extra_buffer --max-mamba-cache-size 64
   --mem-fraction-static "${MEM_FRACTION:-0.80}" --context-length 65536 --max-running-requests 8
   --cuda-graph-max-bs-decode 8 --sampling-backend flashinfer --trust-remote-code

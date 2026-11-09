@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 7a6b73e561db2b5b380d2047ef1faad921cbe31e Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 7 Nov 2026 14:20:44 +1100
-Subject: [PATCH] skippy: report which layer inputs a graph publishes
+Subject: [PATCH 17/17] skippy: report which layer inputs a graph publishes
 
 Speculative drafts capture the residual entering chosen target layers,
 including layer n_layer (the last layer's output) for some drafts. Only
@@ -15,13 +15,13 @@ stops before the output pass and scheduling, so it leaves reserved
 graphs and the scheduler alone, and lets a host refuse a draft before
 it attaches.
 ---
- src/llama-context.cpp | 40 +++++++++++++++++++++++++++++++++++
+ src/llama-context.cpp | 40 ++++++++++++++++++++++++++++++++++++++++
  src/llama-context.h   |  4 ++++
  src/llama-ext.h       |  5 +++++
  3 files changed, 49 insertions(+)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 483b5d16b..de8bc31f9 100644
+index 483b5d16b..28a607883 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -2811,6 +2811,42 @@ bool llama_context::get_input_activation_frontier(std::vector<skippy_activation_
@@ -110,5 +110,5 @@ index 1e24ccaa5..9cb6bf853 100644
  // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
  LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 751e8fc1a16c2f8dab4990d80838d271e8a5a83a Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 16:20:16 +1100
-Subject: [PATCH] models: expose glm5-next stage graph semantics
+Subject: [PATCH 11/12] models: expose glm5-next stage graph semantics
 
 The stage planner rejected every GLM-5.3-Flash range: the glm5-next
 builder read and wrote its recurrent, MLA and indexer caches without
@@ -559,5 +559,5 @@ index 4f7ea31ac..939cd2241 100644
              saver.save(path);
              require_fixture_written(path);
 -- 
-2.50.1 (Apple Git-157)
+2.56.0
 

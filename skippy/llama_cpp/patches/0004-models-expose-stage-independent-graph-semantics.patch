@@ -1,7 +1,7 @@
-From 4ff01579207ff42fa05358d7e4d5e727e069c01b Mon Sep 17 00:00:00 2001
+From 2271e948190c7098e676d9c039eea5ccdcfbc7db Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 4/6] feat(models): expose stage-independent graph semantics
+Subject: [PATCH 04/17] feat(models): expose stage-independent graph semantics
 
 ---
  src/llama-graph.cpp           | 798 +++++++++++++++++++++++++++++-----
@@ -3266,5 +3266,5 @@ index 7fcab7774..d42c07ab7 100644
      if (layer.time_mix_ln && layer.time_mix_ln_b) {
          // group norm with head_count groups
 -- 
-2.55.0
+2.56.0
 

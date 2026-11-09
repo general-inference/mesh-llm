@@ -1,0 +1,413 @@
+From bab29ac20ae313c565a79b7b1406956323ef686e Mon Sep 17 00:00:00 2001
+From: James Dumay <james@generalinference.xyz>
+Date: Tue, 10 Nov 2026 07:58:49 +1100
+Subject: [PATCH] skippy: gate construction logs behind SKIPPY_LOG_LEVEL
+
+The stage-planning test binaries build real llama contexts, and llama.cpp
+logs every input-tensor edge of every graph reserve at DEBUG level through
+the default callback that prints unconditionally. A single graph-contract
+case wrote 81 MB of transcript; a full staged test run pushed CTest's
+LastTest.log past 15 GB per build directory.
+
+Add an internal log gate that forwards only messages at or above a
+threshold to the previously installed callback. Every skippy test binary
+that links the runtime installs it at startup with the threshold read from
+SKIPPY_LOG_LEVEL (debug|info|warn|error, default warn), so agents debugging
+graph contracts can restore the full firehose per run:
+SKIPPY_LOG_LEVEL=debug ctest -R skippy_graph_contract
+---
+ src/CMakeLists.txt                            |  1 +
+ src/skippy/log_gate.cpp                       | 95 +++++++++++++++++++
+ src/skippy/log_gate.h                         | 29 ++++++
+ src/skippy/tests/graph_build_inputs.cpp       |  4 +
+ src/skippy/tests/graph_contract_models.cpp    |  4 +
+ .../tests/hardware_application_probe.cpp      |  4 +
+ src/skippy/tests/input_capabilities.cpp       |  4 +
+ src/skippy/tests/noalloc_graph_planning.cpp   |  4 +
+ src/skippy/tests/profile_residency.cpp        |  4 +
+ .../tests/renamed_multishard_planning.cpp     |  4 +
+ src/skippy/tests/runtime_events.cpp           |  4 +
+ src/skippy/tests/sampling_history.cpp         |  4 +
+ src/skippy/tests/stage_slice_plan.cpp         |  4 +
+ src/skippy/tests/verify_rollback.cpp          |  4 +
+ 14 files changed, 169 insertions(+)
+ create mode 100644 src/skippy/log_gate.cpp
+ create mode 100644 src/skippy/log_gate.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d8e31aa55..df57ec464 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -67,6 +67,7 @@ add_library(llama
+             skippy/glm_dsa.cpp
+             skippy/graph_dependencies.cpp
+             skippy/graph_identity.cpp
++            skippy/log_gate.cpp
+             skippy/executable_graph.cpp
+             skippy/model_package.cpp
+             skippy/package_tensor_binding.cpp
+diff --git a/src/skippy/log_gate.cpp b/src/skippy/log_gate.cpp
+new file mode 100644
+index 000000000..7a50b5595
+--- /dev/null
++++ b/src/skippy/log_gate.cpp
+@@ -0,0 +1,95 @@
++#include "skippy/log_gate.h"
++
++#include "llama.h"
++
++#include <atomic>
++#include <cctype>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++namespace skippy::log_gate {
++
++namespace {
++
++std::atomic<int> g_minimum_level{GGML_LOG_LEVEL_WARN};
++ggml_log_callback g_forward = nullptr;
++void * g_forward_user_data = nullptr;
++std::atomic<bool> g_installed{false};
++
++void gate_callback(enum ggml_log_level level, const char * text, void * user_data) {
++    (void) user_data;
++    ggml_log_callback forward = g_forward;
++    if (!forward) {
++        return;
++    }
++    // CONT continues a message that may have been emitted at any level, so it
++    // always forwards.
++    const int minimum = g_minimum_level.load(std::memory_order_relaxed);
++    if (level == GGML_LOG_LEVEL_CONT || level >= minimum) {
++        forward(level, text, g_forward_user_data);
++    }
++}
++
++bool parse_level(const char * value, int & out) {
++    if (!value) {
++        return false;
++    }
++    std::string name(value);
++    for (char & c : name) {
++        c = std::tolower(static_cast<unsigned char>(c));
++    }
++    if (name == "debug") {
++        out = GGML_LOG_LEVEL_DEBUG;
++        return true;
++    }
++    if (name == "info") {
++        out = GGML_LOG_LEVEL_INFO;
++        return true;
++    }
++    if (name == "warn") {
++        out = GGML_LOG_LEVEL_WARN;
++        return true;
++    }
++    if (name == "error") {
++        out = GGML_LOG_LEVEL_ERROR;
++        return true;
++    }
++    return false;
++}
++
++} // namespace
++
++void install_from_environment() {
++    int minimum = GGML_LOG_LEVEL_WARN;
++    if (const char * value = std::getenv("SKIPPY_LOG_LEVEL")) {
++        if (!parse_level(value, minimum)) {
++            std::fprintf(stderr,
++                    "skippy: ignoring invalid SKIPPY_LOG_LEVEL '%s' (expected debug, info, warn, or error); using warn\n",
++                    value);
++            minimum = GGML_LOG_LEVEL_WARN;
++        }
++    }
++    set_level(minimum);
++
++    bool expected = false;
++    if (!g_installed.compare_exchange_strong(expected, true)) {
++        return;
++    }
++    ggml_log_callback previous = nullptr;
++    void * previous_user_data = nullptr;
++    llama_log_get(&previous, &previous_user_data);
++    g_forward = previous;
++    g_forward_user_data = previous_user_data;
++    llama_log_set(gate_callback, nullptr);
++}
++
++void set_level(int minimum_level) {
++    g_minimum_level.store(minimum_level, std::memory_order_relaxed);
++}
++
++int level() {
++    return g_minimum_level.load(std::memory_order_relaxed);
++}
++
++} // namespace skippy::log_gate
+diff --git a/src/skippy/log_gate.h b/src/skippy/log_gate.h
+new file mode 100644
+index 000000000..1750d4a95
+--- /dev/null
++++ b/src/skippy/log_gate.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++// Process-wide llama/ggml log gate for skippy test binaries and debug hosts.
++//
++// llama.cpp emits construction diagnostics (per-tensor graph dumps in
++// llama_context graph reserve, per-layer cache setup) at DEBUG level through a
++// process-global callback that prints everything it receives. Test binaries
++// that build real graphs would otherwise write gigabytes of near-identical
++// lines into each CTest transcript (Testing/Temporary/LastTest.log). The gate
++// forwards only messages at or above a threshold to the callback that was
++// installed before the gate, so hosts keep their own handler.
++
++namespace skippy::log_gate {
++
++// Install the gate using the threshold named by SKIPPY_LOG_LEVEL
++// (debug|info|warn|error, case-insensitive). Unset or invalid values fall
++// back to warn, the quiet default for test transcripts. Calling this again
++// only updates the threshold; the pre-gate forwarding target is captured
++// exactly once.
++void install_from_environment();
++
++// Change the threshold after installation. Values mirror ggml_log_level
++// (GGML_LOG_LEVEL_DEBUG..GGML_LOG_LEVEL_ERROR).
++void set_level(int minimum_level);
++
++// Current threshold.
++int level();
++
++} // namespace skippy::log_gate
+diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
+index 7418c05c5..a9f5fa473 100644
+--- a/src/skippy/tests/graph_build_inputs.cpp
++++ b/src/skippy/tests/graph_build_inputs.cpp
+@@ -8,6 +8,7 @@
+ #include "llama-memory.h"
+ #include "llama-model.h"
+ #include "llama.h"
++#include "../log_gate.h"
+ #include "skippy/stage_slice_plan.h"
+ #include "skippy/stage_realization.h"
+ 
+@@ -1095,6 +1096,9 @@ static int check_stage_layer_inputs(const char * model_path, const char * target
+ }
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (const int rc = check_embedding_scale_predicate()) return rc;
+     if (const int rc = check_prepared_export_token_axis()) return rc;
+     if (const int rc = check_execution_profile_residency()) return rc;
+diff --git a/src/skippy/tests/graph_contract_models.cpp b/src/skippy/tests/graph_contract_models.cpp
+index d22503d9e..318a5e4f3 100644
+--- a/src/skippy/tests/graph_contract_models.cpp
++++ b/src/skippy/tests/graph_contract_models.cpp
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "graph_contract_checks.h"
++#include "../log_gate.h"
+ #include "../../vendor/nlohmann/json.hpp"
+ 
+ // Validate real architecture graphs using sparse synthetic GGUFs, without inference.
+@@ -212,6 +213,9 @@ static int run_contract(int argc, char ** argv) {
+ }
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     try {
+         return run_contract(argc, argv);
+     } catch (const std::exception & error) {
+diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
+index 772d380e2..ca5746626 100644
+--- a/src/skippy/tests/hardware_application_probe.cpp
++++ b/src/skippy/tests/hardware_application_probe.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy/model_load_config_internal.h"
++#include "../log_gate.h"
+ #include "skippy/runtime.h"
+ 
+ #include <cstdio>
+@@ -12,6 +13,9 @@ static bool require(bool condition, const char * message) {
+ }
+ 
+ int main() {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     skippy_runtime_config config = skippy_runtime_config_default();
+     bool passed = true;
+     passed &= require(config.cache_type_k == GGML_TYPE_F16,
+diff --git a/src/skippy/tests/input_capabilities.cpp b/src/skippy/tests/input_capabilities.cpp
+index a87425e96..d5f9fbbe8 100644
+--- a/src/skippy/tests/input_capabilities.cpp
++++ b/src/skippy/tests/input_capabilities.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml.h"
++#include "../log_gate.h"
+ #include "gguf.h"
+ #include "skippy/stage_plan.h"
+ 
+@@ -12,6 +13,9 @@
+ // Realize a stage from a synthetic GGUF without reading any weight payloads.
+ // The expected profile count distinguishes token-only from embedding-capable graphs.
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (argc != 3) {
+         std::fprintf(stderr, "usage: %s model.gguf expected-profiles\n", argv[0]);
+         return 1;
+diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
+index f6506940c..582544319 100644
+--- a/src/skippy/tests/noalloc_graph_planning.cpp
++++ b/src/skippy/tests/noalloc_graph_planning.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml-backend.h"
++#include "../log_gate.h"
+ #include "ggml.h"
+ #include "gguf.h"
+ #include "llama-context.h"
+@@ -1105,6 +1106,9 @@ static bool check_state_validation_rejects() {
+ }
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (argc < 4 || argc > 7) {
+         std::fprintf(stderr, "usage: %s MODEL_PATH EXPECT_RECURRENT LAYER_CLASSES [N_RS_SEQ] [REQUEST_CONTRACT] [ACTIVATION_WIDTH]\n", argv[0]);
+         return 64;
+diff --git a/src/skippy/tests/profile_residency.cpp b/src/skippy/tests/profile_residency.cpp
+index 17650efda..18aa22216 100644
+--- a/src/skippy/tests/profile_residency.cpp
++++ b/src/skippy/tests/profile_residency.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy.h"
++#include "../log_gate.h"
+ #include "skippy/runtime_types.h"
+ #include "skippy/execution_internal.h"
+ #include "skippy/graph_build_inputs.h"
+@@ -217,6 +218,9 @@ static int run(const char * path, bool integrated, mtp_receipt * receipt = nullp
+ }
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (argc != 2 && argc != 3) return 64;
+     llama_backend_init();
+     const bool force_unfused_gdn = argc == 3 && std::string(argv[2]) == "unfused-gdn";
+diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
+index 0832b018e..843d3a35a 100644
+--- a/src/skippy/tests/renamed_multishard_planning.cpp
++++ b/src/skippy/tests/renamed_multishard_planning.cpp
+@@ -1,4 +1,5 @@
+ #include "embedding_input_regression.h"
++#include "../log_gate.h"
+ #include "live_graph_reference.h"
+ #include "ggml-backend.h"
+ #include "ggml.h"
+@@ -1654,6 +1655,9 @@ int run_proof(const char * source_path, const char * output_directory, bool expe
+ }
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (argc != 4) {
+         std::fprintf(stderr, "usage: %s MODEL_PATH OUTPUT_DIRECTORY EXPECT_RECURRENT\n", argv[0]);
+         return 64;
+diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
+index 471d598a2..a822d3e0c 100644
+--- a/src/skippy/tests/runtime_events.cpp
++++ b/src/skippy/tests/runtime_events.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy.h"
++#include "../log_gate.h"
+ 
+ #include "../events_internal.h"
+ #include "../runtime_support.h"
+@@ -680,6 +681,9 @@ int test_families_independent() {
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     if (argc < 2 || (std::strcmp(argv[1], "native_model_load_production") == 0 && argc != 3) ||
+         (std::strcmp(argv[1], "native_model_load_production") != 0 && argc != 2)) {
+         std::fprintf(stderr, "usage: %s <test-name> [fixture-path]\n", argv[0]);
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index f092b75b0..6a531c944 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -1,4 +1,5 @@
+ #include "skippy.h"
++#include "../log_gate.h"
+ #include "../runtime_types.h"
+ #include "../sampling_internal.h"
+ #include "../sampling_argmax.h"
+@@ -626,6 +627,9 @@ void adapter_contracts(skippy_model * model) {
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     CHECK(argc == 4);
+     const bool grammar = std::strcmp(argv[2], "grammar") == 0;
+     const bool state = std::strcmp(argv[2], "state") == 0;
+diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
+index 8336599ac..e2c451740 100644
+--- a/src/skippy/tests/stage_slice_plan.cpp
++++ b/src/skippy/tests/stage_slice_plan.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml.h"
++#include "../log_gate.h"
+ #include "ggml-backend.h"
+ #include "ggml-cpu.h"
+ #include "llama-model.h"
+@@ -1177,6 +1178,9 @@ static int check_auxiliary_graph_parameter_closure() {
+ #include "cast_destination_regression.h"
+ 
+ int main() {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     int result = check_cast_destination_clone();
+     if (!result) { result = check_input_leaf_state_inference(); }
+     if (!result) { result = check_raw_embedding_checkpoint(); }
+diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
+index 13857a5a8..1f226a400 100644
+--- a/src/skippy/tests/verify_rollback.cpp
++++ b/src/skippy/tests/verify_rollback.cpp
+@@ -4,6 +4,7 @@
+ // and when windows are pipelined: the next window decodes before the previous
+ // one is resolved, and a rejection then lands in the earlier window.
+ #include "skippy.h"
++#include "../log_gate.h"
+ #include "../runtime_types.h"
+ 
+ #include <cstdio>
+@@ -355,6 +356,9 @@ void release(skippy_model * model) {
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
++    // Graph construction logs every input-tensor edge at DEBUG level; keep
++    // transcripts small unless SKIPPY_LOG_LEVEL asks for more.
++    skippy::log_gate::install_from_environment();
+     // `sliding-window`: the fixture's attention slides, so no window may roll
+     // back in place and every one takes a host checkpoint.
+     // `native-rollback`: the memory rewinds through its own seq_rm.
+-- 
+2.56.0
+

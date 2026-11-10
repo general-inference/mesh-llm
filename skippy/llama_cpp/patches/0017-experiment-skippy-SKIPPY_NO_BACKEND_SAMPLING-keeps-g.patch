@@ -1,0 +1,36 @@
+From 50dac93133b463bab19950b6f656d452bdd0b457 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 11 Nov 2026 04:44:40 +1100
+Subject: [PATCH] experiment(skippy): SKIPPY_NO_BACKEND_SAMPLING keeps greedy
+ on the host path
+
+---
+ src/skippy/sampling.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index f26e2194f..de3808f20 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -1,5 +1,6 @@
+ #include "skippy/sampling.h"
+ #include "skippy/chat_sampling.h"
++#include "skippy/environment.h"
+ #include "skippy/errors.h"
+ #include "skippy/execution_internal.h"
+ #include "skippy/runtime_support.h"
+@@ -561,6 +562,11 @@ void skippy_refresh_backend_sampling(
+         return;
+     }
+     session->sampling_backend_enabled = false;
++    // kernel-bench experiment: keep greedy on the host path, like sampled chains.
++    static const bool no_backend_sampling = skippy_env_enabled("SKIPPY_NO_BACKEND_SAMPLING");
++    if (no_backend_sampling) {
++        return;
++    }
+     if (session->ctx != nullptr &&
+             // Activation-export and embedding contexts require every output
+             // row. Backend sampling accepts at most one row per sequence.
+-- 
+2.54.0 (Apple Git-157)
+

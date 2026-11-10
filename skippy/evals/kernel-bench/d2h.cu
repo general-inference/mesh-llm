@@ -22,6 +22,26 @@ int main(int argc, char ** argv) {
     };
     std::vector<char> pageable(bytes); memset(pageable.data(), 0, bytes);
     run("pageable", pageable.data());
+    // Fresh allocations that were never touched: every copy pays the first-touch page faults,
+    // as an export into a newly allocated zeroed buffer does.
+    {
+        double t = now();
+        for (size_t i = 0; i < n; i++) {
+            void * fresh = calloc(1, bytes);
+            cudaMemcpyAsync(fresh, dev, bytes, cudaMemcpyDeviceToHost, s); cudaStreamSynchronize(s);
+            free(fresh);
+        }
+        double dt = now() - t;
+        printf("D2H %-18s %5zu MiB x %zu: %8.2f GB/s\n", "fresh-calloc", mib, n, bytes * n / dt / 1e9);
+        t = now();
+        for (size_t i = 0; i < n; i++) {
+            char * fresh = (char *) malloc(bytes); memset(fresh, 0, bytes);
+            cudaMemcpyAsync(fresh, dev, bytes, cudaMemcpyDeviceToHost, s); cudaStreamSynchronize(s);
+            free(fresh);
+        }
+        dt = now() - t;
+        printf("D2H %-18s %5zu MiB x %zu: %8.2f GB/s (incl. memset)\n", "fresh-prefaulted", mib, n, bytes * n / dt / 1e9);
+    }
     std::vector<char> reg(bytes); memset(reg.data(), 0, bytes);
     double t = now(); cudaHostRegister(reg.data(), bytes, cudaHostRegisterPortable); double treg = now() - t;
     run("registered", reg.data());

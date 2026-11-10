@@ -62,6 +62,8 @@ for pair in ${SB_ARMS:-base=}; do
       nsys start --session="sb-$arm" -o "$HOME/.cache/kbench/nsys-serve-$arm" -f true
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES="${SB_NSYS_PHASES:-long}" python3 "$HERE/serve_measure.py"
       nsys stop --session="sb-$arm"
+      nsys stats -q --force-export=true --report cuda_gpu_trace --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" > "$ART/trace-$arm.csv" 2>/dev/null
+      echo "=== nsys serve $arm by stream"; python3 "$HERE/nsys_streams.py" "$ART/trace-$arm.csv"
       for rep in cuda_gpu_kern_sum cuda_gpu_mem_time_sum cuda_api_sum osrt_sum; do
         echo "=== nsys serve $arm $rep"
         nsys stats -q --force-export=true --report $rep --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" 2>/dev/null | head -25 | cut -c1-220

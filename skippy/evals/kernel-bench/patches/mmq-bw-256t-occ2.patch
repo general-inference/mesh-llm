@@ -1,0 +1,18 @@
+diff --git a/ggml/src/ggml-cuda/mmq-config-blackwell.cuh b/ggml/src/ggml-cuda/mmq-config-blackwell.cuh
+index 9fbe32b69..31a8f45c5 100644
+--- a/ggml/src/ggml-cuda/mmq-config-blackwell.cuh
++++ b/ggml/src/ggml-cuda/mmq-config-blackwell.cuh
+@@ -33,5 +33,12 @@ static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_conf
+     CASE(GGML_TYPE_NVFP4, 256, 1, 128, 112, GGML_CUDA_MMQ_SRAM_LAYOUT_FP4, MMQ_ITER_K_FP4, true, false);
+     CASE(GGML_TYPE_NVFP4, 256, 1, 128, 128, GGML_CUDA_MMQ_SRAM_LAYOUT_FP4, MMQ_ITER_K_FP4, true, false);
+ 
+-    return ggml_cuda_mmq_get_config_ampere(type, J, fallback);
++    // Integer-path types on GB10-class Blackwell: retuned tile shape (kernel-bench experiment).
++    ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config_ampere(type, J, fallback);
++    if (config.type != GGML_TYPE_COUNT && J <= 128) {
++        config.nthreads  = 256;
++        config.occupancy = 2;
++        config.I         = 128;
++    }
++    return config;
+ }

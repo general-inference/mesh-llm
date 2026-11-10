@@ -36,7 +36,7 @@ for pair in ${SB_ARMS:-base=}; do
   if [ "${SB_NSYS:-0}" = 1 ] && command -v nsys >/dev/null 2>&1; then
     LAUNCH=(nsys launch --session-new="sb-$arm" -t cuda,nvtx,osrt --cuda-graph-trace=node)
   fi
-  "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
+  env RUST_LOG="${SB_RUST_LOG:-}" "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
     --no-draft --speculative-strategy disabled --config "$cfg" \
     serve --model "$M" --ctx-size "${SB_CTX:-20480}" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!

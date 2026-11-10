@@ -3,7 +3,7 @@
 Each prompt opens with a unique request number, so no prompt shares a cached prefix
 with an earlier one. Prefill time is the latency of a max_tokens=1 request.
 """
-import json, os, time, urllib.request
+import json, os, time, urllib.error, urllib.request
 
 PORT, MODEL, ARM = os.environ["PORT"], os.environ["MODEL_ID"], os.environ["ARM"]
 URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
@@ -17,7 +17,11 @@ def text(n_words, seed):
 
 def post(body, stream=False):
     req = urllib.request.Request(URL, json.dumps(body).encode(), {"content-type": "application/json"})
-    return urllib.request.urlopen(req, timeout=900)
+    try:
+        return urllib.request.urlopen(req, timeout=900)
+    except urllib.error.HTTPError as err:
+        print(f"SERVE_BENCH_ERROR {ARM} HTTP {err.code}: {err.read().decode(errors='replace')[:2000]}", flush=True)
+        raise
 
 
 def prefill(n_words, seed):

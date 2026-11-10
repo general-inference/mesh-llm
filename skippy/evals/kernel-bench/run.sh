@@ -61,6 +61,7 @@ for ID in ${KB_MODELS-qwen3.5-9b}; do
     for ARM in ${KB_ARMS:-base}; do
       case $SET in
         verify)  bench "$ARM" "$M" "$ID-verify"  -p 1,2,4,8,16,32,64 -n 0 -d 0,4096 ;;
+        verifyfine) bench "$ARM" "$M" "$ID-verifyfine" -p 1,2,3,4,5,6,7,8,10,12,16 -n 0 ;;
         prefill) bench "$ARM" "$M" "$ID-prefill" -p 512,2048,8192 -n 0 -ub 512,2048 ;;
         ubatch)  bench "$ARM" "$M" "$ID-ubatch" -p 2048,8192 -n 0 -b 8192 -ub 512,1024,2048,4096,8192 ;;
         # Rollback snapshots (needs the bench-rs-seq arm). A batch must be longer than

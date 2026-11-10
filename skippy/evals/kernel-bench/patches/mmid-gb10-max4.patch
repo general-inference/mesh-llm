@@ -1,0 +1,15 @@
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 8f79123af..e4cf422e5 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -286,6 +286,10 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+     // NVIDIA: P100, Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
+     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+         cc = ggml_cuda_highest_compiled_arch(cc);
++        // kernel-bench: with two-CTA MMQ tiles GB10 expert batches go to MMQ sooner.
++        if (cc == GGML_CUDA_CC_DGX_SPARK) {
++            return 4;
++        }
+         if (cc == GGML_CUDA_CC_PASCAL || cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+             return MMVQ_MAX_BATCH_SIZE;
+         }

@@ -1,0 +1,15 @@
+diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
+index 8f79123af..c43ce3377 100644
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -1144,7 +1144,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
+         // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
+         // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
+         const int  nwarps = calc_nwarps(type, c_ncols_dst, table_id);
+-        bool       use    = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
++        // kernel-bench: expert rows on GB10 also take one row per warp when one block-wide trip covers K.
++        bool       use    = nwarps > 1 && (blocks_per_row_x < nwarps * blocks_per_iter_1warp ||
++                                           (table_id == MMVQ_PARAMETERS_GB10 && has_ids && blocks_per_row_x <= nwarps * blocks_per_iter_1warp));
+ 
+         constexpr std::array<ggml_type, 2> iq_slow_turing = {
+             GGML_TYPE_IQ3_XXS,

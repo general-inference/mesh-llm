@@ -25,7 +25,11 @@ int main(int argc, char ** argv) {
     const int64_t E = argc > 6 ? atoll(argv[5]) : 0, U = argc > 6 ? atoll(argv[6]) : 0;
 
     ggml_backend_load_all();
+    // Integrated GPUs (DGX Spark, Apple) can register as IGPU rather than GPU.
     ggml_backend_t be = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+    if (!be) {
+        be = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
+    }
     if (!be) { fprintf(stderr, "no GPU backend\n"); return 1; }
 
     ggml_init_params ip = { 16 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };

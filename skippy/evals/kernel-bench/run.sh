@@ -119,11 +119,12 @@ case " ${KB_BENCH:-} " in *" mm "*)
   grep -v '^#' "$HERE/shapes.tsv" | while read -r T MR KD E U C MODEL; do
     for N in ${KB_MM_N:-512 1024 2048}; do
       for ARM in ${KB_ARMS:-base}; do
-        r=$("$CACHE/build-$ARM/bin/mmbench" "$T" "$MR" "$KD" "$N" "$E" "$U" 2>/dev/null | grep MMBENCH)
+        r=$("$CACHE/build-$ARM/bin/mmbench" "$T" "$MR" "$KD" "$N" "$E" "$U" 2>>"$ART/mmbench.err" | grep MMBENCH)
         echo "MMB $ARM $MODEL $C $r"
       done
     done
-  done | tee "$ART/mm.txt" ;;
+  done | tee "$ART/mm.txt"
+  sort -u "$ART/mmbench.err" 2>/dev/null | head -20 ;;
 esac
 # Op microbenchmarks last: a full MUL_MAT sweep takes most of an hour.
 case " ${KB_BENCH:-} " in *" ops "*)

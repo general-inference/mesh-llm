@@ -36,6 +36,6 @@ for ARM in ${KB_ARMS:-base}; do
     grep -E "error" "$CACHE/build-$ARM.log" | head -40
     echo "KBENCH_BUILD_FAIL $ARM"; exit 1
   fi
-  grep -c "Building CUDA object\|Building CXX object" "$CACHE/build-$ARM.log" | sed "s/^/objects rebuilt for $ARM: /"
+  echo "objects rebuilt for $ARM: $(grep -c "Building" "$CACHE/build-$ARM.log" || true)"
 done
 echo "=== build done"

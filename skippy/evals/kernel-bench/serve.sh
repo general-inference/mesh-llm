@@ -38,7 +38,7 @@ for pair in ${SB_ARMS:-base=}; do
   fi
   env RUST_LOG="${SB_RUST_LOG:-}" "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
     --no-draft --speculative-strategy disabled --config "$cfg" \
-    serve --model "$M" --ctx-size "${SB_CTX:-20480}" >"$ART/serve-$arm.log" 2>&1 &
+    serve --model "$M" --ctx-size "${SB_CTX:-32768}" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!
   model_id=""; t0=$(date +%s)
   while [ $(( $(date +%s) - t0 )) -lt 900 ]; do

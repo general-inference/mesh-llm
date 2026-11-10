@@ -46,7 +46,7 @@ def decode(seed, n=256):
     return (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 2 else 0.0
 
 
-PHASES = os.environ.get("SB_PHASES", "warm long decode")
+PHASES = os.environ.get("SB_PHASES", "warm long agent decode")
 if "warm" in PHASES:
     prefill(200, 1)
 seed = 100 + 50 * ("warm" not in PHASES)
@@ -59,6 +59,23 @@ for n_words in ((1500, 6000, 12000) if "decode" in PHASES else (12000,)) if "lon
     toks = runs[0][1]
     print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "prefill", "prompt_tokens": toks,
           "best_s": round(best, 3), "tok_s": round(toks / best, 1), "all_s": [round(r[0], 3) for r in runs]}), flush=True)
+if "agent" in PHASES:
+    # Agent turns: a long history, then the same history plus a short new message. The second
+    # request hits the prefix cache, so its latency is the suffix prefill plus whatever the
+    # server does around it (state export for the cache, restore).
+    for n_words in (6000, 12000, 24000):
+        seed += 1
+        history = f"Session {seed}. " + text(n_words, seed)
+        def turn(extra):
+            body = {"model": MODEL, "max_tokens": 1, "temperature": 0,
+                    "messages": [{"role": "user", "content": history + extra}]}
+            t = time.perf_counter()
+            out = json.load(post(body))
+            return time.perf_counter() - t, out.get("usage", {}).get("prompt_tokens", 0)
+        first, toks = turn("\nWhat happened first?")
+        hits = [turn(f"\nWhat happened next? ({i})")[0] for i in range(3)]
+        print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "agent_turn", "prompt_tokens": toks,
+              "first_s": round(first, 3), "cached_turn_s": [round(h, 3) for h in hits]}), flush=True)
 if "decode" not in PHASES:
     raise SystemExit(0)
 rates = [decode(500 + i) for i in range(3)]

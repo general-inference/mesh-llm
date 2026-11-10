@@ -215,7 +215,7 @@ impl StageSession {
         let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
         let mut output_payloads = output_capacities
             .iter()
-            .map(|capacity| crate::host_buffer::native_output_buffer(*capacity))
+            .map(|capacity| vec![0_u8; *capacity])
             .collect::<Vec<_>>();
         let output_payload_ptrs = output_payloads
             .iter_mut()

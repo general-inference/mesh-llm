@@ -46,7 +46,7 @@ for pair in ${SB_ARMS:-base=}; do
   if [ "${SB_NSYS:-0}" = 1 ] && command -v nsys >/dev/null 2>&1; then
     LAUNCH=(nsys launch --session-new="sb-$arm" -t cuda,nvtx,osrt --cuda-graph-trace=node)
   fi
-  env RUST_LOG="${SB_RUST_LOG:-}" "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
+  env RUST_LOG="${SB_RUST_LOG:-}" ${LAUNCH[@]+"${LAUNCH[@]}"} "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
     $( [ "${SB_SPEC:-0}" = 1 ] || echo --no-draft --speculative-strategy disabled ) --config "$cfg" \
     serve --model "$M" --ctx-size "${SB_CTX:-32768}" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!
@@ -75,7 +75,7 @@ for pair in ${SB_ARMS:-base=}; do
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=warm python3 "$HERE/serve_measure.py"
       START_OPTS=()
       [ "${SB_NSYS_CPU:-0}" = 1 ] && START_OPTS=(--sample=process-tree --sampling-frequency=2000 --backtrace=fp)
-      nsys start --session="sb-$arm" "${START_OPTS[@]}" -o "$HOME/.cache/kbench/nsys-serve-$arm" -f true || echo "nsys start failed"
+      nsys start --session="sb-$arm" ${START_OPTS[@]+"${START_OPTS[@]}"} -o "$HOME/.cache/kbench/nsys-serve-$arm" -f true || echo "nsys start failed"
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES="${SB_NSYS_PHASES:-long}" python3 "$HERE/serve_measure.py"
       nsys stop --session="sb-$arm"
       nsys stats -q --force-export=true --report cuda_gpu_trace --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" > "$ART/trace-$arm.csv" 2>/dev/null

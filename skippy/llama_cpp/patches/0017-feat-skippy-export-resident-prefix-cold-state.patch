@@ -1,0 +1,221 @@
+From 0000000000000000000000000000000000000001 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Mon, 10 Nov 2026 17:30:00 +1100
+Subject: [PATCH] feat(skippy): export resident prefix cold state through a lane-free view
+
+Restore the resident-prefix cold-offload ABI surface on top of native
+sequence ownership. The serving side's durable spill path exports
+cache-owned prefixes at explicit eviction boundaries; re-expose those
+exports against the reviewed llama.cpp sequence design:
+
+- skippy_session_export_resident_kv_page reads the cache sequence through
+  a lane-free session view and delegates to skippy_export_kv_page
+- skippy_session_export_resident_recurrent_state reports zero bytes for
+  attention-only prefixes (recurrent memory has no resident prefixes)
+- skippy_session_resident_prefix_bytes reports the saved token identity
+  footprint; attention cells remain native pool state
+- bump SKIPPY_ABI_VERSION_PATCH and shift the model_support bump chain
+  so the final ABI lands at 0.1.82
+
+---
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 3448095a1..cbba91849 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 70
++#define SKIPPY_ABI_VERSION_PATCH 71
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index e8d0874a1..c667cb127 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -232,6 +232,75 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
+         size_t token_count,
+         struct skippy_error ** out_error);
+ 
++
++/** @brief Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane.
++ * The resident prefix lives as a native cache sequence; export reads it through a lane-free session view.
++ */
++LLAMA_API enum skippy_status skippy_session_export_resident_kv_page(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Copies a cache-owned recurrent checkpoint for cold offload; a size query does not read tensors.
++ * Resident prefixes are attention-only under native sequence ownership, so attention runtimes report zero bytes.
++ */
++LLAMA_API enum skippy_status skippy_session_export_resident_recurrent_state(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Reports cache-owned resident prefix identity bytes; shared attention cells remain in the native pool. */
++LLAMA_API enum skippy_status skippy_session_resident_prefix_bytes(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        uint64_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane.
++ * The resident prefix lives as a native cache sequence; export reads it through a lane-free session view.
++ */
++LLAMA_API enum skippy_status skippy_session_export_resident_kv_page(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Copies a cache-owned recurrent checkpoint for cold offload; a size query does not read tensors.
++ * Resident prefixes are attention-only under native sequence ownership, so attention runtimes report zero bytes.
++ */
++LLAMA_API enum skippy_status skippy_session_export_resident_recurrent_state(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Reports cache-owned resident prefix identity bytes; shared attention cells remain in the native pool. */
++LLAMA_API enum skippy_status skippy_session_resident_prefix_bytes(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        uint64_t * out_bytes,
++        struct skippy_error ** out_error);
++
+ /** @brief Reports physically occupied cells in the session's unified KV cache. */
+ LLAMA_API enum skippy_status skippy_session_memory_used_cells(
+         struct skippy_session * session,
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 45a53c4ba..8fdf6cf41 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -1131,6 +1131,103 @@ enum skippy_status skippy_session_create_from_resident_prefix(
+     return skippy_success(out_error);
+ }
+ 
++
++enum skippy_status skippy_session_export_resident_kv_page(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error) {
++    if (out_bytes != nullptr) { *out_bytes = 0; }
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (skippy_is_reserved_sequence_id(session, cache_seq_id)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id overlaps execution lanes");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    llama_memory_t memory = nullptr;
++    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    skippy_synchronize_context_if_pending(session->stage_model);
++    // Export the cache-owned sequence through a lane-free session view. The
++    // view neither claims an execution lane nor mutates cache state; only the
++    // explicitly requested cold payload is materialized.
++    struct skippy_session view {};
++    view.stage_model = session->stage_model;
++    view.ctx = session->ctx;
++    view.seq_id = cache_seq_id;
++    const llama_pos max_pos = llama_memory_seq_pos_max(memory, cache_seq_id);
++    view.n_past = max_pos < 0 ? 0 : max_pos + 1;
++    return skippy_export_kv_page(&view, layer_start, layer_end, token_start, token_count,
++            out_desc, output, output_capacity, out_bytes, out_error);
++}
++
++enum skippy_status skippy_session_export_resident_recurrent_state(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error) {
++    if (out_bytes == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent byte count is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_bytes = 0;
++    llama_memory_t memory = nullptr;
++    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    // Resident prefixes are owned natively as attention sequences; there is no
++    // side-car recurrent checkpoint to export. Attention runtimes report zero
++    // bytes so cold offload records attention-only payloads.
++    (void) cache_seq_id;
++    (void) output;
++    (void) output_capacity;
++    return skippy_success(out_error);
++}
++
++enum skippy_status skippy_session_resident_prefix_bytes(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        uint64_t * out_bytes,
++        struct skippy_error ** out_error) {
++    if (out_bytes == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident byte count output is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *out_bytes = 0;
++    llama_memory_t memory = nullptr;
++    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
++    if (status != SKIPPY_STATUS_OK) {
++        return status;
++    }
++    if (skippy_is_reserved_sequence_id(session, cache_seq_id)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id overlaps execution lanes");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    // The prefix identity is the saved token history; shared attention cells
++    // stay in the native pool and are reported separately via
++    // skippy_session_memory_used_cells.
++    const llama_pos max_pos = llama_memory_seq_pos_max(memory, cache_seq_id);
++    if (max_pos < 0) {
++        return skippy_success(out_error);
++    }
++    *out_bytes = static_cast<uint64_t>(max_pos + 1) * sizeof(llama_token);
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_session_drop_sequence(
+         struct skippy_session * session,
+         int32_t seq_id,

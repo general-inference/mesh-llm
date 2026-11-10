@@ -1,0 +1,411 @@
+{
+  "schema_version": 2,
+  "package_id": "sha256:e7d1bfb951c0fc5c7c03999f3849d2a3cdf3b0818c9725b90d76bf4ac3b113d3",
+  "model_id": "unsloth/GLM-5.3-Flash-GGUF:UD-Q4_K_XL",
+  "source_model": {
+    "sha256": "b59c030090f012b38213bc8c4f78ce10767f2693d730d0dbcd3dc16a5f69e2bc",
+    "metadata_artifact_id": "metadata",
+    "repo": "unsloth/GLM-5.3-Flash-GGUF",
+    "revision": "a38483c8cd5df544f53d70fb281afe97369d5ab6",
+    "primary_file": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00001-of-00006.gguf",
+    "canonical_ref": "unsloth/GLM-5.3-Flash-GGUF@a38483c8cd5df544f53d70fb281afe97369d5ab6/UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00001-of-00006.gguf",
+    "distribution_id": "GLM-5.3-Flash-UD-Q4_K_XL",
+    "files": [
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00001-of-00006.gguf",
+        "byte_size": 9429984,
+        "sha256": "b59c030090f012b38213bc8c4f78ce10767f2693d730d0dbcd3dc16a5f69e2bc"
+      },
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00002-of-00006.gguf",
+        "byte_size": 49198039200,
+        "sha256": "d3ecb6ff3957a99878f9a0352676a0913748a431a9a4a1b1ffa5ade9b8947a74"
+      },
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00003-of-00006.gguf",
+        "byte_size": 49988626304,
+        "sha256": "328073c004e7c5395b208247feed26089db247b94dd8fa4ab0f2569d86c1d770"
+      },
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00004-of-00006.gguf",
+        "byte_size": 48700701344,
+        "sha256": "6803ab7effa6da4a0b02c9c7865952fdd6c5b2e10e53903348da369e90bd13f9"
+      },
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00005-of-00006.gguf",
+        "byte_size": 49026026752,
+        "sha256": "852f3df9dacde3d196796f9fe738468e80c8701555ff0a8c30bc010fb8974dd8"
+      },
+      {
+        "path": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00006-of-00006.gguf",
+        "byte_size": 2784497888,
+        "sha256": "c6ba510fafc1e12cc0addbc361a329c0c592ab96980098e7e25e107d8faa983e"
+      }
+    ]
+  },
+  "format": "gguf",
+  "layer_count": 46,
+  "artifact_catalog": {
+    "entries": [
+      {
+        "id": "metadata",
+        "path": "shared/metadata.gguf",
+        "byte_size": 9552640,
+        "sha256": "0a6f7bb64924b54b5169da423adb0419aef8ae49861ecec8bef77502c47b18ea"
+      },
+      {
+        "id": "embeddings",
+        "path": "shared/embeddings.gguf",
+        "byte_size": 683468032,
+        "sha256": "83f07305070a61dc5216beed72a11bfaa2a7f5c1ce30c5e910c416a793f8544c"
+      },
+      {
+        "id": "output",
+        "path": "shared/output.gguf",
+        "byte_size": 683484448,
+        "sha256": "e787e741410a904a4fe9989a0440fe4d657d9487f066ae1164bc1b8f5a220900"
+      },
+      {
+        "id": "layer-00000",
+        "path": "layers/layer-00000.gguf",
+        "byte_size": 317386432,
+        "sha256": "ca1546991bbd229cea3638ec751dcaaf52358ba0b6e04801421fef6c21230811"
+      },
+      {
+        "id": "layer-00001",
+        "path": "layers/layer-00001.gguf",
+        "byte_size": 317386432,
+        "sha256": "ac7190ae42d135c0c6bcd9409373cae4a88aff52a17cd27850b751a3ff3f1264"
+      },
+      {
+        "id": "layer-00002",
+        "path": "layers/layer-00002.gguf",
+        "byte_size": 317386432,
+        "sha256": "48213d9701e13b6e2352e29161c3963c936c9e1255fdb3f0af18d2d7803ca8c0"
+      },
+      {
+        "id": "layer-00003",
+        "path": "layers/layer-00003.gguf",
+        "byte_size": 4553727488,
+        "sha256": "899c32d32fd07102abce3130bc6bfaa3ee62f373185aaa87a934baa5d4ae5bcc"
+      },
+      {
+        "id": "layer-00004",
+        "path": "layers/layer-00004.gguf",
+        "byte_size": 4567266464,
+        "sha256": "3025e508e1e40aaf23027478e857b273d92e6a5bff0ab103c9f0294e1a891544"
+      },
+      {
+        "id": "layer-00005",
+        "path": "layers/layer-00005.gguf",
+        "byte_size": 4567266464,
+        "sha256": "3ea41201d9f634a6d9db596eb1ef9516b062edba4cd3a1f1085a87b71f69d9e8"
+      },
+      {
+        "id": "layer-00006",
+        "path": "layers/layer-00006.gguf",
+        "byte_size": 4567266464,
+        "sha256": "2d9904c9d6c22a1af0d9d2ff90f4c3b099112b20b28c594e7a2a1c02cc211131"
+      },
+      {
+        "id": "layer-00007",
+        "path": "layers/layer-00007.gguf",
+        "byte_size": 4553727488,
+        "sha256": "f868ea0a608a31e567eda3b537ad467cf7a02e1daabe59de06fdc003f590a1e4"
+      },
+      {
+        "id": "layer-00008",
+        "path": "layers/layer-00008.gguf",
+        "byte_size": 4567266464,
+        "sha256": "022210d34cfba8d2f312507dddbb7a0ce5e9a5203bf062b866e0ca245def0dad"
+      },
+      {
+        "id": "layer-00009",
+        "path": "layers/layer-00009.gguf",
+        "byte_size": 4567266464,
+        "sha256": "8bf65e260a9b202199b63d47f7624642dd92d9386a01aeb583f2f481e6f81100"
+      },
+      {
+        "id": "layer-00010",
+        "path": "layers/layer-00010.gguf",
+        "byte_size": 4567266496,
+        "sha256": "6a05877943097cff4a1142b35909d4d94ba407c4346908f3a7756ddaee348d62"
+      },
+      {
+        "id": "layer-00011",
+        "path": "layers/layer-00011.gguf",
+        "byte_size": 5478571552,
+        "sha256": "4755448d3ecb5d8782054773b180270cabdef37cb0400c4553ffa0be6bf7d8be"
+      },
+      {
+        "id": "layer-00012",
+        "path": "layers/layer-00012.gguf",
+        "byte_size": 4888130752,
+        "sha256": "47fbb5cf90643cf90dd0f072454d9695111946916ffcf1b2318f06329c12bc6c"
+      },
+      {
+        "id": "layer-00013",
+        "path": "layers/layer-00013.gguf",
+        "byte_size": 4567266496,
+        "sha256": "9b0331f53421c2c78abbb461aea0a402da0fd0f217f3478e236c6025a51bc7b7"
+      },
+      {
+        "id": "layer-00014",
+        "path": "layers/layer-00014.gguf",
+        "byte_size": 4567266496,
+        "sha256": "8f8cea709fe8f85b5a3d4b1b6fee2abcef8ceb065fadb4ec7189d1d068a02397"
+      },
+      {
+        "id": "layer-00015",
+        "path": "layers/layer-00015.gguf",
+        "byte_size": 4553727520,
+        "sha256": "c97495b9225f57dbffbd89fe36f49f14b75a268785d8fb4a377c3028ea2cbcd0"
+      },
+      {
+        "id": "layer-00016",
+        "path": "layers/layer-00016.gguf",
+        "byte_size": 4567266496,
+        "sha256": "3b0ff65da38b444417b72b855e3f33d24cbdc96284f072851363769432cfe2ca"
+      },
+      {
+        "id": "layer-00017",
+        "path": "layers/layer-00017.gguf",
+        "byte_size": 4567266496,
+        "sha256": "44889c0f5eacd389ae72e78b2e819a2ea7ba26370d9de4ad0eb06be51ec27f01"
+      },
+      {
+        "id": "layer-00018",
+        "path": "layers/layer-00018.gguf",
+        "byte_size": 4567266496,
+        "sha256": "3e68d16e666b9b21388996f715722e1414b303a3e1af43b8a6dc93e8f0aa6a75"
+      },
+      {
+        "id": "layer-00019",
+        "path": "layers/layer-00019.gguf",
+        "byte_size": 4553727520,
+        "sha256": "e3d9f6d7446b933b0685dece8b9f9500c55b4d27c336199a3c3a28a9492be182"
+      },
+      {
+        "id": "layer-00020",
+        "path": "layers/layer-00020.gguf",
+        "byte_size": 4567266496,
+        "sha256": "ef5dbdce4f62713f31230d7a10140c3567cfaac2914d14dbb7424c12ec356ae8"
+      },
+      {
+        "id": "layer-00021",
+        "path": "layers/layer-00021.gguf",
+        "byte_size": 4567266496,
+        "sha256": "478d76d6e7489b40bcba4bd0358e5892d18e526d2036b682fbce2ac30a7a5e44"
+      },
+      {
+        "id": "layer-00022",
+        "path": "layers/layer-00022.gguf",
+        "byte_size": 4567266496,
+        "sha256": "0bea9e07e1325938eb08ea182867160b7d38576b67976c6657e3157f3dd3220d"
+      },
+      {
+        "id": "layer-00023",
+        "path": "layers/layer-00023.gguf",
+        "byte_size": 4553727520,
+        "sha256": "e8856e4801df33ae23c2a3a5faba7b3bb7e80f4aaa29589e206bb2a40a901aa2"
+      },
+      {
+        "id": "layer-00024",
+        "path": "layers/layer-00024.gguf",
+        "byte_size": 4567266496,
+        "sha256": "bf0a95605583292b42d20c59c20ab748d73d2197e0099b2c6d9bfc7301fa1ee6"
+      },
+      {
+        "id": "layer-00025",
+        "path": "layers/layer-00025.gguf",
+        "byte_size": 4567266496,
+        "sha256": "bd8ddb376664726a7e5b1e9b0850f866c85e909a964b5860938e13fd01984810"
+      },
+      {
+        "id": "layer-00026",
+        "path": "layers/layer-00026.gguf",
+        "byte_size": 4567266496,
+        "sha256": "ab39a4b966affa0ceabf44e406bb3e8a239bb1afc03b3ade416145121a26feef"
+      },
+      {
+        "id": "layer-00027",
+        "path": "layers/layer-00027.gguf",
+        "byte_size": 4553727520,
+        "sha256": "fd6f8515e4c671048d71f3907a7793f99d5ffcdffb2d4ce630aff037a2100497"
+      },
+      {
+        "id": "layer-00028",
+        "path": "layers/layer-00028.gguf",
+        "byte_size": 4567266496,
+        "sha256": "3aff258ec6276cd627e5b68419b9bdd4eee616b2f539cbb3b79d578cfccf5d8c"
+      },
+      {
+        "id": "layer-00029",
+        "path": "layers/layer-00029.gguf",
+        "byte_size": 4567266496,
+        "sha256": "5f51277eb1b6ffee32e71cace1efaaf7b607107c66a6989b5ba848105d8746de"
+      },
+      {
+        "id": "layer-00030",
+        "path": "layers/layer-00030.gguf",
+        "byte_size": 4567266496,
+        "sha256": "35d60dbc8aec1a301066728868f6ee111bd214b44258eddc356bcd8a902f6a26"
+      },
+      {
+        "id": "layer-00031",
+        "path": "layers/layer-00031.gguf",
+        "byte_size": 4553727520,
+        "sha256": "de9784a779e967b943f9e50ca23ed2adce89024261dd6eadc232293f1100723b"
+      },
+      {
+        "id": "layer-00032",
+        "path": "layers/layer-00032.gguf",
+        "byte_size": 4567266496,
+        "sha256": "860c14df2579c33e9f85e9bb80579a4d595ff15e4f32b0f9af5e0eb9ffce5da8"
+      },
+      {
+        "id": "layer-00033",
+        "path": "layers/layer-00033.gguf",
+        "byte_size": 4567266496,
+        "sha256": "1a6d9d57a4566e9b0698500b20a94ba3cfcba6d40143228207bbf338bd7d5002"
+      },
+      {
+        "id": "layer-00034",
+        "path": "layers/layer-00034.gguf",
+        "byte_size": 4567266496,
+        "sha256": "ae8f23c2b844ef70c350fd7f60de83edce9626a887faf0b493e9d9b743610942"
+      },
+      {
+        "id": "layer-00035",
+        "path": "layers/layer-00035.gguf",
+        "byte_size": 4553727520,
+        "sha256": "19573df1c6468c165c6c71334c365e46b4449a900f44ddd99f4b94cb12f25fe5"
+      },
+      {
+        "id": "layer-00036",
+        "path": "layers/layer-00036.gguf",
+        "byte_size": 4567266496,
+        "sha256": "5cb6d0d1e98f111694ecd50036a6d673a66644fbb4933d68fdbe80018eec1a35"
+      },
+      {
+        "id": "layer-00037",
+        "path": "layers/layer-00037.gguf",
+        "byte_size": 4567266496,
+        "sha256": "7a9dd91eaccbab51f1addf1a9e1c46e23b32d5d3d3c706c38e0395f5269dbf3f"
+      },
+      {
+        "id": "layer-00038",
+        "path": "layers/layer-00038.gguf",
+        "byte_size": 4567266496,
+        "sha256": "20996314b46cfbad19af6e851cd68410a0bf1e5803c8d15e76140de40b0fe4b4"
+      },
+      {
+        "id": "layer-00039",
+        "path": "layers/layer-00039.gguf",
+        "byte_size": 4553727520,
+        "sha256": "1bfef643d76ec35fb6bc4b873389756ba6ea5b2d556e623b84b7a00e20a327ed"
+      },
+      {
+        "id": "layer-00040",
+        "path": "layers/layer-00040.gguf",
+        "byte_size": 4567266496,
+        "sha256": "f119fce390d17d972ac91481a520cc6c89dfa83999b68a422eabd0705ce3cde4"
+      },
+      {
+        "id": "layer-00041",
+        "path": "layers/layer-00041.gguf",
+        "byte_size": 4567266496,
+        "sha256": "c09deb5f38fa18641f9861fc8507909a5e5b7ea59e7b215a856e97e287f4b56c"
+      },
+      {
+        "id": "layer-00042",
+        "path": "layers/layer-00042.gguf",
+        "byte_size": 4567266496,
+        "sha256": "1fe52fa88e62709b282e133860e25d17257d95f5e366f0f60024b1e8c97cb990"
+      },
+      {
+        "id": "layer-00043",
+        "path": "layers/layer-00043.gguf",
+        "byte_size": 4553727520,
+        "sha256": "2f7ba809fe52dcf373fa5be5fb303e34ba4f3af28a0306fc802f02102f42b8bc"
+      },
+      {
+        "id": "layer-00044",
+        "path": "layers/layer-00044.gguf",
+        "byte_size": 4888130752,
+        "sha256": "c9bab0124fae587dfed387bd8508d10ace774e070ba4fa510fcd409218d9c74f"
+      },
+      {
+        "id": "layer-00045",
+        "path": "layers/layer-00045.gguf",
+        "byte_size": 4588592288,
+        "sha256": "3f860886ba7aba2dc1396b7a00bebdc758fe6e043d3f62875bc083d38c3731e5"
+      },
+      {
+        "id": "projector-00000",
+        "path": "projectors/projector-00000.gguf",
+        "byte_size": 1164010176,
+        "sha256": "82b7adb44411dbb298b1c689567804e5ed0790d80f308ed8b5b6b8ac0527d2ac"
+      },
+      {
+        "id": "projector-00001",
+        "path": "projectors/projector-00001.gguf",
+        "byte_size": 1128047296,
+        "sha256": "922b809664d6a89cc1e40bfeaa63618000edc6651baf4082ce0718a784adf947"
+      }
+    ]
+  },
+  "sidecars": [
+    {
+      "kind": "mmproj",
+      "artifact_id": "projector-00000",
+      "name": "projector-00000"
+    },
+    {
+      "kind": "mmproj",
+      "artifact_id": "projector-00001",
+      "name": "projector-00001"
+    }
+  ],
+  "generation": {
+    "request_defaults": {
+      "selection": {
+        "default": "recommended"
+      },
+      "profiles": {
+        "recommended": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "provenance": {
+            "source_repo": "zai-org/GLM-5.3-Flash",
+            "revision": "eb9eb208eb0d988989d07a6a12d0fdeb5f52574a",
+            "file": "generation_config.json",
+            "section": "Generation defaults",
+            "url": "https://huggingface.co/zai-org/GLM-5.3-Flash/blob/eb9eb208eb0d988989d07a6a12d0fdeb5f52574a/generation_config.json"
+          }
+        }
+      }
+    },
+    "speculative_decoding": {
+      "default": "mtp",
+      "strategies": {
+        "mtp": {
+          "type": "native-mtp",
+          "prediction_depth": 1,
+          "layer_indices": [
+            45
+          ],
+          "window_policy": {
+            "default": "fixed",
+            "initial_window": 1,
+            "min_window": 1,
+            "max_window": 1
+          }
+        }
+      }
+    }
+  },
+  "native_abi_version": "0.1.54",
+  "generator_version": "0.76.0",
+  "created_at_unix_secs": 1793251309
+}

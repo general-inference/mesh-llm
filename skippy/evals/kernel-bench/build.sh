@@ -32,7 +32,10 @@ for ARM in ${KB_ARMS:-base}; do
     -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TOOLS=ON \
     -DGGML_NATIVE=ON "${BACKEND_FLAGS[@]}" >"$CACHE/cmake-$ARM.log" 2>&1 || { tail -40 "$CACHE/cmake-$ARM.log"; exit 1; }
   echo "=== build $ARM"
-  cmake --build "$BUILD" -j "$JOBS" --target llama-bench test-backend-ops 2>&1 | grep -E "error|warning: unused|Linking" | tail -30
-  test -x "$BUILD/bin/llama-bench"
+  if ! cmake --build "$BUILD" -j "$JOBS" --target llama-bench test-backend-ops >"$CACHE/build-$ARM.log" 2>&1; then
+    grep -E "error" "$CACHE/build-$ARM.log" | head -40
+    echo "KBENCH_BUILD_FAIL $ARM"; exit 1
+  fi
+  grep -c "Building CUDA object\|Building CXX object" "$CACHE/build-$ARM.log" | sed "s/^/objects rebuilt for $ARM: /"
 done
 echo "=== build done"

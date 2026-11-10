@@ -32,7 +32,11 @@ for pair in ${SB_ARMS:-base=}; do
   cfg="$ART/arm-$arm.toml"; printf '%b\n' "$body" > "$cfg"
   port=$(( 9400 + $(printf '%s%s' "${JIANYANG_RUN_ID:-run}" "$arm" | cksum | cut -d' ' -f1) % 500 ))
   echo "=== arm $arm (port $port)"; cat "$cfg"
-  "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
+  LAUNCH=()
+  if [ "${SB_NSYS:-0}" = 1 ] && command -v nsys >/dev/null 2>&1; then
+    LAUNCH=(nsys launch --session-new="sb-$arm" -t cuda,nvtx,osrt --cuda-graph-trace=node)
+  fi
+  "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
     --no-draft --speculative-strategy disabled --config "$cfg" \
     serve --model "$M" --ctx-size "${SB_CTX:-20480}" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!
@@ -42,7 +46,20 @@ for pair in ${SB_ARMS:-base=}; do
     [ -n "$model_id" ] && break; kill -0 "$SERVER" 2>/dev/null || break; sleep 2
   done
   if [ -z "$model_id" ]; then echo "SERVE_BENCH {\"arm\":\"$arm\",\"error\":\"no model\"}"; tail -30 "$ART/serve-$arm.log"
-  else ARM="$arm" PORT="$port" MODEL_ID="$model_id" python3 "$HERE/serve_measure.py"; fi
+  else
+    if [ "${#LAUNCH[@]}" -gt 0 ]; then
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=warm python3 "$HERE/serve_measure.py"
+      nsys start --session="sb-$arm" -o "$HOME/.cache/kbench/nsys-serve-$arm" -f true
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=long python3 "$HERE/serve_measure.py"
+      nsys stop --session="sb-$arm"
+      for rep in cuda_gpu_kern_sum cuda_gpu_mem_time_sum cuda_api_sum osrt_sum; do
+        echo "=== nsys serve $arm $rep"
+        nsys stats -q --report $rep --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" 2>/dev/null | head -25 | cut -c1-220
+      done
+    else
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" python3 "$HERE/serve_measure.py"
+    fi
+  fi
   grep -oE '"n_ubatch[^,]*|n_ubatch=[0-9]+|n_batch=[0-9]+' "$ART/serve-$arm.log" | sort -u | head -4
   kill "$SERVER" 2>/dev/null; wait "$SERVER" 2>/dev/null; sleep 5
 done

@@ -42,9 +42,11 @@ def decode(seed, n=256):
     return (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 2 else 0.0
 
 
-prefill(200, 1)  # warm the server
-seed = 100
-for n_words in (1500, 6000, 12000):
+PHASES = os.environ.get("SB_PHASES", "warm long decode")
+if "warm" in PHASES:
+    prefill(200, 1)
+seed = 100 + 50 * ("warm" not in PHASES)
+for n_words in ((1500, 6000, 12000) if "decode" in PHASES else (12000,)) if "long" in PHASES else ():
     runs = []
     for _ in range(3):
         seed += 1
@@ -53,5 +55,7 @@ for n_words in (1500, 6000, 12000):
     toks = runs[0][1]
     print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "prefill", "prompt_tokens": toks,
           "best_s": round(best, 3), "tok_s": round(toks / best, 1), "all_s": [round(r[0], 3) for r in runs]}), flush=True)
+if "decode" not in PHASES:
+    raise SystemExit(0)
 rates = [decode(500 + i) for i in range(3)]
 print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "decode", "tok_s": round(max(rates), 2), "all": [round(r, 2) for r in rates]}), flush=True)

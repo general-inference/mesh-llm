@@ -102,6 +102,14 @@ PY
 case " ${KB_BENCH:-} " in *" d2h "*)
   nvcc -O2 -o "$CACHE/d2h" "$HERE/d2h.cu" && for MB in 1 13 64 256; do "$CACHE/d2h" $MB 8; done ;;
 esac
+# Correctness against the CPU backend for the ops an arm changes.
+case " ${KB_BENCH:-} " in *" correct "*)
+  for ARM in ${KB_ARMS:-base}; do
+    "$CACHE/build-$ARM/bin/test-backend-ops" test -b CUDA0 -o "${KB_OPS:-MUL_MAT,MUL_MAT_ID}" > "$ART/correct.$ARM.txt" 2>&1
+    echo "KBENCH_CORRECT $ARM exit=$? $(grep -cE '\bOK\b' "$ART/correct.$ARM.txt") ok $(grep -cE 'FAIL' "$ART/correct.$ARM.txt") fail"
+    grep -E "FAIL" "$ART/correct.$ARM.txt" | head -20
+  done ;;
+esac
 # Per-shape matmul timings (mmbench) for every arm, interleaved shape by shape.
 case " ${KB_BENCH:-} " in *" mm "*)
   grep -v '^#' "$HERE/shapes.tsv" | while read -r T MR KD E U C MODEL; do

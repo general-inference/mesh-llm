@@ -45,6 +45,7 @@ for pair in ${SB_ARMS:-base=}; do
   LAUNCH=()
   if [ "${SB_NSYS:-0}" = 1 ] && command -v nsys >/dev/null 2>&1; then
     LAUNCH=(nsys launch --session-new="sb-$arm" -t cuda,nvtx,osrt --cuda-graph-trace=node)
+    [ "${SB_NSYS_CPU:-0}" = 1 ] && LAUNCH+=(--sample=process-tree --sampling-frequency=2000 --backtrace=fp)
   fi
   env RUST_LOG="${SB_RUST_LOG:-}" "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
     $( [ "${SB_SPEC:-0}" = 1 ] || echo --no-draft --speculative-strategy disabled ) --config "$cfg" \
@@ -64,6 +65,10 @@ for pair in ${SB_ARMS:-base=}; do
       nsys stop --session="sb-$arm"
       nsys stats -q --force-export=true --report cuda_gpu_trace --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" > "$ART/trace-$arm.csv" 2>/dev/null
       echo "=== nsys serve $arm by stream"; python3 "$HERE/nsys_streams.py" "$ART/trace-$arm.csv"
+      if [ "${SB_NSYS_CPU:-0}" = 1 ]; then
+        nsys export --type sqlite --force-overwrite true -o "$HOME/.cache/kbench/nsys-serve-$arm.sqlite" "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" >/dev/null 2>&1
+        echo "=== nsys serve $arm cpu"; python3 "$HERE/nsys_cpu.py" "$HOME/.cache/kbench/nsys-serve-$arm.sqlite"
+      fi
       for rep in cuda_gpu_kern_sum cuda_gpu_mem_time_sum cuda_api_sum osrt_sum; do
         echo "=== nsys serve $arm $rep"
         nsys stats -q --force-export=true --report $rep --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" 2>/dev/null | head -25 | cut -c1-220

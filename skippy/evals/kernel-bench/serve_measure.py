@@ -80,6 +80,34 @@ if "agent" in PHASES:
         hits = [turn(f"\nWhat happened next? ({i})")[0] for i in range(3)]
         print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "agent_turn", "prompt_tokens": toks,
               "first_s": round(first, 3), "cached_turn_s": [round(h, 3) for h in hits]}), flush=True)
+if "agentloop" in PHASES:
+    # An append-style agent loop: each turn sends the whole conversation so far, including the
+    # model's own previous reply, plus a new user message. TTFT per turn is what an agent waits
+    # for between tool calls; turns after the first should start from the cached conversation.
+    def stream_turn(messages, n):
+        body = {"model": MODEL, "max_tokens": n, "temperature": 0, "stream": True, "messages": messages}
+        t = time.perf_counter(); first = None; out = []
+        with post(body) as r:
+            for raw in r:
+                line = raw.decode().strip()
+                if line.startswith("data:") and "[DONE]" not in line:
+                    d = json.loads(line[5:])
+                    piece = (d.get("choices") or [{}])[0].get("delta", {}).get("content")
+                    if piece:
+                        first = first or time.perf_counter()
+                        out.append(piece)
+        return (first or time.perf_counter()) - t, "".join(out)
+    for n_words in (6000, 12000):
+        seed += 1
+        messages = [{"role": "user", "content": f"Session {seed}. " + text(n_words, seed) + "\nRead this log."}]
+        ttfts = []
+        for turn_i in range(5):
+            ttft, reply = stream_turn(messages, 48)
+            ttfts.append(round(ttft, 3))
+            messages = messages + [{"role": "assistant", "content": reply},
+                                   {"role": "user", "content": f"Tool result {turn_i}: ok. What next?"}]
+        print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "agent_loop", "history_words": n_words,
+              "turn_ttft_s": ttfts}), flush=True)
 if "decode" not in PHASES:
     raise SystemExit(0)
 rates = [decode(500 + i) for i in range(int(os.environ.get("SB_DECODE_RUNS", "3")))]

@@ -32,7 +32,10 @@ fetch() { # id -> path
   f="$MODELS_DIR/${url##*/}"
   if [ -f "$f" ] && [ -f "$f.sha256-ok" ] && [ "$(cat "$f.sha256-ok")" = "$want" ]; then echo "$f"; return 0; fi
   if [ ! -f "$f" ] || [ "$(sha "$f")" != "$want" ]; then
-    curl -fL --retry 5 -C - -o "$f.part" "$url" >&2 && mv "$f.part" "$f"
+    for attempt in 1 2 3; do
+      curl -fL --retry 5 -sS -C - -o "$f.part" "$url" >&2 && { mv "$f.part" "$f"; break; }
+      echo "curl exit $? on attempt $attempt for $url" >&2; sleep 10
+    done
   fi
   [ "$(sha "$f")" = "$want" ] || { echo "sha mismatch for $f" >&2; rm -f "$f"; return 1; }
   echo "$want" > "$f.sha256-ok"; echo "$f"
@@ -52,7 +55,7 @@ PY
   cat "$out" >>"$ART/all.jsonl"; rm -f "$out"
 }
 
-for ID in ${KB_MODELS:-qwen3.5-9b}; do
+for ID in ${KB_MODELS-qwen3.5-9b}; do
   M=$(fetch "$ID") || { echo "KBENCH_FAIL fetch $ID"; continue; }
   for SET in ${KB_BENCH:-verify prefill decode}; do
     for ARM in ${KB_ARMS:-base}; do
@@ -92,6 +95,17 @@ rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 json.dump({"points":[{"concurrency":1,"requests_completed":len(rows),"duration_s":1,
   "throughput":{"output_tok_s":max(r["avg_ts"] for r in rows)}}],"provenance":{}},open(sys.argv[2],"w"))
 PY
+# Per-shape matmul timings (mmbench) for every arm, interleaved shape by shape.
+case " ${KB_BENCH:-} " in *" mm "*)
+  grep -v '^#' "$HERE/shapes.tsv" | while read -r T MR KD E U C MODEL; do
+    for N in ${KB_MM_N:-512 1024 2048}; do
+      for ARM in ${KB_ARMS:-base}; do
+        r=$("$CACHE/build-$ARM/bin/mmbench" "$T" "$MR" "$KD" "$N" "$E" "$U" 2>/dev/null | grep MMBENCH)
+        echo "MMB $ARM $MODEL $C $r"
+      done
+    done
+  done | tee "$ART/mm.txt" ;;
+esac
 # Op microbenchmarks last: a full MUL_MAT sweep takes most of an hour.
 case " ${KB_BENCH:-} " in *" ops "*)
   for ARM in ${KB_ARMS:-base}; do

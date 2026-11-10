@@ -37,5 +37,7 @@ for ARM in ${KB_ARMS:-base}; do
     echo "KBENCH_BUILD_FAIL $ARM"; exit 1
   fi
   echo "objects rebuilt for $ARM: $(grep -c "Building" "$CACHE/build-$ARM.log" || true)"
+  c++ -O2 -std=c++17 -I"$SRC/ggml/include" "$HERE/mmbench.cpp" -L"$BUILD/bin" -lggml -lggml-base \
+    -Wl,-rpath,"$BUILD/bin" -o "$BUILD/bin/mmbench" || { echo "KBENCH_BUILD_FAIL mmbench $ARM"; exit 1; }
 done
 echo "=== build done"

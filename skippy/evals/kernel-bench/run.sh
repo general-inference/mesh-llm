@@ -96,6 +96,10 @@ rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 json.dump({"points":[{"concurrency":1,"requests_completed":len(rows),"duration_s":1,
   "throughput":{"output_tok_s":max(r["avg_ts"] for r in rows)}}],"provenance":{}},open(sys.argv[2],"w"))
 PY
+# Device-to-host copy bandwidth (CUDA only).
+case " ${KB_BENCH:-} " in *" d2h "*)
+  nvcc -O2 -o "$CACHE/d2h" "$HERE/d2h.cu" && for MB in 1 13 64 256; do "$CACHE/d2h" $MB 8; done ;;
+esac
 # Per-shape matmul timings (mmbench) for every arm, interleaved shape by shape.
 case " ${KB_BENCH:-} " in *" mm "*)
   grep -v '^#' "$HERE/shapes.tsv" | while read -r T MR KD E U C MODEL; do

@@ -67,6 +67,8 @@ for ID in ${KB_MODELS-qwen3.5-9b}; do
         # Rollback snapshots (needs the bench-rs-seq arm). A batch must be longer than
         # the snapshot count + 1, so 16- and 32-token verifies with 0, 7 and 14 slots.
         rsverify) for RS in 0 7 14; do LLAMA_BENCH_RS_SEQ=$RS bench "$ARM" "$M" "$ID-rs$RS" -p 16,32 -n 0 -d 0,4096; done ;;
+        longctx) bench "$ARM" "$M" "$ID-longctx" -p 2048 -n 0 -d 0,8192,16384,32768 -r 2
+                 bench "$ARM" "$M" "$ID-longctx-tg" -p 0 -n 64 -d 0,8192,16384,32768 -r 2 ;;
         decode)  bench "$ARM" "$M" "$ID-decode"  -p 0 -n 128 -d 0,4096 ;;
       esac
     done

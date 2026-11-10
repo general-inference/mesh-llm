@@ -28,7 +28,7 @@ mod cache_payload;
 mod config;
 mod exact_state;
 mod snapshot_validation;
-pub(crate) use exact_state::CaptureAdmission;
+pub(crate) use exact_state::{CaptureAdmission, ExactStateRecordSkip, PublicationWait};
 mod identity;
 mod l2_serving;
 pub mod lifecycle;
@@ -191,6 +191,10 @@ pub struct KvStageIntegration {
     /// the worker. See `ExactStateAdmissionCredit`.
     pub(crate) admission_outstanding: Arc<AtomicUsize>,
     pub(crate) admission_best_effort_outstanding: Arc<AtomicUsize>,
+    /// Exported records not yet in the radix, which lookups may wait for.
+    pub(crate) pending_publications: Arc<exact_state::publication::PendingPublications>,
+    /// Serving lanes; sizes the per-lane message-boundary admission reserve.
+    pub(crate) admission_lanes: usize,
     /// Test-only outstanding-capture tracking: incremented when a capture task
     /// is scheduled onto the iteration scheduler, released when that task
     /// reaches ANY terminal outcome (recorded, skipped, error, panic) via a

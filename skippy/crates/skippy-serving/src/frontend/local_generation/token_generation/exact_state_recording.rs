@@ -23,6 +23,18 @@ impl Drop for CaptureTaskOutstandingGuard {
     }
 }
 
+/// Admission class for a capture, from its decision prefix.
+fn capture_admission(decision_prefix: &str) -> crate::kv_integration::CaptureAdmission {
+    use crate::kv_integration::CaptureAdmission;
+    match decision_prefix {
+        "post_decode_checkpoint" => CaptureAdmission::Continuation,
+        super::MESSAGE_BOUNDARY_CHECKPOINT | "chat_prefix_checkpoint" => {
+            CaptureAdmission::MessageBoundary
+        }
+        _ => CaptureAdmission::BestEffort,
+    }
+}
+
 impl StageOpenAiBackend {
     pub(super) fn record_post_decode_exact_state(
         &self,
@@ -232,11 +244,7 @@ impl StageOpenAiBackend {
         let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
         #[cfg(test)]
         let decision_namespace = identity.namespace.clone();
-        let admission = if decision_prefix == "post_decode_checkpoint" {
-            crate::kv_integration::CaptureAdmission::Continuation
-        } else {
-            crate::kv_integration::CaptureAdmission::BestEffort
-        };
+        let admission = capture_admission(decision_prefix);
         let cold_prefill_cost = self
             .generation_service_estimator
             .estimated_prefill_ms(checkpoint_tokens.len());
@@ -249,7 +257,7 @@ impl StageOpenAiBackend {
             l3_cost,
             write_through_l3,
         ) {
-            Ok(Some(record)) => {
+            Ok(Ok(record)) => {
                 let mut attrs = self.openai_attrs(ids);
                 attrs.insert(
                     "skippy.kv.decision".to_string(),
@@ -286,7 +294,7 @@ impl StageOpenAiBackend {
                 }
                 true
             }
-            Ok(None) => {
+            Ok(Err(skip)) => {
                 #[cfg(test)]
                 {
                     if decision_prefix == "post_decode_checkpoint" {
@@ -295,11 +303,31 @@ impl StageOpenAiBackend {
                     }
                     super::capture_trace::log_capture_decision(
                         decision_prefix,
-                        "record_none",
+                        skip.as_str(),
                         checkpoint_token_count,
                         Some(runtime_token_count),
                         Some(&decision_namespace),
                     );
+                }
+                // An identical state already cached is not a loss; every
+                // other reason means this boundary will not be restorable.
+                if skip != crate::kv_integration::ExactStateRecordSkip::AlreadyRecorded {
+                    let mut attrs = self.openai_attrs(ids);
+                    attrs.insert(
+                        "skippy.kv.decision".to_string(),
+                        json!(format!("{decision_prefix}_dropped")),
+                    );
+                    attrs.insert("skippy.kv.drop_reason".to_string(), json!(skip.as_str()));
+                    attrs.insert(
+                        "skippy.kv.checkpoint_token_count".to_string(),
+                        json!(checkpoint_token_count),
+                    );
+                    attrs.insert(
+                        "skippy.kv.capture_admission".to_string(),
+                        json!(admission.as_str()),
+                    );
+                    self.telemetry
+                        .emit("stage.openai_kv_record_decision", attrs);
                 }
                 false
             }

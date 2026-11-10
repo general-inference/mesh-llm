@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod agent_loop_cache_tests;
 mod cache_deadline;
 mod decode_step;
 mod dflash_block_size;

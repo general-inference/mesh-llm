@@ -162,7 +162,7 @@ fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
     panic!("timed out waiting for {expected} generation receipts");
 }
 
-fn recurrent_test_backend(
+pub(super) fn recurrent_test_backend(
     run_id: &str,
     backend_model_id: &str,
     ctx_size: usize,
@@ -567,18 +567,9 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
         kv.wait_for_exact_state_recording(std::time::Duration::from_secs(30))
             .map_err(anyhow::Error::msg)?;
-        // Branch-exact evidence (telemetry is lossy): the post-decode capture
-        // must have been scheduled, executed, and recorded without a skip; the
-        // counters name the exact branch otherwise. POST_DECODE_RECORDED means
-        // ENQUEUED (stored=false); the stored-identity snapshot below plus the
-        // recorder drain are what tie the record to storage.
         let trace = capture_trace::render();
         let recorded =
             capture_trace::POST_DECODE_RECORDED.load(std::sync::atomic::Ordering::Acquire);
-        assert!(
-            recorded >= 1,
-            "post-decode capture did not complete: recorded={recorded}; {trace}"
-        );
         // Stored identities (storage-completion observations from the
         // recorder), each verified against the radix for RETENTION after the
         // drain; also discard the first request's own lookup attempts so the
@@ -608,6 +599,22 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
                 )
             })
             .collect();
+        // Branch-exact evidence (telemetry is lossy): the full-prompt state
+        // must have been recorded without a skip, either as the final prefill
+        // state or as the first-token post-decode checkpoint, which name the
+        // same tokens; the counters name the exact branch otherwise.
+        // POST_DECODE_RECORDED means ENQUEUED (stored=false); the
+        // stored-identity snapshot plus the recorder drain are what tie the
+        // record to storage.
+        let final_prefill_recorded = capture_decisions.iter().any(|decision| {
+            decision.decision_prefix == "final_prefill_state"
+                && decision.outcome == "recorded_enqueued"
+        });
+        assert!(
+            recorded >= 1 || final_prefill_recorded,
+            "full-prompt capture did not complete: post_decode_recorded={recorded}; {trace}; \
+             capture_decisions={decisions_report:?}"
+        );
         // The common-prefix boundary the assertions already prove is an exact
         // token prefix of BOTH prompts: what did the ladder plan for it, and
         // is any retained identity at that boundary? The capture path sizes

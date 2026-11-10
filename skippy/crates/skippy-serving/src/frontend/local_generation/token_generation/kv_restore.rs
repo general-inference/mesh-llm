@@ -1,6 +1,60 @@
 use super::*;
 
+/// Prefill rate assumed for bounding a publication wait before the service
+/// estimator has measured one. Deliberately fast, so the wait stays short.
+const PUBLICATION_WAIT_FALLBACK_TOKENS_PER_SEC: f64 = 2_000.0;
+/// Longest a lookup waits for an in-flight record, whatever it would save.
+const PUBLICATION_WAIT_MAX: Duration = Duration::from_secs(10);
+
 impl StageOpenAiBackend {
+    /// An agent loop sends its next request as soon as the previous one
+    /// finishes decoding, often while the recorder is still publishing that
+    /// request's message-history boundary. Wait for such a record when it
+    /// would restore more than the cache holds now, for no longer than
+    /// re-prefilling the extra tokens is expected to take.
+    pub(super) fn wait_for_in_flight_exact_state(
+        &self,
+        ids: &InferenceGenerationIds,
+        identities: &[PrefillKvIdentity],
+    ) {
+        let Some(kv) = self.kv.as_ref() else {
+            return;
+        };
+        let estimator = &self.generation_service_estimator;
+        let wait = kv.wait_for_exact_state_publication(identities, |gain_tokens| {
+            let prefill_secs = estimator.estimated_prefill_ms(gain_tokens).map_or_else(
+                || gain_tokens as f64 / PUBLICATION_WAIT_FALLBACK_TOKENS_PER_SEC,
+                |prefill_ms| prefill_ms / 1_000.0,
+            );
+            Duration::try_from_secs_f64(prefill_secs)
+                .unwrap_or(PUBLICATION_WAIT_MAX)
+                .min(PUBLICATION_WAIT_MAX)
+        });
+        let (outcome, pending_tokens, waited) = match wait {
+            crate::kv_integration::PublicationWait::NotNeeded => return,
+            crate::kv_integration::PublicationWait::Published {
+                pending_tokens,
+                waited,
+            } => ("published", pending_tokens, waited),
+            crate::kv_integration::PublicationWait::TimedOut {
+                pending_tokens,
+                waited,
+            } => ("timed_out", pending_tokens, waited),
+        };
+        let mut attrs = self.openai_attrs(ids);
+        attrs.insert("skippy.kv.publication_wait".to_string(), json!(outcome));
+        attrs.insert(
+            "skippy.kv.publication_pending_tokens".to_string(),
+            json!(pending_tokens),
+        );
+        attrs.insert(
+            "skippy.kv.publication_wait_ms".to_string(),
+            json!(waited.as_secs_f64() * 1_000.0),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_publication_wait", attrs);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lookup_and_restore_kv(
         &self,
@@ -207,7 +261,7 @@ impl StageOpenAiBackend {
                 .generation_service_estimator
                 .estimated_prefill_ms(prefill_tokens.len());
             let l3_cost = kv.l3_benefit_cost(cold_prefill_cost);
-            if let Ok(Some(record)) = kv.record_exact_state_with_cost_and_durability(
+            if let Ok(Ok(record)) = kv.record_exact_state_with_cost_and_durability(
                 runtime,
                 session_id,
                 &exact_identity,

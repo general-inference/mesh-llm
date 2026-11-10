@@ -5,3 +5,4 @@ qwen3.6-35b-a3b	https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483
 draft-qwen3.6-35b-a3b-dflash2	https://huggingface.co/aminya/Qwen3.6-35B-A3B-DFlash2-GGUF/resolve/1e26e3499d865b9d2fc55e019d65b3f0e8ab6846/Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf	69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44
 draft-qwen3.6-27b	https://huggingface.co/AtomicChat/Qwen3.6-27B-DFlash-GGUF/resolve/a3d4fb1eff6f268cbbdf808042f6902cc17f5458/Qwen3.6-27B-DFlash.Q8_0.gguf	b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1
 draft-qwen3.5-9b	https://huggingface.co/AtomicChat/Qwen3.5-9B-DFlash-GGUF/resolve/c7c69923d77a9aa0004b410d3a7a3dbb64591d41/Qwen3.5-9B-DFlash.Q8_0.gguf	27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436
+draft-qwen3.8-27b-dflash2	https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2-GGUF/resolve/2d9571f8ce46e151f61c6499c99dee6079e1d610/Qwen3.8-27B-DFlash2-Q8_0.gguf	c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e

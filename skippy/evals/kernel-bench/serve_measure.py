@@ -78,5 +78,5 @@ if "agent" in PHASES:
               "first_s": round(first, 3), "cached_turn_s": [round(h, 3) for h in hits]}), flush=True)
 if "decode" not in PHASES:
     raise SystemExit(0)
-rates = [decode(500 + i) for i in range(3)]
+rates = [decode(500 + i) for i in range(int(os.environ.get("SB_DECODE_RUNS", "3")))]
 print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "decode", "tok_s": round(max(rates), 2), "all": [round(r, 2) for r in rates]}), flush=True)

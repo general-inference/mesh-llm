@@ -37,7 +37,7 @@ for pair in ${SB_ARMS:-base=}; do
     LAUNCH=(nsys launch --session-new="sb-$arm" -t cuda,nvtx,osrt --cuda-graph-trace=node)
   fi
   env RUST_LOG="${SB_RUST_LOG:-}" "${LAUNCH[@]}" "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless \
-    --no-draft --speculative-strategy disabled --config "$cfg" \
+    $( [ "${SB_SPEC:-0}" = 1 ] || echo --no-draft --speculative-strategy disabled ) --config "$cfg" \
     serve --model "$M" --ctx-size "${SB_CTX:-32768}" >"$ART/serve-$arm.log" 2>&1 &
   SERVER=$!
   model_id=""; t0=$(date +%s)
@@ -50,7 +50,7 @@ for pair in ${SB_ARMS:-base=}; do
     if [ "${#LAUNCH[@]}" -gt 0 ]; then
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=warm python3 "$HERE/serve_measure.py"
       nsys start --session="sb-$arm" -o "$HOME/.cache/kbench/nsys-serve-$arm" -f true
-      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=long python3 "$HERE/serve_measure.py"
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES="${SB_NSYS_PHASES:-long}" python3 "$HERE/serve_measure.py"
       nsys stop --session="sb-$arm"
       for rep in cuda_gpu_kern_sum cuda_gpu_mem_time_sum cuda_api_sum osrt_sum; do
         echo "=== nsys serve $arm $rep"

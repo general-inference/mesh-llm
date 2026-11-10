@@ -34,16 +34,17 @@ def prefill(n_words, seed):
 
 def decode(seed, n=256):
     body = {"model": MODEL, "max_tokens": n, "temperature": float(os.environ.get("SB_TEMP", "0")), "seed": seed, "stream": True,
+            **({"top_k": int(os.environ["SB_TOPK"])} if os.environ.get("SB_TOPK") else {}),
             "messages": [{"role": "user", "content": f"Request {seed}. Write a Python module that implements a thread-safe LRU cache with tests."}]}
-    stamps = []
+    stamps = []; texts = []
     with post(body) as r:
         for raw in r:
             line = raw.decode().strip()
             if line.startswith("data:") and "[DONE]" not in line:
                 d = json.loads(line[5:])
                 if d.get("choices") and (d["choices"][0].get("delta") or {}).get("content"):
-                    stamps.append(time.perf_counter())
-    return (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 2 else 0.0
+                    stamps.append(time.perf_counter()); texts.append(d["choices"][0]["delta"]["content"])
+    return (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 2 else 0.0, "".join(texts)
 
 
 PHASES = os.environ.get("SB_PHASES", "warm long agent decode")
@@ -110,5 +111,8 @@ if "agentloop" in PHASES:
               "turn_ttft_s": ttfts}), flush=True)
 if "decode" not in PHASES:
     raise SystemExit(0)
-rates = [decode(500 + i) for i in range(int(os.environ.get("SB_DECODE_RUNS", "3")))]
+import hashlib
+runs = [decode(500 + i) for i in range(int(os.environ.get("SB_DECODE_RUNS", "3")))]
+rates = [r for r, _ in runs]
+print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "decode_text", "sha": [hashlib.sha256(t.encode()).hexdigest()[:12] for _, t in runs]}), flush=True)
 print("SERVE_BENCH " + json.dumps({"arm": ARM, "kind": "decode", "tok_s": round(max(rates), 2), "all": [round(r, 2) for r in rates]}), flush=True)

@@ -55,6 +55,18 @@ PY
   cat "$out" >>"$ART/all.jsonl"; rm -f "$out"
 }
 
+# Correctness gate first: llama-bench never checks outputs, so a kernel that skips work looks fast.
+# Every arm is compared with the CPU backend on the ops it can change; a failing arm is reported
+# (KBENCH_CORRECT ... fail>0) and its timings must not be used.
+if [ "${KB_SKIP_CORRECT:-0}" != 1 ]; then
+  BACKEND_NAME=$([ "$(uname -s)" = Darwin ] && echo MTL0 || echo CUDA0)
+  for ARM in ${KB_ARMS:-base}; do
+    "$CACHE/build-$ARM/bin/test-backend-ops" test -b "$BACKEND_NAME" -o "${KB_CORRECT_OPS:-MUL_MAT,MUL_MAT_ID}" 2>&1 \
+      | sed 's/\x1b\[[0-9;]*m//g' > "$ART/correct.$ARM.txt"
+    echo "KBENCH_CORRECT $ARM ok=$(grep -cE ': OK$' "$ART/correct.$ARM.txt") fail=$(grep -cE ': FAIL$' "$ART/correct.$ARM.txt")"
+    grep -E ': FAIL$' "$ART/correct.$ARM.txt" | head -5
+  done
+fi
 for ID in ${KB_MODELS-qwen3.5-9b}; do
   M=$(fetch "$ID") || { echo "KBENCH_FAIL fetch $ID"; continue; }
   for SET in ${KB_BENCH:-verify prefill decode}; do
@@ -101,14 +113,6 @@ PY
 # Device-to-host copy bandwidth (CUDA only).
 case " ${KB_BENCH:-} " in *" d2h "*)
   nvcc -O2 -o "$CACHE/d2h" "$HERE/d2h.cu" && for MB in 1 13 64 256; do "$CACHE/d2h" $MB 8; done ;;
-esac
-# Correctness against the CPU backend for the ops an arm changes.
-case " ${KB_BENCH:-} " in *" correct "*)
-  for ARM in ${KB_ARMS:-base}; do
-    "$CACHE/build-$ARM/bin/test-backend-ops" test -b CUDA0 -o "${KB_OPS:-MUL_MAT,MUL_MAT_ID}" > "$ART/correct.$ARM.txt" 2>&1
-    echo "KBENCH_CORRECT $ARM exit=$? $(grep -cE '\bOK\b' "$ART/correct.$ARM.txt") ok $(grep -cE 'FAIL' "$ART/correct.$ARM.txt") fail"
-    grep -E "FAIL" "$ART/correct.$ARM.txt" | head -20
-  done ;;
 esac
 # Per-shape matmul timings (mmbench) for every arm, interleaved shape by shape.
 case " ${KB_BENCH:-} " in *" mm "*)

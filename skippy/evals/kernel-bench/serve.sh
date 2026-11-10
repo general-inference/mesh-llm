@@ -57,7 +57,21 @@ for pair in ${SB_ARMS:-base=}; do
   done
   if [ -z "$model_id" ]; then echo "SERVE_BENCH {\"arm\":\"$arm\",\"error\":\"no model\"}"; tail -30 "$ART/serve-$arm.log"
   else
-    if [ "${#LAUNCH[@]}" -gt 0 ]; then
+    if [ "${SB_PERF:-0}" = 1 ]; then
+      echo "profilers: perf=$(command -v perf || echo none) gdb=$(command -v gdb || echo none) eu-stack=$(command -v eu-stack || echo none)"
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=warm python3 "$HERE/serve_measure.py"
+      PERF_OUT="$HOME/.cache/kbench/perf-$arm.data"
+      if command -v perf >/dev/null; then
+        perf record -F 499 -g --call-graph fp -p "$SERVER" -o "$PERF_OUT" -- sleep "${SB_PERF_SECONDS:-20}" >/dev/null 2>&1 &
+        PERF_PID=$!
+      fi
+      ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=decode python3 "$HERE/serve_measure.py"
+      if [ -n "${PERF_PID:-}" ]; then
+        wait "$PERF_PID"
+        echo "=== perf $arm self"; perf report -i "$PERF_OUT" --stdio --no-children --sort comm,symbol 2>/dev/null | grep -v "^#" | grep -E "%" | head -40 | cut -c1-170
+        echo "=== perf $arm by thread"; perf report -i "$PERF_OUT" --stdio --no-children --sort tid 2>/dev/null | grep -v "^#" | grep -E "%" | head -15
+      fi
+    elif [ "${#LAUNCH[@]}" -gt 0 ]; then
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" SB_PHASES=warm python3 "$HERE/serve_measure.py"
       START_OPTS=()
       [ "${SB_NSYS_CPU:-0}" = 1 ] && START_OPTS=(--sample=process-tree --sampling-frequency=2000 --backtrace=fp)

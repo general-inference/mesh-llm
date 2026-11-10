@@ -26,10 +26,20 @@ if ! { [ -f "$M.sha256-ok" ] && [ "$(cat "$M.sha256-ok")" = "$want" ]; }; then
   [ "$(sha "$M")" = "$want" ] || { echo "sha mismatch $M" >&2; exit 1; }
   echo "$want" > "$M.sha256-ok"
 fi
+DRAFT_TOML=""
+if [ -n "${SB_DRAFT:-}" ]; then
+  # An explicit, pinned draft: the default path fetches its draft in the background, which a
+  # short bench would start measuring before the draft arrives.
+  line=$(awk -v id="$SB_DRAFT" '$1==id' "$HERE/models.tsv"); durl=$(echo "$line" | awk '{print $2}'); dsha=$(echo "$line" | awk '{print $3}')
+  D="$MODELS_DIR/${durl##*/}"
+  [ -f "$D" ] && [ "$(sha "$D")" = "$dsha" ] || curl -fL --retry 5 -sS -o "$D" "$durl"
+  [ "$(sha "$D")" = "$dsha" ] || { echo "sha mismatch $D" >&2; exit 1; }
+  DRAFT_TOML="[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = \"$D\"\n"
+fi
 command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=clocks.sm,temperature.gpu --format=csv,noheader
 for pair in ${SB_ARMS:-base=}; do
   arm=${pair%%=*}; body=${pair#*=}
-  cfg="$ART/arm-$arm.toml"; printf '%b\n' "$body" > "$cfg"
+  cfg="$ART/arm-$arm.toml"; printf '%b\n%b' "$body" "$DRAFT_TOML" > "$cfg"
   port=$(( 9400 + $(printf '%s%s' "${JIANYANG_RUN_ID:-run}" "$arm" | cksum | cut -d' ' -f1) % 500 ))
   echo "=== arm $arm (port $port)"; cat "$cfg"
   LAUNCH=()
@@ -54,7 +64,7 @@ for pair in ${SB_ARMS:-base=}; do
       nsys stop --session="sb-$arm"
       for rep in cuda_gpu_kern_sum cuda_gpu_mem_time_sum cuda_api_sum osrt_sum; do
         echo "=== nsys serve $arm $rep"
-        nsys stats -q --report $rep --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" 2>/dev/null | head -25 | cut -c1-220
+        nsys stats -q --force-export=true --report $rep --format csv "$HOME/.cache/kbench/nsys-serve-$arm.nsys-rep" 2>/dev/null | head -25 | cut -c1-220
       done
     else
       ARM="$arm" PORT="$port" MODEL_ID="$model_id" python3 "$HERE/serve_measure.py"

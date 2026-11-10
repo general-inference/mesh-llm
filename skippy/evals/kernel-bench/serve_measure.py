@@ -63,12 +63,16 @@ if "agent" in PHASES:
     # Agent turns: a long history, then the same history plus a short new message. The second
     # request hits the prefix cache, so its latency is the suffix prefill plus whatever the
     # server does around it (state export for the cache, restore).
-    for n_words in (6000, 12000, 24000):
+    for n_words in (6000, 12000):
         seed += 1
         history = f"Session {seed}. " + text(n_words, seed)
         def turn(extra):
+            # The history sits in earlier messages, as in an agent loop, so the new turn
+            # starts at a message boundary the server can checkpoint.
             body = {"model": MODEL, "max_tokens": 1, "temperature": 0,
-                    "messages": [{"role": "user", "content": history + extra}]}
+                    "messages": [{"role": "user", "content": history},
+                                 {"role": "assistant", "content": "Noted."},
+                                 {"role": "user", "content": extra}]}
             t = time.perf_counter()
             out = json.load(post(body))
             return time.perf_counter() - t, out.get("usage", {}).get("prompt_tokens", 0)

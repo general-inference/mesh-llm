@@ -60,14 +60,16 @@ for ID in ${KB_MODELS:-qwen3.5-9b}; do
         verify)  bench "$ARM" "$M" "$ID-verify"  -p 1,2,4,8,16,32,64 -n 0 -d 0,4096 ;;
         prefill) bench "$ARM" "$M" "$ID-prefill" -p 512,2048,8192 -n 0 -ub 512,2048 ;;
         decode)  bench "$ARM" "$M" "$ID-decode"  -p 0 -n 128 -d 0,4096 ;;
-        ops)     "$CACHE/build-$ARM/bin/test-backend-ops" perf -o "${KB_OPS:-MUL_MAT}" 2>&1 | grep -v "not supported" | tail -n 400 > "$ART/ops.$ARM.txt"; echo "KBENCH_OPS $ARM $(wc -l < "$ART/ops.$ARM.txt") lines" ;;
       esac
     done
   done
   if [ "${KB_NSYS:-0}" = 1 ] && command -v nsys >/dev/null 2>&1; then
-    for SHAPE in "verify16:-p 16 -n 0 -d 4096 -r 10" "decode:-p 0 -n 64 -d 4096 -r 2" "prefill:-p 2048 -n 0 -r 2"; do
+    # No -d: a depth fill is a prefill and swamps the small shapes. Graph nodes are
+    # traced one by one, otherwise decode shows up as opaque graph launches.
+    IFS=';' read -r -a SHAPES <<<"${KB_NSYS_SHAPES:-verify16:-p 16 -n 0 -r 20;decode:-p 0 -n 128 -r 3;prefill:-p 2048 -n 0 -r 2}"
+    for SHAPE in "${SHAPES[@]}"; do
       NAME=${SHAPE%%:*}; ARGS=${SHAPE#*:}
-      nsys profile -t cuda,nvtx -o "$CACHE/nsys-$ID-$NAME" -f true "$CACHE/build-base/bin/llama-bench" -m "$M" -ngl 99 -fa 1 $ARGS >/dev/null 2>&1
+      nsys profile -t cuda,nvtx --cuda-graph-trace=node -o "$CACHE/nsys-$ID-$NAME" -f true "$CACHE/build-${KB_NSYS_ARM:-base}/bin/llama-bench" -m "$M" -ngl 99 -fa 1 $ARGS >/dev/null 2>&1
       nsys stats -q --report cuda_gpu_kern_sum --format csv "$CACHE/nsys-$ID-$NAME.nsys-rep" > "$ART/nsys-$ID-$NAME.csv" 2>/dev/null
       echo "=== nsys $ID $NAME top kernels"
       python3 - "$ART/nsys-$ID-$NAME.csv" <<'PY'
@@ -86,4 +88,11 @@ rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 json.dump({"points":[{"concurrency":1,"requests_completed":len(rows),"duration_s":1,
   "throughput":{"output_tok_s":max(r["avg_ts"] for r in rows)}}],"provenance":{}},open(sys.argv[2],"w"))
 PY
+# Op microbenchmarks last: a full MUL_MAT sweep takes most of an hour.
+case " ${KB_BENCH:-} " in *" ops "*)
+  for ARM in ${KB_ARMS:-base}; do
+    "$CACHE/build-$ARM/bin/test-backend-ops" perf -o "${KB_OPS:-MUL_MAT}" 2>&1 | grep -v "not supported" > "$ART/ops.$ARM.txt"
+    echo "KBENCH_OPS $ARM $(wc -l < "$ART/ops.$ARM.txt") lines"
+  done ;;
+esac
 echo "=== run done"

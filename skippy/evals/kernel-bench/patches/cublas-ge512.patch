@@ -1,0 +1,16 @@
+diff --git a/ggml/src/ggml-cuda/mmq.cu b/ggml/src/ggml-cuda/mmq.cu
+index 367657508..bf99aafde 100644
+--- a/ggml/src/ggml-cuda/mmq.cu
++++ b/ggml/src/ggml-cuda/mmq.cu
+@@ -430,6 +430,11 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
+         return false;
+     }
+ 
++    // kernel-bench experiment: large dense batches on Blackwell go to cuBLAS tensor-core GEMM.
++    if (blackwell_mma_available(cc) && n_experts == 0 && ne11 >= 512 && type != GGML_TYPE_MXFP4 && type != GGML_TYPE_NVFP4) {
++        return false;
++    }
++
+     // MMQ tiles require at least 48 KiB per-block shared memory; fall back to BLAS otherwise.
+     {
+         const int    id    = ggml_cuda_get_device();

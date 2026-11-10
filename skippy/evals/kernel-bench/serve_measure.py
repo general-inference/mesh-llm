@@ -33,8 +33,8 @@ def prefill(n_words, seed):
 
 
 def decode(seed, n=256):
-    body = {"model": MODEL, "max_tokens": n, "temperature": 0, "stream": True,
-            "messages": [{"role": "user", "content": f"Request {seed}. Write a long story about a lighthouse keeper."}]}
+    body = {"model": MODEL, "max_tokens": n, "temperature": float(os.environ.get("SB_TEMP", "0")), "seed": seed, "stream": True,
+            "messages": [{"role": "user", "content": f"Request {seed}. Write a Python module that implements a thread-safe LRU cache with tests."}]}
     stamps = []
     with post(body) as r:
         for raw in r:

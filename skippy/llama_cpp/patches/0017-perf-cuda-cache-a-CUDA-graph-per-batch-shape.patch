@@ -1,0 +1,45 @@
+From f6dd0c404aeb699a3e18bd2fd3c09859935c95c5 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Wed, 11 Nov 2026 02:39:17 +1100
+Subject: [PATCH] perf(cuda): cache a CUDA graph per batch shape
+
+ggml-cuda keyed cached CUDA graphs by the address of the graph's first
+node. llama rebuilds a graph in place when its batch size changes, so a
+speculative decoder whose verify windows vary in length (DFlash's
+adaptive blocks of 3, 5 or 8 tokens) kept one cache slot and
+re-captured and re-instantiated the executable graph on every size
+change, serialising a full kernel-launch capture on the host before
+each step. The key now also covers the node count and the first node's
+shape, so each window size keeps its own executable graph.
+---
+ ggml/src/ggml-cuda/ggml-cuda.cu | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 587f5a549..8c1f81b0d 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -3045,8 +3045,19 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
+     return use_cuda_graph;
+ }
+ 
++// The first node's address alone names a graph that llama rebuilds in place, so graphs of
++// different batch sizes (a speculative verify window of 3, 5 or 8 tokens) would share one
++// cache slot and re-capture on every size change. Mixing in the node count and the first
++// node's shape gives each size its own cached executable graph.
+ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
+-    return cgraph->nodes[0];
++    const ggml_tensor * first = cgraph->nodes[0];
++    uint64_t key = (uint64_t) (uintptr_t) first;
++    const uint64_t shape[] = { (uint64_t) cgraph->n_nodes, (uint64_t) first->ne[0], (uint64_t) first->ne[1],
++                               (uint64_t) first->ne[2], (uint64_t) first->ne[3] };
++    for (uint64_t v : shape) {
++        key ^= v + 0x9e3779b97f4a7c15ULL + (key << 6) + (key >> 2);
++    }
++    return (const void *) (uintptr_t) key;
+ }
+ 
+ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+-- 
+2.54.0 (Apple Git-157)
+

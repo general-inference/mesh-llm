@@ -1,0 +1,15 @@
+diff --git a/tools/llama-bench/llama-bench.cpp b/tools/llama-bench/llama-bench.cpp
+index 96ae4870f..0696f867a 100644
+--- a/tools/llama-bench/llama-bench.cpp
++++ b/tools/llama-bench/llama-bench.cpp
+@@ -1315,6 +1315,10 @@ struct cmd_params_instance {
+         cparams.embeddings      = embeddings;
+         cparams.op_offload      = !no_op_offload;
+         cparams.swa_full        = false;
++        // kernel-bench: recurrent rollback snapshots, as skippy sizes them for speculative verify.
++        if (const char * rs = getenv("LLAMA_BENCH_RS_SEQ")) {
++            cparams.n_rs_seq = (uint32_t) atoi(rs);
++        }
+ 
+         return cparams;
+     }

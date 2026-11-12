@@ -87,7 +87,7 @@ mod server {
 
     use anyhow::{Context, Result, bail};
     use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
 
@@ -130,18 +130,19 @@ mod server {
         let ready = BridgeReady {
             port: listener.local_addr()?.port(),
         };
-        let mut stdout = tokio::io::stdout();
-        stdout
-            .write_all(format!("{}\n", serde_json::to_string(&ready)?).as_bytes())
-            .await?;
-        stdout.flush().await?;
+        {
+            use std::io::Write as _;
+            let mut out = mesh_llm_events::machine_out();
+            writeln!(out, "{}", serde_json::to_string(&ready)?)?;
+            out.flush()?;
+        }
         let accepting = bridge.clone();
         tokio::spawn(async move {
             while let Ok((conn, _)) = listener.accept().await {
                 let bridge = accepting.clone();
                 tokio::spawn(async move {
                     if let Err(error) = bridge.handle(conn).await {
-                        eprintln!("mesh-sandbox bridge: {error:#}");
+                        tracing::warn!("mesh-sandbox bridge: {error:#}");
                     }
                 });
             }
@@ -187,8 +188,19 @@ mod server {
                     self.launch(spec, conn).await
                 }
                 BridgeRequest::Agent { id, .. } => {
-                    let vm = self.vm(&id)?;
-                    let mut agent = vm.vm.connect_agent().await?;
+                    // A failed connect is normal while the guest boots: the
+                    // client retries, so it gets the error, not our log.
+                    let agent = match self.vm(&id) {
+                        Ok(vm) => vm.vm.connect_agent().await,
+                        Err(error) => Err(error),
+                    };
+                    let mut agent = match agent {
+                        Ok(agent) => agent,
+                        Err(error) => {
+                            let message = format!("{error:#}");
+                            return write_frame(&mut conn, &BridgeReply::Error { message }).await;
+                        }
+                    };
                     write_frame(&mut conn, &BridgeReply::Ok).await?;
                     let _ = tokio::io::copy_bidirectional(&mut conn, &mut agent).await;
                     Ok(())

@@ -76,9 +76,9 @@ impl Default for Resources {
     }
 }
 
-/// A snapshot and the node that holds it, as `sandbox_snapshot` returns.
+/// A snapshot and the node that holds it. `sandbox_snapshot`'s result can be
+/// passed as is, so its other fields are accepted and ignored.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct SnapshotRef {
     pub snapshot_id: String,
     pub node: String,
@@ -132,6 +132,15 @@ mod tests {
         .unwrap();
         assert_eq!(spec.resources.memory_mb, 8_192);
         assert_eq!(spec.egress.allow.len(), 3);
+    }
+
+    #[test]
+    fn a_snapshot_result_can_be_passed_back_as_is() {
+        let spec: SandboxSpec = serde_json::from_value(serde_json::json!({
+            "from_snapshot": { "snapshot_id": "snap-1", "node": "abc", "bytes": 157 }
+        }))
+        .unwrap();
+        assert_eq!(spec.from_snapshot.unwrap().node, "abc");
     }
 
     #[test]

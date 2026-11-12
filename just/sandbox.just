@@ -29,6 +29,7 @@ sandbox-package profile="release":
     cp "target/{{ profile }}/mesh-sandbox" "$stage/sandbox/sandbox"
     cp mesh/crates/mesh-llm-sandbox-plugin/README.md "$stage/sandbox/"
     printf 'name = "sandbox"\nversion = "%s"\n' "$version" > "$stage/sandbox/plugin.toml"
+    "target/{{ profile }}/mesh-sandbox" --print-package-manifest > "$stage/sandbox/plugin-manifest.json"
     archive="target/sandbox-plugin/sandbox-$version-$target.tar.gz"
     tar -czf "$archive" -C "$stage" sandbox
     echo "$archive"

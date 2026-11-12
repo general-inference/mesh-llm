@@ -54,6 +54,8 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "mesh-llm-client",
     "mesh-mixture-of-agents",
     "mesh-llm-moa-plugin",
+    "mesh-llm-sandbox-guest",
+    "mesh-llm-sandbox-plugin",
     "mesh-native-serving-plugin-api",
     "mesh-native-serving-plugin-host",
     "mesh-llm-api-client",

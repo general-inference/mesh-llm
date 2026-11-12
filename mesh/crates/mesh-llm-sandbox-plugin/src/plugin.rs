@@ -43,7 +43,7 @@ impl App {
             .await
             .map_err(|error| format!("{error:#}"));
         if let Err(reason) = &backend {
-            eprintln!("{PLUGIN_ID}: sandboxes are unavailable on this node: {reason}");
+            tracing::warn!("{PLUGIN_ID}: sandboxes are unavailable on this node: {reason}");
         }
         let manager = Arc::new(Manager::new(settings, backend)?);
         let reaper = manager.clone();

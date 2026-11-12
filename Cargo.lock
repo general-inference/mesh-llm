@@ -5201,6 +5201,7 @@ dependencies = [
  "block2",
  "dispatch2",
  "libc",
+ "mesh-llm-events",
  "mesh-llm-plugin",
  "mesh-llm-sandbox-guest",
  "objc2",
@@ -5211,6 +5212,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

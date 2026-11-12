@@ -18,6 +18,7 @@ mod spec;
 mod tools;
 mod vm;
 
+use std::io::Write as _;
 use std::sync::Arc;
 
 pub const PLUGIN_ID: &str = "sandbox";
@@ -44,8 +45,25 @@ async fn main() -> anyhow::Result<()> {
             let flag = |name: &str| args.iter().any(|arg| arg == name);
             check::run(flag("--offline"), flag("--bridge")).await
         }
+        Some("--print-package-manifest") => {
+            use mesh_llm_plugin::Plugin;
+            let plugin = plugin::build(Arc::new(plugin::App::default()));
+            let manifest = plugin
+                .manifest()
+                .ok_or_else(|| anyhow::anyhow!("the plugin has no manifest"))?;
+            writeln!(
+                mesh_llm_events::machine_out(),
+                "{}",
+                mesh_llm_plugin::package_manifest_json(&manifest)?
+            )?;
+            Ok(())
+        }
         Some("--version") => {
-            println!("mesh-sandbox {}", env!("CARGO_PKG_VERSION"));
+            writeln!(
+                mesh_llm_events::machine_out(),
+                "mesh-sandbox {}",
+                env!("CARGO_PKG_VERSION")
+            )?;
             Ok(())
         }
         Some(other) => anyhow::bail!("unknown argument `{other}`; mesh-llm launches this plugin"),

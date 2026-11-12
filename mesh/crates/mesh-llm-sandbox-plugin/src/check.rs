@@ -17,6 +17,14 @@ use crate::manager::{Caller, Manager};
 use crate::settings::Settings;
 use crate::spec::{Resources, SandboxSpec};
 
+/// Progress for the operator running `check`.
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(mesh_llm_events::console_out(), $($arg)*);
+    }};
+}
+
 pub async fn run(offline: bool, bridge: bool) -> Result<()> {
     let settings_json = std::env::var("MESH_SANDBOX_SETTINGS").unwrap_or_else(|_| "{}".into());
     let settings = Settings::parse(&settings_json)?;
@@ -25,14 +33,14 @@ pub async fn run(offline: bool, bridge: bool) -> Result<()> {
     } else {
         crate::vm::detect(&settings).await?
     };
-    println!("backend: {}", backend.name());
+    say!("backend: {}", backend.name());
     let manager = Arc::new(Manager::new(settings, Ok(backend))?);
     let result = exercise(&manager, offline).await;
     for sandbox in manager.list(&Caller::Local) {
         let _ = manager.destroy(&Caller::Local, &sandbox.sandbox_id).await;
     }
     result?;
-    println!("check passed");
+    say!("check passed");
     Ok(())
 }
 
@@ -63,7 +71,7 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
     let started = Instant::now();
     let info = manager.create(Caller::Local, spec.clone(), None).await?;
     let id = info.sandbox_id.clone();
-    println!(
+    say!(
         "booted {id} ({}, {}) in {} ms",
         info.arch,
         info.backend,
@@ -71,7 +79,7 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
     );
 
     let uname = shell(manager, &id, "uname -srm && id -u && pwd").await?;
-    println!("exec: {}", uname.replace('\n', " | "));
+    say!("exec: {}", uname.replace('\n', " | "));
     ensure!(
         uname.contains("/workspace"),
         "commands should start in /workspace"
@@ -94,7 +102,7 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
         data == b"hello sandbox\n",
         "file round trip returned {data:?}"
     );
-    println!("files: round trip ok");
+    say!("files: round trip ok");
 
     let timed = Instant::now();
     let output = manager
@@ -112,7 +120,7 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
         output.status.timed_out,
         "a command past its timeout should be killed"
     );
-    println!("timeout: killed after {} ms", timed.elapsed().as_millis());
+    say!("timeout: killed after {} ms", timed.elapsed().as_millis());
 
     let background = Instant::now();
     shell(manager, &id, "sleep 60 >/dev/null 2>&1 & echo started").await?;
@@ -120,21 +128,22 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
         background.elapsed().as_secs() < 10,
         "a background process must not hold exec open"
     );
-    println!(
+    say!(
         "background: returned in {} ms",
         background.elapsed().as_millis()
     );
 
     if offline {
-        println!("egress: skipped (--offline)");
+        say!("egress: skipped (--offline)");
     } else {
         check_egress(manager, &id).await?;
     }
 
     let snapshot = manager.snapshot(&Caller::Local, &id).await?;
-    println!(
+    say!(
         "snapshot: {} ({} bytes)",
-        snapshot.snapshot_id, snapshot.bytes
+        snapshot.snapshot_id,
+        snapshot.bytes
     );
     let (archive, _) = manager
         .snapshot_chunk(&snapshot.snapshot_id, 0, u64::MAX)
@@ -147,10 +156,10 @@ async fn exercise(manager: &Manager, offline: bool) -> Result<()> {
         text == "hello sandbox\n",
         "restored workspace returned {text:?}"
     );
-    println!("restore: {} has the snapshot's files", restored.sandbox_id);
+    say!("restore: {} has the snapshot's files", restored.sandbox_id);
 
     let log = manager.egress_log(&Caller::Local, &id)?;
-    println!("egress log: {} entries", log.len());
+    say!("egress log: {} entries", log.len());
     manager
         .destroy(&Caller::Local, &restored.sandbox_id)
         .await?;
@@ -191,7 +200,7 @@ async fn check_egress(manager: &Manager, id: &str) -> Result<()> {
         String::from_utf8_lossy(&metadata.stdout) != "200",
         "the metadata address must never be reachable"
     );
-    println!("egress: allowlisted registry reachable, others refused");
+    say!("egress: allowlisted registry reachable, others refused");
     Ok(())
 }
 

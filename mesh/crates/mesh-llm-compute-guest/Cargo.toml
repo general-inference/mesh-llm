@@ -19,9 +19,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "mesh-compute-guest"
 path = "src/main.rs"
+required-features = ["agent"]
 
 [features]
-default = []
+default = ["agent"]
+# The in-VM agent (Linux only). The host plugin uses the protocol alone.
+agent = []
 # Async frame helpers for the host side of the protocol.
 tokio = ["dep:tokio"]
 

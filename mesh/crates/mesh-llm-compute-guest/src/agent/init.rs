@@ -214,11 +214,11 @@ fn bring_up_loopback() -> Result<()> {
         for (slot, byte) in request.ifr_name.iter_mut().zip(b"lo\0") {
             *slot = *byte as libc::c_char;
         }
-        if libc::ioctl(fd, libc::SIOCGIFFLAGS, &raw mut request) != 0 {
+        if libc::ioctl(fd, ioctl_request(libc::SIOCGIFFLAGS), &raw mut request) != 0 {
             Err(std::io::Error::last_os_error())
         } else {
             request.ifr_ifru.ifru_flags |= (libc::IFF_UP | libc::IFF_RUNNING) as libc::c_short;
-            if libc::ioctl(fd, libc::SIOCSIFFLAGS, &raw const request) != 0 {
+            if libc::ioctl(fd, ioctl_request(libc::SIOCSIFFLAGS), &raw const request) != 0 {
                 Err(std::io::Error::last_os_error())
             } else {
                 Ok(())
@@ -232,6 +232,12 @@ fn bring_up_loopback() -> Result<()> {
     result.context("bring up lo")
 }
 
+/// `ioctl`'s request parameter is `c_ulong` on glibc and `c_int` on musl.
+#[allow(clippy::cast_possible_truncation, clippy::unnecessary_cast)]
+fn ioctl_request(request: libc::c_ulong) -> libc::Ioctl {
+    request as libc::Ioctl
+}
+
 /// Sets the guest clock when it is more than two seconds off the host's.
 pub fn sync_clock(unix_time_ms: u64) {
     let now = std::time::SystemTime::now()
@@ -240,10 +246,13 @@ pub fn sync_clock(unix_time_ms: u64) {
     if now.abs_diff(u128::from(unix_time_ms)) < 2_000 {
         return;
     }
-    let spec = libc::timespec {
-        tv_sec: libc::time_t::try_from(unix_time_ms / 1_000).unwrap_or(libc::time_t::MAX),
-        tv_nsec: libc::c_long::try_from((unix_time_ms % 1_000) * 1_000_000).unwrap_or(0),
+    // SAFETY: `timespec` is plain old data; all-zero is a valid value.
+    let mut spec: libc::timespec = unsafe { std::mem::zeroed() };
+    let Ok(secs) = (unix_time_ms / 1_000).try_into() else {
+        return;
     };
+    spec.tv_sec = secs;
+    spec.tv_nsec = ((unix_time_ms % 1_000) * 1_000_000).try_into().unwrap_or(0);
     // SAFETY: plain syscall with a valid timespec; failure (not root) is harmless.
     unsafe {
         libc::clock_settime(libc::CLOCK_REALTIME, &raw const spec);

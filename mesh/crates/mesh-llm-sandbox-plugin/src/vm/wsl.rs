@@ -66,9 +66,17 @@ pub async fn start_wsl(settings: &Settings) -> Result<WslBackend> {
         command.arg("--distribution").arg(distro);
     }
     command.arg("--exec").arg(wsl_path(&linux_binary)?);
+    // The Windows archive ships Firecracker for WSL beside the Linux build.
+    let firecracker = linux_binary.with_file_name("firecracker");
+    let bundled = if firecracker.is_file() {
+        Some(wsl_path(&firecracker)?)
+    } else {
+        None
+    };
     WslBackend::start(
         command,
         BRIDGE_STATE_DIR.to_string(),
+        bundled,
         settings,
         "firecracker-wsl",
         wsl_path,
@@ -85,6 +93,7 @@ pub async fn start_local(settings: &Settings) -> Result<WslBackend> {
     WslBackend::start(
         command,
         state_dir.to_string_lossy().into_owned(),
+        None,
         settings,
         "firecracker-bridge",
         |path| Ok(path.to_string_lossy().into_owned()),
@@ -96,6 +105,7 @@ impl WslBackend {
     async fn start(
         mut command: Command,
         state_dir: String,
+        bundled_firecracker: Option<String>,
         settings: &Settings,
         name: &'static str,
         map_path: PathMapper,
@@ -113,10 +123,10 @@ impl WslBackend {
         let hello = BridgeHello {
             token: token.clone(),
             state_dir,
-            firecracker_path: settings
-                .firecracker_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned()),
+            firecracker_path: match &settings.firecracker_path {
+                Some(path) => Some(path.to_string_lossy().into_owned()),
+                None => bundled_firecracker,
+            },
         };
         stdin
             .write_all(format!("{}\n", serde_json::to_string(&hello)?).as_bytes())

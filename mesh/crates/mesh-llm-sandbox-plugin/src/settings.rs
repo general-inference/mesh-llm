@@ -32,7 +32,14 @@ pub struct Settings {
     pub max_ttl_secs: u64,
     /// Run sandboxes for other nodes in the mesh, not only this one.
     pub accept_remote: bool,
-    /// Linux: the Firecracker binary. Default: `firecracker` on PATH.
+    /// Download the guest images this release publishes when one is
+    /// missing. Off means only locally built images are used.
+    pub image_download: bool,
+    /// Where published images are fetched from: `<image_url>/<release tag>/...`.
+    /// Default: the mesh-llm GitHub releases.
+    pub image_url: Option<String>,
+    /// Linux: the Firecracker binary. Default: the one shipped beside the
+    /// plugin, then `firecracker` on PATH.
     pub firecracker_path: Option<PathBuf>,
     /// Windows: the WSL distribution to run Firecracker in. Default: the
     /// default distribution.
@@ -51,6 +58,8 @@ impl Default for Settings {
             max_egress: EgressMode::Open,
             max_ttl_secs: 24 * 3_600,
             accept_remote: true,
+            image_download: true,
+            image_url: None,
             firecracker_path: None,
             wsl_distro: None,
         }
@@ -76,6 +85,22 @@ impl Settings {
         self.images_dir
             .clone()
             .unwrap_or_else(|| self.state_dir().join("images"))
+    }
+
+    /// The published images this build may download, unless turned off.
+    pub fn published_images(&self) -> Option<crate::images::Published> {
+        let pins = crate::images::pins::compiled();
+        if !self.image_download || pins.is_empty() {
+            return None;
+        }
+        Some(crate::images::Published {
+            base_url: self
+                .image_url
+                .clone()
+                .filter(|url| !url.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_IMAGE_URL.to_string()),
+            pins,
+        })
     }
 
     /// Refuses a config that asks for more than this node allows. Nothing is
@@ -165,8 +190,18 @@ impl Settings {
                     .description("Run sandboxes for other nodes in the mesh."),
             )
             .setting(
-                config_setting("firecracker_path", config_string())
-                    .description("Linux: the Firecracker binary. Default: firecracker on PATH."),
+                config_setting("image_download", config_boolean())
+                    .default_value(&defaults.image_download)
+                    .description("Download the guest images this release publishes when missing."),
+            )
+            .setting(
+                config_setting("image_url", config_string())
+                    .description("Where published images are fetched from. Default: mesh-llm GitHub releases."),
+            )
+            .setting(
+                config_setting("firecracker_path", config_string()).description(
+                    "Linux: the Firecracker binary. Default: the bundled one, then firecracker on PATH.",
+                ),
             )
             .setting(
                 config_setting("wsl_distro", config_string())
@@ -174,6 +209,8 @@ impl Settings {
             )
     }
 }
+
+const DEFAULT_IMAGE_URL: &str = "https://github.com/Mesh-LLM/mesh-llm/releases/download";
 
 pub fn mode_name(mode: EgressMode) -> &'static str {
     match mode {

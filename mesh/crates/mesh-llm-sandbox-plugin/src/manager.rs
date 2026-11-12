@@ -109,7 +109,7 @@ impl Manager {
         let _ = std::fs::remove_dir_all(&run);
         std::fs::create_dir_all(&run).with_context(|| format!("create {}", run.display()))?;
         std::fs::create_dir_all(state.join(SNAPSHOT_DIR))?;
-        let images = ImageStore::new(settings.images_dir());
+        let images = ImageStore::new(settings.images_dir(), settings.published_images());
         Ok(Self {
             settings,
             backend,
@@ -130,18 +130,26 @@ impl Manager {
             backend,
             unavailable,
             arch: guest_arch().to_string(),
-            images: self
-                .images
-                .list()
-                .into_iter()
-                .map(|image| image.name)
-                .collect(),
+            images: self.images.names(),
             free_slots: self.settings.max_sandboxes.saturating_sub(used),
             max_cpus: self.settings.max_cpus,
             max_memory_mb: self.settings.max_memory_mb,
             max_disk_gb: self.settings.max_disk_gb,
             max_egress: mode_name(self.settings.max_egress).to_string(),
             accept_remote: self.settings.accept_remote,
+        }
+    }
+
+    /// Downloads published images this node lacks, so the first sandbox does
+    /// not wait for them. Failures are left for `create` to report.
+    pub async fn prefetch_images(&self) {
+        if self.backend.is_err() {
+            return;
+        }
+        for name in self.images.names() {
+            if let Err(error) = self.images.ensure(&name).await {
+                tracing::warn!("sandbox image `{name}` is not available yet: {error:#}");
+            }
         }
     }
 
@@ -161,7 +169,7 @@ impl Manager {
         }
         self.settings.check(&spec)?;
         let policy = Arc::new(EgressPolicy::compile(&spec.egress)?);
-        let image = self.images.get(&spec.image)?;
+        let image = self.images.ensure(&spec.image).await?;
         let _slot = self.reserve_slot()?;
 
         let id = format!("sbx-{}", uuid::Uuid::new_v4().simple());

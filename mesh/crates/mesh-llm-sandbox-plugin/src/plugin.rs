@@ -46,6 +46,8 @@ impl App {
             tracing::warn!("{PLUGIN_ID}: sandboxes are unavailable on this node: {reason}");
         }
         let manager = Arc::new(Manager::new(settings, backend)?);
+        let prefetch = manager.clone();
+        tokio::spawn(async move { prefetch.prefetch_images().await });
         let reaper = manager.clone();
         tokio::spawn(async move {
             loop {

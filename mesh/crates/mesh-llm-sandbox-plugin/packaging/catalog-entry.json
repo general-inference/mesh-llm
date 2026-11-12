@@ -1,0 +1,7 @@
+{
+  "name": "sandbox",
+  "description": "Isolated microVM sandboxes for running code, placed across a private mesh, with per-sandbox network egress policy.",
+  "github_url": "https://github.com/Mesh-LLM/mesh-llm",
+  "author_email": "maintainers@meshllm.cloud",
+  "author_name": "Mesh LLM"
+}

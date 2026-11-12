@@ -37,10 +37,9 @@ impl FirecrackerBackend {
     pub fn detect(configured: Option<PathBuf>) -> Result<Self> {
         let binary = match configured {
             Some(path) => path,
-            None => find_on_path("firecracker").context(
-                "firecracker is not on PATH; install it from \
-                 https://github.com/firecracker-microvm/firecracker/releases \
-                 or set the plugin's `firecracker_path` setting",
+            None => bundled().or_else(|| find_on_path("firecracker")).context(
+                "no Firecracker beside the plugin or on PATH; reinstall the plugin, \
+                     or install Firecracker and set the plugin's `firecracker_path` setting",
             )?,
         };
         if !binary.is_file() {
@@ -213,6 +212,13 @@ pub async fn connect_port(vsock: &Path, port: u32) -> Result<UnixStream> {
         bail!("guest refused vsock port {port}: {}", line.trim());
     }
     Ok(stream)
+}
+
+/// The Firecracker the plugin archive ships beside the plugin binary.
+fn bundled() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join("firecracker");
+    candidate.is_file().then_some(candidate)
 }
 
 fn find_on_path(name: &str) -> Option<PathBuf> {

@@ -5200,6 +5200,8 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "dispatch2",
+ "flate2",
+ "hex",
  "libc",
  "mesh-llm-events",
  "mesh-llm-plugin",
@@ -5207,9 +5209,12 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-virtualization",
+ "reqwest 0.13.5",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",
@@ -11813,6 +11818,7 @@ dependencies = [
 name = "xtask"
 version = "0.79.0"
 dependencies = [
+ "base64 0.22.1",
  "caseless",
  "ci-controller",
  "ed25519-dalek",

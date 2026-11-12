@@ -17,16 +17,27 @@ workspace = true
 name = "mesh-sandbox"
 path = "src/main.rs"
 
+[features]
+default = ["image-download"]
+# Fetch published guest images on first use. Off in the Linux build that runs
+# inside WSL, which never downloads and must stay free of C dependencies.
+image-download = ["dep:reqwest", "dep:sha2", "dep:hex", "dep:tar", "dep:flate2"]
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
+flate2 = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.79.0" }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.79.0" }
 mesh-llm-sandbox-guest = { path = "../mesh-llm-sandbox-guest", version = "0.79.0", features = ["tokio"] }
+reqwest = { version = "0.13", optional = true }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = { workspace = true, optional = true }
+tar = { version = "0.4", optional = true }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }

@@ -5,6 +5,7 @@
 //! - `notes-base` replaces `scripts/select-release-notes-base.py`.
 //! - `notes-link` replaces `scripts/release-notes-link.py`; its `git` and `gh`
 //!   calls go through [`link_host::ReleaseHost`].
+//! - `plugin-catalog-pin` pins an in-repo plugin's catalog entry to a release.
 //! - `notes-classify` replaces `scripts/release-notes-classify.py`; its `git log`
 //!   goes through the same host.
 
@@ -21,6 +22,7 @@ mod link_commits;
 mod link_gh;
 mod link_host;
 mod notes_base;
+mod plugin_catalog;
 mod preflight;
 mod preview_version;
 mod regroup;
@@ -51,6 +53,7 @@ pub(crate) enum ReleaseCommand {
     SwiftManifest,
     SwiftPrivacy,
     SwiftXcframework,
+    PluginCatalogPin,
 }
 
 impl ReleaseCommand {
@@ -67,6 +70,7 @@ impl ReleaseCommand {
             "swift-manifest" => Some(Self::SwiftManifest),
             "swift-privacy" => Some(Self::SwiftPrivacy),
             "swift-xcframework" => Some(Self::SwiftXcframework),
+            "plugin-catalog-pin" => Some(Self::PluginCatalogPin),
             _ => None,
         }
     }
@@ -87,6 +91,7 @@ pub(crate) fn run(command: ReleaseCommand, args: &[String]) -> DynResult<()> {
         ReleaseCommand::SwiftManifestText => swift_manifest::run(args),
         ReleaseCommand::SwiftManifest => swift_checksum::run(args),
         ReleaseCommand::SwiftPrivacy => return swift_privacy::adapter::run(args),
+        ReleaseCommand::PluginCatalogPin => plugin_catalog::run(args),
         ReleaseCommand::SwiftXcframework => {
             return swift_xcframework::emit(swift_xcframework::run(args));
         }

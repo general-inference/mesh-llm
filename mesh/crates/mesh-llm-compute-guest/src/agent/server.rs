@@ -13,13 +13,13 @@ pub fn run(listener: Listener) -> Result<()> {
         let conn = match listener.accept() {
             Ok(conn) => conn,
             Err(error) => {
-                eprintln!("mesh-sandbox-guest: accept: {error}");
+                eprintln!("mesh-compute-guest: accept: {error}");
                 continue;
             }
         };
         std::thread::spawn(move || {
             if let Err(error) = handle(conn) {
-                eprintln!("mesh-sandbox-guest: connection: {error:#}");
+                eprintln!("mesh-compute-guest: connection: {error:#}");
             }
         });
     }

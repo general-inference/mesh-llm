@@ -20,7 +20,7 @@ Plugin-specific documentation:
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
 - [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
 - [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
-- [Sandboxes](sandbox.md) - microVM sandboxes for running code across a private mesh, with per-sandbox network egress policy
+- [Compute](compute.md) - microVM sandboxes for running code across a private mesh, with per-sandbox network egress policy
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:

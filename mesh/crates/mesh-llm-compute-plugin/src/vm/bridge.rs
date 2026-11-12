@@ -1,7 +1,7 @@
 //! The bridge between the Windows plugin and Firecracker inside WSL2.
 //!
 //! The Windows build starts this binary's Linux build inside WSL2 as
-//! `mesh-sandbox wsl-bridge`, writes a [`BridgeHello`] line to its stdin and
+//! `mesh-compute wsl-bridge`, writes a [`BridgeHello`] line to its stdin and
 //! reads a [`BridgeReady`] line back naming a loopback TCP port, which WSL2
 //! forwards to Windows. Each TCP connection then carries one
 //! [`BridgeRequest`], authenticated by the token from the hello:
@@ -86,7 +86,7 @@ mod server {
     use std::sync::{Arc, Mutex};
 
     use anyhow::{Context, Result, bail};
-    use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
+    use mesh_llm_compute_guest::protocol::async_io::{read_frame, write_frame};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
@@ -142,7 +142,7 @@ mod server {
                 let bridge = accepting.clone();
                 tokio::spawn(async move {
                     if let Err(error) = bridge.handle(conn).await {
-                        tracing::warn!("mesh-sandbox bridge: {error:#}");
+                        tracing::warn!("mesh-compute bridge: {error:#}");
                     }
                 });
             }

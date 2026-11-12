@@ -22,7 +22,7 @@ const NON_PRODUCT_CRATES: &[&str] = &[
     "mesh-llm-test-harness",
     "metrics-server",
     // Runs inside sandbox VMs, where the serial console is its only output.
-    "mesh-llm-sandbox-guest",
+    "mesh-llm-compute-guest",
 ];
 
 /// Files that implement the console output facility, and therefore legitimately

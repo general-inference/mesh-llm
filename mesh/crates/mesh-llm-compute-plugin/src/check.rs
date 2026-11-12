@@ -1,7 +1,7 @@
-//! `mesh-sandbox check`: boots a sandbox on this machine and exercises it,
+//! `mesh-compute check`: boots a sandbox on this machine and exercises it,
 //! without mesh-llm, so an operator can tell whether this node is ready.
 //!
-//! Reads the same settings the plugin gets, as JSON in `MESH_SANDBOX_SETTINGS`
+//! Reads the same settings the plugin gets, as JSON in `MESH_COMPUTE_SETTINGS`
 //! (default `{}`). Steps that need the network are skipped with `--offline`.
 //! On Linux, `--bridge` drives Firecracker through the WSL bridge run as a
 //! local process, which covers the Windows path short of WSL itself.
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
-use mesh_llm_sandbox_guest::protocol::ExecRequest;
+use mesh_llm_compute_guest::protocol::ExecRequest;
 
 use crate::egress::{EgressMode, EgressSpec};
 use crate::manager::{Caller, Manager};
@@ -26,7 +26,7 @@ macro_rules! say {
 }
 
 pub async fn run(offline: bool, bridge: bool) -> Result<()> {
-    let settings_json = std::env::var("MESH_SANDBOX_SETTINGS").unwrap_or_else(|_| "{}".into());
+    let settings_json = std::env::var("MESH_COMPUTE_SETTINGS").unwrap_or_else(|_| "{}".into());
     let settings = Settings::parse(&settings_json)?;
     let backend: Arc<dyn crate::vm::Backend> = if bridge {
         bridged(&settings).await?

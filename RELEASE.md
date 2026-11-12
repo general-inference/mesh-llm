@@ -346,6 +346,28 @@ Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
 
+## Compute plugin
+
+The Release workflow also publishes the `compute` plugin
+(`.github/workflows/compute-plugin-release.yml`, called as the
+`compute_plugin` job). It builds the guest images for x86_64 and aarch64,
+compiles their sha256s into the plugin, packages the plugin for every release
+target with Firecracker bundled (`mesh/crates/mesh-llm-compute-plugin/packaging/`),
+and boots sandboxes from the packaged Linux x86_64 archive on a KVM runner. The
+images and archives are uploaded with the other release assets, and `publish`
+waits for this job.
+
+After a stable release publishes, the `compute_catalog` job pins the `compute`
+entry in the `meshllm/plugin-catalog` dataset to the new tag and the published
+archives' sha256s, using the repository's `HF_TOKEN`. It commits on top of the
+catalog revision it read, so a concurrent edit fails the job rather than being
+overwritten; rerun it to retry. Release candidates and previews do not move the
+catalog.
+
+To rehearse the compute plugin artifacts without publishing, dispatch
+**Compute Plugin Release Artifacts** with a tag name. Firecracker's version and digests are in
+`packaging/firecracker.pin`.
+
 ## Rolling downloadable previews
 
 `rolling-preview.yml` dispatches the canonical Release workflow on manual

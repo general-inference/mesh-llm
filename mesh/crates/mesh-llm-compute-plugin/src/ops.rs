@@ -1,8 +1,8 @@
 //! Operations on a node's sandboxes, in a form that runs the same locally or
-//! on a peer: a peer receives an [`Op`] on the `sandbox.v1` channel, runs it
+//! on a peer: a peer receives an [`Op`] on the `compute.v1` channel, runs it
 //! with [`run`] as [`Caller::Peer`], and sends the [`OpResult`] back.
 
-use mesh_llm_sandbox_guest::protocol::{DirEntry, ExecRequest, ExitStatus};
+use mesh_llm_compute_guest::protocol::{DirEntry, ExecRequest, ExitStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::egress::proxy::EgressEvent;

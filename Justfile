@@ -39,4 +39,4 @@ import 'just/mesh-client.just'
 
 import 'just/utilities.just'
 
-import 'just/sandbox.just'
+import 'just/compute.just'

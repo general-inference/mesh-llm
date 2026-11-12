@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
-use mesh_llm_sandbox_guest::protocol::{
+use mesh_llm_compute_guest::protocol::async_io::{read_frame, write_frame};
+use mesh_llm_compute_guest::protocol::{
     DirEntry, EntryKind, ExitStatus, PROTOCOL_VERSION, Reply, Request,
 };
 

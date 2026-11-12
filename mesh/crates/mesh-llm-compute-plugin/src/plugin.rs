@@ -34,7 +34,7 @@ impl App {
         self.mesh
             .get()
             .cloned()
-            .ok_or_else(|| PluginError::internal("the sandbox plugin is still starting"))
+            .ok_or_else(|| PluginError::internal("the compute plugin is still starting"))
     }
 
     async fn initialize(&self, request: &PluginInitializeRequest) -> anyhow::Result<()> {
@@ -68,7 +68,7 @@ pub fn build(app: Arc<App>) -> SimplePlugin {
         plugin_server_info(
             PLUGIN_ID,
             version,
-            "Sandboxes",
+            "Compute",
             "Isolated microVM sandboxes for running code, placed across a private mesh",
             Some(INSTRUCTIONS),
         ),

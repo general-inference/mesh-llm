@@ -1919,13 +1919,13 @@ jobs:
             dist/native-runtimes/*.sha256
           if-no-files-found: error
 
-  sandbox_plugin:
-    name: Sandbox plugin
+  compute_plugin:
+    name: Compute plugin
     needs: [metadata]
     # Guest images and plugin archives for every target, smoke-tested on a KVM
     # runner; published with the release below. See
-    # .github/workflows/sandbox-plugin-release.yml.
-    uses: ./.github/workflows/sandbox-plugin-release.yml
+    # .github/workflows/compute-plugin-release.yml.
+    uses: ./.github/workflows/compute-plugin-release.yml
     with:
       tag: ${{ needs.metadata.outputs.tag }}
       source_sha: ${{ needs.metadata.outputs.source_sha }}
@@ -1958,8 +1958,8 @@ jobs:
       - compose_windows_gpu
       - build_native_runtime_windows_cpu
       - build_native_runtime_windows_gpu
-      - sandbox_plugin
-    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') && needs.sandbox_plugin.result == 'success' }}
+      - compute_plugin
+    if: ${{ !cancelled() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.compose_cpu_products.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_node_sdk_addon.result == 'success' && needs.build_native_runtime.result == 'success' && (needs.build_native_runtime_linux_aarch64_cuda.result == 'success' || needs.build_native_runtime_linux_aarch64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_cuda.result == 'success' || needs.build_native_runtime_linux_x86_64_cuda.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_rocm.result == 'success' || needs.build_native_runtime_linux_x86_64_rocm.result == 'skipped') && (needs.build_native_runtime_linux_x86_64_vulkan.result == 'success' || needs.build_native_runtime_linux_x86_64_vulkan.result == 'skipped') && needs.build_swift_sdk_artifact.result == 'success' && needs.compose_linux_arm64_cpu.result == 'success' && needs.smoke_linux_arm64_artifact.result == 'success' && (needs.compose_linux_aarch64_cuda.result == 'success' || needs.compose_linux_aarch64_cuda.result == 'skipped') && (needs.compose_linux_cuda.result == 'success' || needs.compose_linux_cuda.result == 'skipped') && (needs.compose_linux_rocm.result == 'success' || needs.compose_linux_rocm.result == 'skipped') && (needs.compose_linux_vulkan.result == 'success' || needs.compose_linux_vulkan.result == 'skipped') && needs.compose_windows_cpu.result == 'success' && (needs.compose_windows_gpu.result == 'success' || needs.compose_windows_gpu.result == 'skipped') && needs.build_native_runtime_windows_cpu.result == 'success' && (needs.build_native_runtime_windows_gpu.result == 'success' || needs.build_native_runtime_windows_gpu.result == 'skipped') && needs.compute_plugin.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -2231,8 +2231,8 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-  sandbox_catalog:
-    name: Pin the sandbox plugin in the plugin catalog
+  compute_catalog:
+    name: Pin the compute plugin in the plugin catalog
     needs: [metadata, publish]
     # Stable releases only: the catalog is what `mesh-llm plugins install
     # sandbox` resolves, and it pins exactly the archives published above.
@@ -2254,8 +2254,8 @@ jobs:
           allow_native_github_cache: "false"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-sandbox-plugin
-          path: sandbox-archives
+          name: release-compute-plugin
+          path: compute-archives
       - name: Pin the entry in the current catalog
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -2268,8 +2268,8 @@ jobs:
           curl --silent --show-error --fail --location --proto '=https' --output current.jsonl \
             "https://huggingface.co/datasets/$CATALOG_REPO/resolve/$parent/plugins.jsonl"
           cargo xtool release plugin-catalog-pin \
-            --entry mesh/crates/mesh-llm-sandbox-plugin/packaging/catalog-entry.json \
-            --tag "$RELEASE_TAG" --archives sandbox-archives \
+            --entry mesh/crates/mesh-llm-compute-plugin/packaging/catalog-entry.json \
+            --tag "$RELEASE_TAG" --archives compute-archives \
             --catalog current.jsonl --out plugins.jsonl \
             --hf-commit "$RUNNER_TEMP/catalog-commit.ndjson" --parent "$parent"
       - name: Publish the catalog

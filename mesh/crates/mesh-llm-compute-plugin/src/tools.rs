@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use mesh_llm_sandbox_guest::protocol::{DirEntry, ExecRequest, WORKSPACE_DIR};
+use mesh_llm_compute_guest::protocol::{DirEntry, ExecRequest, WORKSPACE_DIR};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,13 +1,13 @@
 //! Firecracker behind the bridge in [`super::bridge`].
 //!
 //! On Windows this is how sandboxes run: the plugin archive carries the
-//! Linux build of this binary at `linux/mesh-sandbox` beside `sandbox.exe`,
+//! Linux build of this binary at `linux/mesh-compute` beside `compute.exe`,
 //! and [`start_wsl`] runs it inside WSL2 (the default distribution, or the
 //! `wsl_distro` setting), which must have Firecracker installed and `/dev/kvm`
 //! usable by the WSL user (nested virtualization; on by default on Windows 11).
 //!
 //! On Linux, [`start_local`] runs the same bridge as a child process, so
-//! `mesh-sandbox check --bridge` exercises everything but the WSL launch.
+//! `mesh-compute check --bridge` exercises everything but the WSL launch.
 //!
 //! Egress still leaves from the plugin's side: the bridge hands each guest
 //! egress connection back, and the policy and the outbound connection are
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
+use mesh_llm_compute_guest::protocol::async_io::{read_frame, write_frame};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -47,9 +47,9 @@ pub struct WslBackend {
 /// Starts the bridge inside WSL2.
 #[cfg(windows)]
 pub async fn start_wsl(settings: &Settings) -> Result<WslBackend> {
-    const LINUX_BINARY: &str = "linux/mesh-sandbox";
+    const LINUX_BINARY: &str = "linux/mesh-compute";
     /// The bridge's state lives in WSL's own filesystem.
-    const BRIDGE_STATE_DIR: &str = "/tmp/mesh-sandbox";
+    const BRIDGE_STATE_DIR: &str = "/tmp/mesh-compute";
     let exe = std::env::current_exe()?;
     let linux_binary = exe
         .parent()
@@ -286,7 +286,7 @@ mod tests {
                 r"C:\Users\me\.mesh-llm\sandbox\images\base\x86_64\kernel"
             ))
             .unwrap(),
-            "/mnt/c/Users/me/.mesh-llm/sandbox/images/base/x86_64/kernel"
+            "/mnt/c/Users/me/.mesh-llm/compute/images/base/x86_64/kernel"
         );
         assert_eq!(
             wsl_path(Path::new(r"\\?\D:\images\rootfs.ext4")).unwrap(),

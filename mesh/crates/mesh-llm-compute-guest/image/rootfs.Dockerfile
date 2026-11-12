@@ -8,4 +8,4 @@ RUN apt-get update \
         nodejs npm openssh-client pkg-config procps python3 python3-pip python3-venv \
         tar unzip wget xz-utils zip \
     && rm -rf /var/lib/apt/lists/*
-COPY mesh-sandbox-guest /usr/sbin/mesh-sandbox-guest
+COPY mesh-compute-guest /usr/sbin/mesh-compute-guest

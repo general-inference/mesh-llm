@@ -1,8 +1,8 @@
-# Sandboxes
+# Compute
 
-The `sandbox` plugin gives agents on a private mesh isolated places to run
-code. Each sandbox is a microVM on some node in the mesh: its own kernel, a
-Debian userland, a writable `/workspace`, and no network unless its config
+The `compute` plugin runs code for agents across a private mesh. It does that
+in sandboxes. Each is a microVM on some node in the mesh, with its own kernel,
+a Debian userland, a writable `/workspace`, and no network unless its config
 asks for one. Placement prefers the node serving the agent's model, so a turn
 of inference and the tool call after it stay on one machine.
 
@@ -10,33 +10,49 @@ The plugin refuses to start on a public mesh.
 
 ## Install
 
-On each node that should run sandboxes (or only call them):
+On each node that should run sandboxes, or only call them:
 
 ```bash
-just sandbox-image      # guest image for this architecture (needs Docker)
-just sandbox-package    # prints the archive path and the install command
-mesh-llm plugins install --archive target/sandbox-plugin/sandbox-<version>-<target>.tar.gz \
-  --name sandbox --version <version>
+mesh-llm plugins install compute
 ```
 
-Images are found in `~/.mesh-llm/sandbox/images/<name>/<arch>/`. A node with
-no image, or no way to run VMs, still loads the plugin: it can create
-sandboxes on other nodes, and `sandbox_nodes` says why it cannot run its own.
+The plugin is published with every mesh-llm release, for the platforms
+mesh-llm ships on (macOS on Apple Silicon, Linux x86_64 and arm64, Windows
+x86_64), and the plugin catalog pins each stable release's archives by
+sha256. The Linux and Windows archives include Firecracker.
+
+The first time a node needs the guest image (about 250 MB) it downloads it
+from the same release and checks it against the sha256 compiled into the
+plugin; the plugin also starts that download when it loads. Images live in
+`~/.mesh-llm/compute/images/<name>/<arch>/`. Set `image_download = false` to
+use only locally built images, or `image_url` to fetch from a mirror laid out
+like the release (`<image_url>/<tag>/compute-image-<name>-<tag>-<arch>.tar.gz`).
+
+A node that cannot run VMs still loads the plugin: it creates sandboxes on
+other nodes, and `sandbox_nodes` says why it cannot run its own.
 
 ### Per platform
 
-- **Linux**: Firecracker on PATH (or the `firecracker_path` setting) and
-  read/write access to `/dev/kvm` (usually the `kvm` group).
-- **macOS**: Apple Silicon. The plugin binary must be signed with the
-  `com.apple.security.virtualization` entitlement; `just sandbox-plugin` does
-  that for a local build.
-- **Windows**: WSL2 with Firecracker installed in the distribution and
-  `/dev/kvm` usable by its user (nested virtualization, on by default on
-  Windows 11 x64). The plugin directory needs the Linux build at
-  `linux/mesh-sandbox`. Windows on ARM is not supported.
+- **Linux**: read/write access to `/dev/kvm` (usually the `kvm` group). The
+  bundled Firecracker is used unless `firecracker_path` names another.
+- **macOS**: Apple Silicon. Released binaries carry the
+  `com.apple.security.virtualization` entitlement they need.
+- **Windows**: WSL2 (`wsl --install`), with `/dev/kvm` usable by the WSL user
+  (nested virtualization, on by default on Windows 11 x64). The archive ships
+  the Linux side and Firecracker for WSL. Windows on ARM is not supported.
 
-Run `mesh-sandbox check` on a node to boot a sandbox and exercise it without
-the mesh.
+Run `mesh-compute check` (the `compute` binary in the plugin's directory) on a
+node to boot a sandbox and exercise it without the mesh.
+
+### Building it yourself
+
+```bash
+just compute-image      # guest image for this architecture (needs Docker)
+just compute-package    # local archive, signed on macOS; prints the install command
+```
+
+A local build pins no published images, so it uses the ones `just
+compute-image` built.
 
 ## Tools
 
@@ -105,7 +121,7 @@ Programs that ignore proxy settings, and protocols other than HTTP(S) through
 
 ## Operator settings
 
-`[plugin.settings]` for `sandbox` in the node config. A request beyond a limit
+`[plugin.settings]` for `compute` in the node config. A request beyond a limit
 is refused with the limit named; nothing is silently reduced.
 
 | Setting | Default | Meaning |
@@ -117,9 +133,11 @@ is refused with the limit named; nothing is silently reduced.
 | `max_egress` | `open` | The most network access a sandbox here may ask for |
 | `max_ttl_secs` | 86400 | Longest a sandbox may live |
 | `accept_remote` | true | Run sandboxes for other nodes |
-| `state_dir` | `~/.mesh-llm/sandbox` | Scratch disks, sockets, snapshots |
+| `state_dir` | `~/.mesh-llm/compute` | Scratch disks, sockets, snapshots |
 | `images_dir` | `<state_dir>/images` | Guest images |
-| `firecracker_path` | `firecracker` on PATH | Linux (a WSL path on Windows) |
+| `image_download` | true | Download the release's pinned guest images when missing |
+| `image_url` | mesh-llm GitHub releases | Mirror to download images from |
+| `firecracker_path` | bundled, then `firecracker` on PATH | Linux (a WSL path on Windows) |
 | `wsl_distro` | default distribution | Windows |
 
 ## Trust and ownership
@@ -138,14 +156,14 @@ compute. Within one:
 ## How it works
 
 Each node broadcasts its capacity (backend, architecture, images, free slots,
-limits) on the `sandbox.v1` plugin channel. `sandbox_create` places the
+limits) on the `compute.v1` plugin channel. `sandbox_create` places the
 sandbox by preference: a node serving `near_model`, the node holding
 `from_snapshot`, this node, then the lowest round-trip time, then the most
 free slots. Later calls go to the node that holds the sandbox as `request`
 messages on the same channel; the receiving node runs them as the sending
 peer.
 
-Inside the VM, the agent ([`mesh-llm-sandbox-guest`](../../crates/mesh-llm-sandbox-guest/README.md))
+Inside the VM, the agent ([`mesh-llm-compute-guest`](../../crates/mesh-llm-compute-guest/README.md))
 runs as PID 1. The image disk is the read-only root; the sandbox's sparse
 scratch disk is formatted on first boot and becomes the upper layer of an
 overlay, so installs and writes land on scratch and the image stays shared.

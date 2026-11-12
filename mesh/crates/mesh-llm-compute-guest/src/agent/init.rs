@@ -60,14 +60,14 @@ pub fn supervise(serve: fn() -> Result<()>) -> Result<()> {
             let code = match serve() {
                 Ok(()) => 0,
                 Err(error) => {
-                    eprintln!("mesh-sandbox-guest: {error:#}");
+                    eprintln!("mesh-compute-guest: {error:#}");
                     1
                 }
             };
             std::process::exit(code);
         }
         reap_until(child);
-        eprintln!("mesh-sandbox-guest: agent exited; restarting");
+        eprintln!("mesh-compute-guest: agent exited; restarting");
         std::thread::sleep(Duration::from_millis(200));
     }
 }

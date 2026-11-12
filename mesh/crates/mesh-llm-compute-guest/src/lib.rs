@@ -1,4 +1,4 @@
-//! The contract between the sandbox plugin on the host and the agent inside
+//! The contract between the compute plugin on the host and the agent inside
 //! each sandbox microVM.
 //!
 //! The agent runs as PID 1 in the guest and listens on vsock. The host opens

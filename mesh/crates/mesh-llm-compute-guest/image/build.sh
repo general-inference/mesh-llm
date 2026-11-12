@@ -21,22 +21,22 @@ work="$(mktemp -d)"
 trap 'docker run --rm -v "$work:/work" debian:bookworm-slim sh -c "rm -rf /work/*" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
 echo "==> builder image"
-docker build -q -t mesh-sandbox-builder -f "$here/builder.Dockerfile" "$here" >/dev/null
+docker build -q -t mesh-compute-builder -f "$here/builder.Dockerfile" "$here" >/dev/null
 
 echo "==> guest agent"
 docker run --rm -v "$repo:/src:ro" -v "$work:/work" -e RUSTC_WRAPPER= -e CARGO_TARGET_DIR=/work/target \
-    mesh-sandbox-builder \
+    mesh-compute-builder \
     cargo build --quiet --release --locked --manifest-path /src/Cargo.toml \
-        -p mesh-llm-sandbox-guest --bin mesh-sandbox-guest
+        -p mesh-llm-compute-guest --bin mesh-compute-guest
 mkdir -p "$work/rootfs-context"
-cp "$work/target/release/mesh-sandbox-guest" "$work/rootfs-context/"
+cp "$work/target/release/mesh-compute-guest" "$work/rootfs-context/"
 
 echo "==> root filesystem ($name)"
-docker build -q -t "mesh-sandbox-rootfs-$name" -f "$here/rootfs.Dockerfile" "$work/rootfs-context" >/dev/null
-container="$(docker create "mesh-sandbox-rootfs-$name")"
+docker build -q -t "mesh-compute-rootfs-$name" -f "$here/rootfs.Dockerfile" "$work/rootfs-context" >/dev/null
+container="$(docker create "mesh-compute-rootfs-$name")"
 docker export "$container" -o "$work/rootfs.tar"
 docker rm "$container" >/dev/null
-docker run --rm -v "$work:/work" -e OWNER="$(id -u):$(id -g)" mesh-sandbox-builder bash -euo pipefail -c '
+docker run --rm -v "$work:/work" -e OWNER="$(id -u):$(id -g)" mesh-compute-builder bash -euo pipefail -c '
     mkdir /work/root
     tar -xpf /work/rootfs.tar -C /work/root
     rm -f /work/root/.dockerenv
@@ -53,7 +53,7 @@ if [ -f "$dest/kernel" ] && grep -q "\"kernel_version\": \"$kernel_version\"" "$
 else
     echo "==> kernel $kernel_version"
     docker run --rm -v "$work:/work" -v "$here:/image:ro" -e KERNEL_VERSION="$kernel_version" \
-        -e OWNER="$(id -u):$(id -g)" mesh-sandbox-builder bash -euo pipefail -c '/image/build-kernel.sh && chown "$OWNER" /work/kernel'
+        -e OWNER="$(id -u):$(id -g)" mesh-compute-builder bash -euo pipefail -c '/image/build-kernel.sh && chown "$OWNER" /work/kernel'
 fi
 
 mkdir -p "$dest"

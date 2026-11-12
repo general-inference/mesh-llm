@@ -1,8 +1,8 @@
-//! `mesh-sandbox`: the mesh-llm sandbox plugin.
+//! `mesh-compute`: the mesh-llm compute plugin.
 //!
 //! Launched by mesh-llm with no arguments, it serves the plugin protocol. The
 //! Linux build also has a `wsl-bridge` mode, which the Windows build starts
-//! inside WSL2 to run Firecracker there. `mesh-sandbox check` boots a sandbox
+//! inside WSL2 to run Firecracker there. `mesh-compute check` boots a sandbox
 //! on this machine and exercises it.
 
 mod check;
@@ -21,7 +21,7 @@ mod vm;
 use std::io::Write as _;
 use std::sync::Arc;
 
-pub const PLUGIN_ID: &str = "sandbox";
+pub const PLUGIN_ID: &str = "compute";
 
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         Some("--version") => {
             writeln!(
                 mesh_llm_events::machine_out(),
-                "mesh-sandbox {}",
+                "mesh-compute {}",
                 env!("CARGO_PKG_VERSION")
             )?;
             Ok(())

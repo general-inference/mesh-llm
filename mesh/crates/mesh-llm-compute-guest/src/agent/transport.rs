@@ -9,8 +9,8 @@ use anyhow::{Context, Result};
 use super::vsock::{VsockListener, VsockStream};
 use crate::protocol::{AGENT_PORT, EGRESS_PORT, HOST_CID};
 
-const LISTEN_TCP_ENV: &str = "MESH_SANDBOX_GUEST_TCP";
-const EGRESS_TCP_ENV: &str = "MESH_SANDBOX_GUEST_EGRESS_TCP";
+const LISTEN_TCP_ENV: &str = "MESH_COMPUTE_GUEST_TCP";
+const EGRESS_TCP_ENV: &str = "MESH_COMPUTE_GUEST_EGRESS_TCP";
 
 /// One host connection.
 pub trait Conn: Read + Write + Send + 'static {

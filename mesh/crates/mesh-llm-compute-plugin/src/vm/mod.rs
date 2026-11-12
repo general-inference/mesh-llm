@@ -74,7 +74,7 @@ pub trait Backend: Send + Sync {
 /// own console argument. The image disk is the read-only root.
 pub fn kernel_cmdline(console: &str) -> String {
     format!(
-        "console={console} reboot=k panic=1 quiet root=/dev/vda ro rootfstype=ext4 init=/sbin/mesh-sandbox-guest"
+        "console={console} reboot=k panic=1 quiet root=/dev/vda ro rootfstype=ext4 init=/sbin/mesh-compute-guest"
     )
 }
 

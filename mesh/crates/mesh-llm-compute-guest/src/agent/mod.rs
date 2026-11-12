@@ -2,8 +2,8 @@
 //!
 //! Run as PID 1 it prepares the root filesystem ([`init`]), forks, and keeps
 //! PID 1 as a reaper while the child serves. Run any other way (for tests on
-//! a Linux host) it serves straight away; set `MESH_SANDBOX_GUEST_TCP` to a
-//! listen address and `MESH_SANDBOX_GUEST_EGRESS_TCP` to the host egress
+//! a Linux host) it serves straight away; set `MESH_COMPUTE_GUEST_TCP` to a
+//! listen address and `MESH_COMPUTE_GUEST_EGRESS_TCP` to the host egress
 //! address to use TCP instead of vsock.
 
 mod exec;
@@ -21,7 +21,7 @@ pub use transport::{Conn, Dialer, Listener};
 pub fn main() -> Result<()> {
     if std::process::id() == 1 {
         if let Err(error) = init::prepare_root() {
-            eprintln!("mesh-sandbox-guest: root setup failed: {error:#}");
+            eprintln!("mesh-compute-guest: root setup failed: {error:#}");
             init::power_off();
         }
         return init::supervise(serve);

@@ -9,8 +9,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
-use mesh_llm_sandbox_guest::protocol::{EgressReply, EgressRequest};
+use mesh_llm_compute_guest::protocol::async_io::{read_frame, write_frame};
+use mesh_llm_compute_guest::protocol::{EgressReply, EgressRequest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;

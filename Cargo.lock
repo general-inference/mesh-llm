@@ -4802,6 +4802,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-compute-guest"
+version = "0.79.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-compute-plugin"
+version = "0.79.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "block2",
+ "dispatch2",
+ "flate2",
+ "hex",
+ "libc",
+ "mesh-llm-compute-guest",
+ "mesh-llm-events",
+ "mesh-llm-plugin",
+ "objc2",
+ "objc2-foundation",
+ "objc2-virtualization",
+ "reqwest 0.13.5",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mesh-llm-config"
 version = "0.79.0"
 dependencies = [
@@ -5176,48 +5218,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "toml 0.9.12+spec-1.1.0",
- "uuid",
-]
-
-[[package]]
-name = "mesh-llm-sandbox-guest"
-version = "0.79.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "libc",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "mesh-llm-sandbox-plugin"
-version = "0.79.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "block2",
- "dispatch2",
- "flate2",
- "hex",
- "libc",
- "mesh-llm-events",
- "mesh-llm-plugin",
- "mesh-llm-sandbox-guest",
- "objc2",
- "objc2-foundation",
- "objc2-virtualization",
- "reqwest 0.13.5",
- "schemars",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tar",
- "tempfile",
- "tokio",
- "tracing",
  "uuid",
 ]
 

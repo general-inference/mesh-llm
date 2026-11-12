@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use mesh_llm_sandbox_guest::protocol::async_io::{read_frame, write_frame};
-use mesh_llm_sandbox_guest::protocol::{
+use mesh_llm_compute_guest::protocol::async_io::{read_frame, write_frame};
+use mesh_llm_compute_guest::protocol::{
     CHUNK_BYTES, DirEntry, ExecRequest, ExitStatus, Reply, Request,
 };
 use schemars::JsonSchema;

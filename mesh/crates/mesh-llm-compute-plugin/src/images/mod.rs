@@ -3,12 +3,12 @@
 //! An image is a directory `<images>/<name>/<arch>/` holding `kernel` (an
 //! uncompressed kernel: `vmlinux` ELF on x86_64, `Image` on aarch64) and
 //! `rootfs.ext4` (the read-only root, with the agent at
-//! `/sbin/mesh-sandbox-guest`).
+//! `/sbin/mesh-compute-guest`).
 //!
 //! Released plugin builds carry the sha256 of each image published with the
 //! same mesh-llm release ([`pins`]) and download a missing one on first use
 //! ([`download`]). Other builds use images built locally with
-//! `just sandbox-image`.
+//! `just compute-image`.
 
 #[cfg(feature = "image-download")]
 mod download;
@@ -74,7 +74,7 @@ impl ImageStore {
         };
         if !image.kernel.is_file() || !image.rootfs.is_file() {
             bail!(
-                "image `{name}` is not installed for {} (looked in {}); build it with `just sandbox-image`",
+                "image `{name}` is not installed for {} (looked in {}); build it with `just compute-image`",
                 guest_arch(),
                 dir.display()
             );

@@ -1,5 +1,5 @@
 [package]
-name = "mesh-llm-sandbox-plugin"
+name = "mesh-llm-compute-plugin"
 version.workspace = true
 edition = "2024"
 license.workspace = true
@@ -14,7 +14,7 @@ publish = false
 workspace = true
 
 [[bin]]
-name = "mesh-sandbox"
+name = "mesh-compute"
 path = "src/main.rs"
 
 [features]
@@ -31,7 +31,7 @@ flate2 = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.79.0" }
 mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.79.0" }
-mesh-llm-sandbox-guest = { path = "../mesh-llm-sandbox-guest", version = "0.79.0", features = ["tokio"] }
+mesh-llm-compute-guest = { path = "../mesh-llm-compute-guest", version = "0.79.0", features = ["tokio"] }
 reqwest = { version = "0.13", optional = true }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

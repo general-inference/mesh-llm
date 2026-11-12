@@ -1,7 +1,7 @@
 //! Sandboxes across the mesh: capacity adverts, placement, and running
 //! operations on the node that holds a sandbox.
 //!
-//! Everything travels on the `sandbox.v1` plugin channel. Each node
+//! Everything travels on the `compute.v1` plugin channel. Each node
 //! broadcasts its [`Capacity`] as an `advert`. A caller picks a node, sends it
 //! a `request` carrying an [`Op`], and waits for the `response` with the same
 //! correlation id. The host authenticates the sending peer, and a node runs a
@@ -20,7 +20,7 @@ use crate::manager::{Caller, Capacity, Manager, SandboxInfo};
 use crate::ops::{self, MAX_TRANSFER_BYTES, Op, OpResult, Reply};
 use crate::spec::{SandboxSpec, SnapshotRef};
 
-pub const CHANNEL: &str = "sandbox.v1";
+pub const CHANNEL: &str = "compute.v1";
 const KIND_ADVERT: &str = "advert";
 const KIND_REQUEST: &str = "request";
 const KIND_RESPONSE: &str = "response";
@@ -238,7 +238,7 @@ impl Mesh {
             .await;
     }
 
-    /// Handles a `sandbox.v1` message. Requests run in their own task so a
+    /// Handles a `compute.v1` message. Requests run in their own task so a
     /// long command never holds up the plugin's ordered message delivery.
     pub fn on_message(self: &Arc<Self>, message: proto::ChannelMessage) {
         let source = message.source_peer_id.clone();

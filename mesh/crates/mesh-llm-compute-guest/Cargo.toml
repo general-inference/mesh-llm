@@ -1,5 +1,5 @@
 [package]
-name = "mesh-llm-sandbox-guest"
+name = "mesh-llm-compute-guest"
 version.workspace = true
 edition = "2024"
 license.workspace = true
@@ -17,7 +17,7 @@ workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "mesh-sandbox-guest"
+name = "mesh-compute-guest"
 path = "src/main.rs"
 
 [features]

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use mesh_llm_sandbox_guest::protocol::{DirEntry, ExecRequest, WORKSPACE_DIR};
+use mesh_llm_compute_guest::protocol::{DirEntry, ExecRequest, WORKSPACE_DIR};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,17 +1,17 @@
-name: Sandbox Plugin Release Artifacts
+name: Compute Plugin Release Artifacts
 
-# Builds everything the `sandbox` plugin publishes with a mesh-llm release:
+# Builds everything the `compute` plugin publishes with a mesh-llm release:
 #
-#   sandbox-image-base-<tag>-{x86_64,aarch64}.tar.gz   guest images
+#   compute-image-base-<tag>-{x86_64,aarch64}.tar.gz   guest images
 #   sandbox-<tag>-<target>.{tar.gz,zip}                plugin archives
 #
 # The images are built first; their sha256s are compiled into the plugin as
-# MESH_SANDBOX_IMAGE_PINS, so an archive the catalog pins also pins the images
+# MESH_COMPUTE_IMAGE_PINS, so an archive the catalog pins also pins the images
 # it downloads. A smoke test then installs the Linux x86_64 archive on a KVM
 # runner and boots a sandbox from the images, fetched and verified through the
 # same download path users take, before anything is published.
 #
-# Uploaded artifacts named `release-sandbox-*` are picked up by the Release
+# Uploaded artifacts named `release-compute-*` are picked up by the Release
 # workflow's publish job; everything else stays internal to the run. Dispatch
 # it on its own to rehearse a release without publishing.
 
@@ -43,7 +43,7 @@ env:
 
 jobs:
   images:
-    name: Sandbox image ${{ matrix.arch }}
+    name: Compute guest image ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 150
     strategy:
@@ -64,11 +64,11 @@ jobs:
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
-            ${{ runner.temp }}/sandbox-images/${{ env.IMAGE_NAME }}/${{ matrix.arch }}/kernel
-            ${{ runner.temp }}/sandbox-images/${{ env.IMAGE_NAME }}/${{ matrix.arch }}/image.json
-          key: sandbox-kernel-${{ matrix.arch }}-${{ hashFiles('mesh/crates/mesh-llm-sandbox-guest/image/kernel.config', 'mesh/crates/mesh-llm-sandbox-guest/image/build-kernel.sh', 'mesh/crates/mesh-llm-sandbox-guest/image/builder.Dockerfile') }}
+            ${{ runner.temp }}/compute-images/${{ env.IMAGE_NAME }}/${{ matrix.arch }}/kernel
+            ${{ runner.temp }}/compute-images/${{ env.IMAGE_NAME }}/${{ matrix.arch }}/image.json
+          key: compute-kernel-${{ matrix.arch }}-${{ hashFiles('mesh/crates/mesh-llm-compute-guest/image/kernel.config', 'mesh/crates/mesh-llm-compute-guest/image/build-kernel.sh', 'mesh/crates/mesh-llm-compute-guest/image/builder.Dockerfile') }}
       - name: Build the guest image
-        run: mesh/crates/mesh-llm-sandbox-guest/image/build.sh "$RUNNER_TEMP/sandbox-images"
+        run: mesh/crates/mesh-llm-compute-guest/image/build.sh "$RUNNER_TEMP/compute-images"
       - name: Archive it and record its pin
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -76,23 +76,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/pin"
-          digest="$(mesh/crates/mesh-llm-sandbox-guest/image/archive.sh \
-            "$RUNNER_TEMP/sandbox-images" "$IMAGE_NAME" "$RELEASE_TAG" "$RUNNER_TEMP/release")"
+          digest="$(mesh/crates/mesh-llm-compute-guest/image/archive.sh \
+            "$RUNNER_TEMP/compute-images" "$IMAGE_NAME" "$RELEASE_TAG" "$RUNNER_TEMP/release")"
           printf '%s/%s=%s\n' "$IMAGE_NAME" "$ARCH" "$digest" > "$RUNNER_TEMP/pin/$ARCH"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: release-sandbox-image-${{ matrix.arch }}
+          name: release-compute-image-${{ matrix.arch }}
           path: ${{ runner.temp }}/release/*.tar.gz
           if-no-files-found: error
           compression-level: 0
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: sandbox-image-pin-${{ matrix.arch }}
+          name: compute-image-pin-${{ matrix.arch }}
           path: ${{ runner.temp }}/pin/${{ matrix.arch }}
           if-no-files-found: error
 
   pins:
-    name: Sandbox image pins
+    name: Compute image pins
     needs: images
     runs-on: ubuntu-24.04
     outputs:
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: sandbox-image-pin-*
+          pattern: compute-image-pin-*
           path: pins
           merge-multiple: true
       - id: pins
@@ -114,7 +114,7 @@ jobs:
           echo "pins=$pins" >> "$GITHUB_OUTPUT"
 
   plugin:
-    name: Sandbox plugin ${{ matrix.target }}
+    name: Compute plugin ${{ matrix.target }}
     needs: pins
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -136,8 +136,8 @@ jobs:
             os: ubuntu-24.04
             features: --no-default-features
     env:
-      MESH_SANDBOX_IMAGE_PINS: ${{ needs.pins.outputs.pins }}
-      MESH_SANDBOX_RELEASE_TAG: ${{ inputs.tag }}
+      MESH_COMPUTE_IMAGE_PINS: ${{ needs.pins.outputs.pins }}
+      MESH_COMPUTE_RELEASE_TAG: ${{ inputs.tag }}
     defaults:
       run:
         shell: bash
@@ -162,29 +162,29 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # FEATURES is a flag list or empty
-          cargo build --release --locked -p mesh-llm-sandbox-plugin --target "$TARGET" $FEATURES
+          cargo build --release --locked -p mesh-llm-compute-plugin --target "$TARGET" $FEATURES
           mkdir -p "$RUNNER_TEMP/bin"
-          binary="target/$TARGET/release/mesh-sandbox"
+          binary="target/$TARGET/release/mesh-compute"
           [[ "$TARGET" == *windows* ]] && binary="$binary.exe"
           cp "$binary" "$RUNNER_TEMP/bin/"
       - name: Sign with the virtualization entitlement
         if: runner.os == 'macOS'
-        run: mesh/crates/mesh-llm-sandbox-plugin/packaging/sign-macos.sh "$RUNNER_TEMP/bin/mesh-sandbox"
+        run: mesh/crates/mesh-llm-compute-plugin/packaging/sign-macos.sh "$RUNNER_TEMP/bin/mesh-compute"
       - name: Check the binary runs and write its package manifest
         if: matrix.target != 'x86_64-unknown-linux-musl'
         run: |
           set -euo pipefail
-          binary="$(ls "$RUNNER_TEMP"/bin/mesh-sandbox*)"
+          binary="$(ls "$RUNNER_TEMP"/bin/mesh-compute*)"
           "$binary" --version
           "$binary" --print-package-manifest > "$RUNNER_TEMP/bin/plugin-manifest.json"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: sandbox-bin-${{ matrix.target }}
+          name: compute-bin-${{ matrix.target }}
           path: ${{ runner.temp }}/bin/*
           if-no-files-found: error
 
   package:
-    name: Package sandbox plugin
+    name: Package compute plugin
     needs: plugin
     runs-on: ubuntu-24.04
     steps:
@@ -194,35 +194,35 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: sandbox-bin-*
+          pattern: compute-bin-*
           path: bins
       - name: Package every target
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          package=mesh/crates/mesh-llm-sandbox-plugin/packaging/package.sh
-          manifest=bins/sandbox-bin-x86_64-unknown-linux-gnu/plugin-manifest.json
+          package=mesh/crates/mesh-llm-compute-plugin/packaging/package.sh
+          manifest=bins/compute-bin-x86_64-unknown-linux-gnu/plugin-manifest.json
           # Every build describes the same plugin; refuse to ship if not.
           for other in bins/*/plugin-manifest.json; do
             cmp -s "$manifest" "$other" || { echo "::error::$other differs from $manifest" >&2; exit 1; }
           done
           for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
             "$package" --target "$target" --tag "$RELEASE_TAG" --manifest "$manifest" \
-              --binary "bins/sandbox-bin-$target/mesh-sandbox" --out release
+              --binary "bins/compute-bin-$target/mesh-compute" --out release
           done
           "$package" --target x86_64-pc-windows-msvc --tag "$RELEASE_TAG" --manifest "$manifest" \
-            --binary bins/sandbox-bin-x86_64-pc-windows-msvc/mesh-sandbox.exe \
-            --linux-binary bins/sandbox-bin-x86_64-unknown-linux-musl/mesh-sandbox --out release
+            --binary bins/compute-bin-x86_64-pc-windows-msvc/mesh-compute.exe \
+            --linux-binary bins/compute-bin-x86_64-unknown-linux-musl/mesh-compute --out release
           ls -l release
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: release-sandbox-plugin
+          name: release-compute-plugin
           path: release/*
           if-no-files-found: error
 
   smoke:
-    name: Sandbox smoke test (Linux x86_64, KVM)
+    name: Compute plugin smoke test (Linux x86_64, KVM)
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -235,23 +235,23 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-sandbox-plugin
+          name: release-compute-plugin
           path: release
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-sandbox-image-x86_64
+          name: release-compute-image-x86_64
           path: mirror/${{ inputs.tag }}
       - name: Install the plugin and boot sandboxes from the published images
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          tar -xzf "release/sandbox-$RELEASE_TAG-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf "release/compute-$RELEASE_TAG-x86_64-unknown-linux-gnu.tar.gz"
           # Serve the image like the release will, so the check downloads it
           # and verifies the pin compiled into the plugin.
           docker run -d --rm --name mirror -p 127.0.0.1:8080:80 \
             -v "$PWD/mirror:/usr/share/nginx/html:ro" nginx:1.27-alpine
           for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:8080/ && break; sleep 1; done
           settings="{\"state_dir\":\"$RUNNER_TEMP/sandbox\",\"image_url\":\"http://127.0.0.1:8080\"}"
-          MESH_SANDBOX_SETTINGS="$settings" sandbox/sandbox check
-          MESH_SANDBOX_SETTINGS="$settings" sandbox/sandbox check --bridge
+          MESH_COMPUTE_SETTINGS="$settings" compute/compute check
+          MESH_COMPUTE_SETTINGS="$settings" compute/compute check --bridge

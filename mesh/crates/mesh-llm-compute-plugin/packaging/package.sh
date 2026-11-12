@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assembles one `sandbox` plugin archive for `mesh-llm plugins install`.
+# Assembles one `compute` plugin archive for `mesh-llm plugins install`.
 #
 #   package.sh --target <triple> --tag <release-tag> --binary <path> \
 #              --manifest <plugin-manifest.json> --out <dir> \
@@ -48,42 +48,42 @@ fetch_firecracker() {
         exit 1
     fi
     tar -xzf "$tarball" -C "$work"
-    mkdir -p "$dir" "$stage/sandbox/licenses/firecracker"
+    mkdir -p "$dir" "$stage/compute/licenses/firecracker"
     install -m 0755 "$work/release-$fc_version-$arch/firecracker-$fc_version-$arch" "$dir/firecracker"
-    cp "$work/release-$fc_version-$arch/"{LICENSE,NOTICE,THIRD-PARTY} "$stage/sandbox/licenses/firecracker/"
+    cp "$work/release-$fc_version-$arch/"{LICENSE,NOTICE,THIRD-PARTY} "$stage/compute/licenses/firecracker/"
     rm -rf "$work"
 }
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/sandbox" "$out"
-cp "$crate/README.md" "$stage/sandbox/"
-printf 'name = "sandbox"\nversion = "%s"\n' "${tag#v}" > "$stage/sandbox/plugin.toml"
-cp "$manifest" "$stage/sandbox/plugin-manifest.json"
+mkdir -p "$stage/compute" "$out"
+cp "$crate/README.md" "$stage/compute/"
+printf 'name = "compute"\nversion = "%s"\n' "${tag#v}" > "$stage/compute/plugin.toml"
+cp "$manifest" "$stage/compute/plugin-manifest.json"
 
 case "$target" in
     *-windows-msvc)
-        cp "$binary" "$stage/sandbox/sandbox.exe"
+        cp "$binary" "$stage/compute/compute.exe"
         if [ "$target" = x86_64-pc-windows-msvc ]; then
             [ -n "$linux_binary" ] || { echo "package.sh: Windows needs --linux-binary" >&2; exit 2; }
-            mkdir -p "$stage/sandbox/linux"
-            install -m 0755 "$linux_binary" "$stage/sandbox/linux/mesh-sandbox"
-            fetch_firecracker x86_64 "$stage/sandbox/linux"
+            mkdir -p "$stage/compute/linux"
+            install -m 0755 "$linux_binary" "$stage/compute/linux/mesh-compute"
+            fetch_firecracker x86_64 "$stage/compute/linux"
         fi
-        archive="$out/sandbox-$tag-$target.zip"
+        archive="$out/compute-$tag-$target.zip"
         rm -f "$archive"
-        (cd "$stage" && zip -qrX "$archive" sandbox)
+        (cd "$stage" && zip -qrX "$archive" compute)
         ;;
     *-linux-gnu)
-        install -m 0755 "$binary" "$stage/sandbox/sandbox"
-        fetch_firecracker "${target%%-*}" "$stage/sandbox"
-        archive="$out/sandbox-$tag-$target.tar.gz"
-        tar -czf "$archive" -C "$stage" sandbox
+        install -m 0755 "$binary" "$stage/compute/sandbox"
+        fetch_firecracker "${target%%-*}" "$stage/compute"
+        archive="$out/compute-$tag-$target.tar.gz"
+        tar -czf "$archive" -C "$stage" compute
         ;;
     *-apple-darwin)
-        install -m 0755 "$binary" "$stage/sandbox/sandbox"
-        archive="$out/sandbox-$tag-$target.tar.gz"
-        tar -czf "$archive" -C "$stage" sandbox
+        install -m 0755 "$binary" "$stage/compute/sandbox"
+        archive="$out/compute-$tag-$target.tar.gz"
+        tar -czf "$archive" -C "$stage" compute
         ;;
     *) echo "package.sh: unsupported target $target" >&2; exit 2 ;;
 esac

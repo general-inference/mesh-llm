@@ -18,7 +18,7 @@ use crate::spec::SandboxSpec;
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
-    /// Scratch disks, sockets, snapshots. Default `~/.mesh-llm/sandbox`.
+    /// Scratch disks, sockets, snapshots. Default `~/.mesh-llm/compute`.
     pub state_dir: Option<PathBuf>,
     /// Guest images. Default `<state_dir>/images`.
     pub images_dir: Option<PathBuf>,
@@ -72,13 +72,13 @@ impl Settings {
         if trimmed.is_empty() {
             return Ok(Self::default());
         }
-        serde_json::from_str(trimmed).context("invalid sandbox plugin settings")
+        serde_json::from_str(trimmed).context("invalid compute plugin settings")
     }
 
     pub fn state_dir(&self) -> PathBuf {
         self.state_dir
             .clone()
-            .unwrap_or_else(|| home_dir().join(".mesh-llm").join("sandbox"))
+            .unwrap_or_else(|| home_dir().join(".mesh-llm").join("compute"))
     }
 
     pub fn images_dir(&self) -> PathBuf {
@@ -148,7 +148,7 @@ impl Settings {
         config_schema(PLUGIN_ID)
             .setting(
                 config_setting("state_dir", config_string()).description(
-                    "Scratch disks, sockets and snapshots. Default ~/.mesh-llm/sandbox.",
+                    "Scratch disks, sockets and snapshots. Default ~/.mesh-llm/compute.",
                 ),
             )
             .setting(

@@ -7,7 +7,7 @@
 //! to it; results come back over channels.
 //!
 //! The process needs the `com.apple.security.virtualization` entitlement.
-//! `just sandbox-sign` signs a development build with it.
+//! `just compute-sign` signs a development build with it.
 
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
-use mesh_llm_sandbox_guest::protocol::{AGENT_PORT, EGRESS_PORT};
+use mesh_llm_compute_guest::protocol::{AGENT_PORT, EGRESS_PORT};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, DefinedClass, Message, define_class, msg_send};
@@ -76,7 +76,7 @@ impl Backend for VzBackend {
             scratch,
             console: console.clone(),
         };
-        let queue = DispatchQueue::new(&format!("mesh-sandbox.{}", spec.id), None);
+        let queue = DispatchQueue::new(&format!("mesh-compute.{}", spec.id), None);
         let (started_tx, started_rx) = oneshot::channel();
         let (egress_tx, egress_rx) = mpsc::unbounded_channel();
         let cpus = spec.cpus;
@@ -306,7 +306,7 @@ struct EgressIvars {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "MeshSandboxEgressListener"]
+    #[name = "MeshComputeEgressListener"]
     #[ivars = EgressIvars]
     struct EgressDelegate;
 

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use mesh_llm_sandbox_guest::protocol::{AGENT_PORT, EGRESS_PORT};
+use mesh_llm_compute_guest::protocol::{AGENT_PORT, EGRESS_PORT};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -258,7 +258,7 @@ mod tests {
             config["boot-source"]["boot_args"]
                 .as_str()
                 .unwrap()
-                .contains("init=/sbin/mesh-sandbox-guest")
+                .contains("init=/sbin/mesh-compute-guest")
         );
         assert_eq!(
             egress_socket(Path::new("/run/sbx/vsock.sock")),

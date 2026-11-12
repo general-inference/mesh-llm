@@ -2,8 +2,10 @@
 //!
 //! Launched by mesh-llm with no arguments, it serves the plugin protocol. The
 //! Linux build also has a `wsl-bridge` mode, which the Windows build starts
-//! inside WSL2 to run Firecracker there.
+//! inside WSL2 to run Firecracker there. `mesh-sandbox check` boots a sandbox
+//! on this machine and exercises it.
 
+mod check;
 mod egress;
 mod guest;
 mod images;
@@ -30,13 +32,15 @@ pub fn now_ms() -> u64 {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         None => {
             let app = Arc::new(plugin::App::default());
             mesh_llm_plugin::PluginRuntime::run(plugin::build(app)).await
         }
         #[cfg(target_os = "linux")]
         Some("wsl-bridge") => vm::bridge::serve_stdio().await,
+        Some("check") => check::run(args.iter().any(|arg| arg == "--offline")).await,
         Some("--version") => {
             println!("mesh-sandbox {}", env!("CARGO_PKG_VERSION"));
             Ok(())

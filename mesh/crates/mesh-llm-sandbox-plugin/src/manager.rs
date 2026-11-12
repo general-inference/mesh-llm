@@ -684,7 +684,7 @@ mod tests {
         if let Ok(mut map) = manager.sandboxes.lock()
             && let Some(sandbox) = map.get_mut(&info.sandbox_id)
         {
-            let mut expired = (**sandbox).info.clone();
+            let mut expired = sandbox.info.clone();
             expired.expires_ms = 0;
             *sandbox = Arc::new(Sandbox {
                 info: expired,

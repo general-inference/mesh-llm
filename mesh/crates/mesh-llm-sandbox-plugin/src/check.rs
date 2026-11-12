@@ -3,6 +3,8 @@
 //!
 //! Reads the same settings the plugin gets, as JSON in `MESH_SANDBOX_SETTINGS`
 //! (default `{}`). Steps that need the network are skipped with `--offline`.
+//! On Linux, `--bridge` drives Firecracker through the WSL bridge run as a
+//! local process, which covers the Windows path short of WSL itself.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,10 +17,14 @@ use crate::manager::{Caller, Manager};
 use crate::settings::Settings;
 use crate::spec::{Resources, SandboxSpec};
 
-pub async fn run(offline: bool) -> Result<()> {
+pub async fn run(offline: bool, bridge: bool) -> Result<()> {
     let settings_json = std::env::var("MESH_SANDBOX_SETTINGS").unwrap_or_else(|_| "{}".into());
     let settings = Settings::parse(&settings_json)?;
-    let backend = crate::vm::detect(&settings).await?;
+    let backend: Arc<dyn crate::vm::Backend> = if bridge {
+        bridged(&settings).await?
+    } else {
+        crate::vm::detect(&settings).await?
+    };
     println!("backend: {}", backend.name());
     let manager = Arc::new(Manager::new(settings, Ok(backend))?);
     let result = exercise(&manager, offline).await;
@@ -28,6 +34,16 @@ pub async fn run(offline: bool) -> Result<()> {
     result?;
     println!("check passed");
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn bridged(settings: &Settings) -> Result<Arc<dyn crate::vm::Backend>> {
+    Ok(Arc::new(crate::vm::wsl::start_local(settings).await?))
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn bridged(_settings: &Settings) -> Result<Arc<dyn crate::vm::Backend>> {
+    bail!("--bridge runs the WSL bridge locally and is only available on Linux")
 }
 
 async fn exercise(manager: &Manager, offline: bool) -> Result<()> {

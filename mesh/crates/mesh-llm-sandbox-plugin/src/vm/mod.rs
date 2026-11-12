@@ -14,7 +14,7 @@ pub mod fake;
 pub mod firecracker;
 #[cfg(target_os = "macos")]
 pub mod vz;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod wsl;
 
 use std::path::PathBuf;
@@ -93,7 +93,7 @@ pub async fn detect(settings: &crate::settings::Settings) -> Result<Arc<dyn Back
     }
     #[cfg(windows)]
     {
-        Ok(Arc::new(wsl::WslBackend::start(settings).await?))
+        Ok(Arc::new(wsl::start_wsl(settings).await?))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {

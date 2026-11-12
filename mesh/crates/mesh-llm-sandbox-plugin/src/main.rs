@@ -40,7 +40,10 @@ async fn main() -> anyhow::Result<()> {
         }
         #[cfg(target_os = "linux")]
         Some("wsl-bridge") => vm::bridge::serve_stdio().await,
-        Some("check") => check::run(args.iter().any(|arg| arg == "--offline")).await,
+        Some("check") => {
+            let flag = |name: &str| args.iter().any(|arg| arg == name);
+            check::run(flag("--offline"), flag("--bridge")).await
+        }
         Some("--version") => {
             println!("mesh-sandbox {}", env!("CARGO_PKG_VERSION"));
             Ok(())

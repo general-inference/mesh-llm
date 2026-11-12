@@ -3,7 +3,10 @@
 //! Each sandbox is one `firecracker --no-api --config-file` process. Its vsock
 //! device is a Unix socket on the host: the host reaches the guest agent by
 //! connecting to it and sending `CONNECT <port>`, and guest connections to
-//! host port `P` arrive on the listener at `<socket>_P`.
+//! host port `P` arrive on the listener at `<socket>_P`. Unix socket paths
+//! are limited to about 100 bytes, so these sockets live in a short private
+//! directory under `/tmp` rather than in the (arbitrarily deep) state
+//! directory.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,7 +24,7 @@ use tokio::task::JoinHandle;
 
 use super::{Backend, BoxStream, LaunchSpec, Vm, kernel_cmdline};
 
-const VSOCK_SOCKET: &str = "vsock.sock";
+const VSOCK_SOCKET: &str = "v.sock";
 const CONFIG_FILE: &str = "firecracker.json";
 const CONSOLE_LOG: &str = "console.log";
 const GUEST_CID: u32 = 3;
@@ -74,7 +77,8 @@ impl Backend for FirecrackerBackend {
 /// Boots a VM; shared with the WSL bridge, which runs this inside WSL2.
 pub async fn launch(binary: &Path, spec: LaunchSpec) -> Result<FirecrackerVm> {
     let scratch = super::create_scratch(&spec.work_dir, spec.scratch_bytes)?;
-    let vsock = spec.work_dir.join(VSOCK_SOCKET);
+    let sockets = SocketDir(Some(socket_dir(&spec.id)?));
+    let vsock = sockets.path().join(VSOCK_SOCKET);
     let egress_listener =
         UnixListener::bind(egress_socket(&vsock)).context("bind the egress vsock listener")?;
     let config = spec.work_dir.join(CONFIG_FILE);
@@ -115,6 +119,7 @@ pub async fn launch(binary: &Path, spec: LaunchSpec) -> Result<FirecrackerVm> {
     Ok(FirecrackerVm {
         child: tokio::sync::Mutex::new(Some(child)),
         vsock,
+        sockets: sockets.keep(),
         console,
         egress_task: Mutex::new(Some(egress_task)),
     })
@@ -151,6 +156,50 @@ fn config_json(spec: &LaunchSpec, scratch: &Path, vsock: &Path) -> serde_json::V
     })
 }
 
+/// A fresh `/tmp/mesh-compute-<uid>/<id>` for one VM's sockets, in a parent
+/// only this user can enter.
+fn socket_dir(id: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    // SAFETY: `getuid` has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    let base = PathBuf::from(format!("/tmp/mesh-compute-{uid}"));
+    match std::fs::create_dir(&base) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).with_context(|| format!("create {}", base.display())),
+    }
+    let metadata = std::fs::symlink_metadata(&base)?;
+    if !metadata.is_dir() || metadata.uid() != uid {
+        bail!("{} is not a directory owned by this user", base.display());
+    }
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+    let dir = base.join(id);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Removes a VM's socket directory if the VM never starts.
+struct SocketDir(Option<PathBuf>);
+
+impl SocketDir {
+    fn path(&self) -> &Path {
+        self.0.as_deref().unwrap_or_else(|| Path::new(""))
+    }
+
+    fn keep(mut self) -> PathBuf {
+        self.0.take().unwrap_or_default()
+    }
+}
+
+impl Drop for SocketDir {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 fn egress_socket(vsock: &Path) -> PathBuf {
     let mut name = vsock.as_os_str().to_owned();
     name.push(format!("_{EGRESS_PORT}"));
@@ -160,6 +209,7 @@ fn egress_socket(vsock: &Path) -> PathBuf {
 pub struct FirecrackerVm {
     child: tokio::sync::Mutex<Option<Child>>,
     vsock: PathBuf,
+    sockets: PathBuf,
     console: PathBuf,
     egress_task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -179,15 +229,14 @@ impl Vm for FirecrackerVm {
         {
             task.abort();
         }
-        let Some(mut child) = self.child.lock().await.take() else {
-            return;
-        };
-        if tokio::time::timeout(STOP_GRACE, child.wait())
-            .await
-            .is_err()
+        if let Some(mut child) = self.child.lock().await.take()
+            && tokio::time::timeout(STOP_GRACE, child.wait())
+                .await
+                .is_err()
         {
             let _ = child.kill().await;
         }
+        let _ = std::fs::remove_dir_all(&self.sockets);
     }
 
     fn console_log(&self) -> Option<PathBuf> {
@@ -249,7 +298,7 @@ mod tests {
         let config = config_json(
             &spec,
             Path::new("/run/sbx/scratch.img"),
-            Path::new("/run/sbx/vsock.sock"),
+            Path::new("/run/sbx/v.sock"),
         );
         assert_eq!(config["drives"][0]["is_read_only"], true);
         assert_eq!(config["drives"][1]["is_read_only"], false);
@@ -261,8 +310,8 @@ mod tests {
                 .contains("init=/sbin/mesh-compute-guest")
         );
         assert_eq!(
-            egress_socket(Path::new("/run/sbx/vsock.sock")),
-            PathBuf::from(format!("/run/sbx/vsock.sock_{EGRESS_PORT}"))
+            egress_socket(Path::new("/run/sbx/v.sock")),
+            PathBuf::from(format!("/run/sbx/v.sock_{EGRESS_PORT}"))
         );
     }
 

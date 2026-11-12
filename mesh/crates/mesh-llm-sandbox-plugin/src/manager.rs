@@ -472,3 +472,245 @@ impl Drop for SlotGuard<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::egress::EgressMode;
+    use crate::images::{KERNEL_FILE, ROOTFS_FILE};
+    use crate::ops::{Op, OpResult, run};
+    use crate::vm::fake::FakeBackend;
+
+    fn manager(dir: &std::path::Path, settings: Settings) -> Manager {
+        let image = dir.join("images").join("base").join(guest_arch());
+        std::fs::create_dir_all(&image).unwrap();
+        std::fs::write(image.join(KERNEL_FILE), b"k").unwrap();
+        std::fs::write(image.join(ROOTFS_FILE), b"r").unwrap();
+        let settings = Settings {
+            state_dir: Some(dir.to_path_buf()),
+            images_dir: Some(dir.join("images")),
+            ..settings
+        };
+        Manager::new(settings, Ok(Arc::new(FakeBackend::default()))).unwrap()
+    }
+
+    fn peer(name: &str) -> Caller {
+        Caller::Peer(name.into())
+    }
+
+    #[tokio::test]
+    async fn a_sandbox_runs_commands_and_keeps_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(dir.path(), Settings::default());
+        let info = manager
+            .create(Caller::Local, SandboxSpec::default(), None)
+            .await
+            .unwrap();
+        let output = manager
+            .exec(
+                &Caller::Local,
+                &info.sandbox_id,
+                ExecRequest {
+                    shell: Some("echo hi".into()),
+                    ..ExecRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(output.stdout, b"hi\n");
+        assert_eq!(output.status.code, Some(0));
+
+        manager
+            .write_file(
+                &Caller::Local,
+                &info.sandbox_id,
+                "/workspace/a",
+                b"one",
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        manager
+            .write_file(
+                &Caller::Local,
+                &info.sandbox_id,
+                "/workspace/a",
+                b"two",
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        let (data, size, truncated) = manager
+            .read_file(&Caller::Local, &info.sandbox_id, "/workspace/a", 4)
+            .await
+            .unwrap();
+        assert_eq!((data.as_slice(), size, truncated), (&b"onet"[..], 6, true));
+    }
+
+    #[tokio::test]
+    async fn peers_only_reach_their_own_sandboxes_and_the_operator_sees_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(dir.path(), Settings::default());
+        let alice = manager
+            .create(peer("alice"), SandboxSpec::default(), None)
+            .await
+            .unwrap();
+        assert_eq!(alice.owner, "alice");
+        let bob = peer("bob");
+        assert!(manager.list(&bob).is_empty());
+        assert!(
+            manager
+                .list_dir(&bob, &alice.sandbox_id, "/workspace")
+                .await
+                .is_err()
+        );
+        assert!(manager.destroy(&bob, &alice.sandbox_id).await.is_err());
+        assert_eq!(manager.list(&Caller::Local).len(), 1);
+        manager
+            .destroy(&Caller::Local, &alice.sandbox_id)
+            .await
+            .unwrap();
+        assert!(manager.list(&peer("alice")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn limits_refuse_rather_than_shrink() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(
+            dir.path(),
+            Settings {
+                max_sandboxes: 1,
+                accept_remote: false,
+                max_egress: EgressMode::Allowlist,
+                ..Settings::default()
+            },
+        );
+        let mut open = SandboxSpec::default();
+        open.egress.mode = EgressMode::Open;
+        assert!(manager.create(Caller::Local, open, None).await.is_err());
+        assert!(
+            manager
+                .create(peer("p"), SandboxSpec::default(), None)
+                .await
+                .is_err()
+        );
+        manager
+            .create(Caller::Local, SandboxSpec::default(), None)
+            .await
+            .unwrap();
+        let error = manager
+            .create(Caller::Local, SandboxSpec::default(), None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("limit of 1"), "{error}");
+        assert_eq!(manager.capacity().free_slots, 0);
+    }
+
+    #[tokio::test]
+    async fn snapshots_restore_into_a_new_sandbox_through_the_op_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(dir.path(), Settings::default());
+        let caller = peer("alice");
+        let OpResult::Sandbox(first) = run(
+            &manager,
+            &caller,
+            Op::Create {
+                spec: SandboxSpec::default(),
+            },
+            None,
+        )
+        .await
+        .unwrap() else {
+            panic!("expected a sandbox");
+        };
+        run(
+            &manager,
+            &caller,
+            Op::WriteFile {
+                sandbox_id: first.sandbox_id.clone(),
+                path: "/workspace/notes.md".into(),
+                data: b"remember".to_vec(),
+                mode: None,
+                append: false,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let snapshot = manager.snapshot(&caller, &first.sandbox_id).await.unwrap();
+        let OpResult::SnapshotChunk { data, total } = run(
+            &manager,
+            &peer("someone-else"),
+            Op::SnapshotChunk {
+                snapshot_id: snapshot.snapshot_id.clone(),
+                offset: 0,
+                len: 1 << 20,
+            },
+            None,
+        )
+        .await
+        .unwrap() else {
+            panic!("expected a chunk");
+        };
+        assert_eq!(total, data.len() as u64);
+        let second = manager
+            .create(caller.clone(), SandboxSpec::default(), Some(data))
+            .await
+            .unwrap();
+        let (restored, _, _) = manager
+            .read_file(&caller, &second.sandbox_id, "/workspace/notes.md", 64)
+            .await
+            .unwrap();
+        assert_eq!(restored, b"remember");
+        assert!(
+            manager
+                .snapshot_chunk("snap-../../etc", 0, 1)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_sandboxes_are_reaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = manager(dir.path(), Settings::default());
+        let info = manager
+            .create(Caller::Local, SandboxSpec::default(), None)
+            .await
+            .unwrap();
+        if let Ok(mut map) = manager.sandboxes.lock()
+            && let Some(sandbox) = map.get_mut(&info.sandbox_id)
+        {
+            let mut expired = (**sandbox).info.clone();
+            expired.expires_ms = 0;
+            *sandbox = Arc::new(Sandbox {
+                info: expired,
+                owner: sandbox.owner.clone(),
+                env: sandbox.env.clone(),
+                vm: Box::new(NoVm),
+                egress_log: sandbox.egress_log.clone(),
+                dir: sandbox.dir.clone(),
+            });
+        }
+        manager.reap().await;
+        assert!(manager.list(&Caller::Local).is_empty());
+    }
+
+    struct NoVm;
+
+    #[async_trait::async_trait]
+    impl Vm for NoVm {
+        async fn connect_agent(&self) -> Result<crate::vm::BoxStream> {
+            bail!("stopped")
+        }
+
+        async fn stop(&self) {}
+
+        fn console_log(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+}

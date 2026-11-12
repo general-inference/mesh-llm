@@ -8,6 +8,8 @@
 
 #[cfg(any(target_os = "linux", windows))]
 pub mod bridge;
+#[cfg(test)]
+pub mod fake;
 #[cfg(target_os = "linux")]
 pub mod firecracker;
 #[cfg(target_os = "macos")]
@@ -44,6 +46,8 @@ pub struct LaunchSpec {
     pub cpus: u32,
     pub memory_mib: u64,
     /// Per-sandbox directory for sockets and logs; removed with the sandbox.
+    /// The WSL bridge keeps its own inside WSL.
+    #[cfg_attr(windows, allow(dead_code))]
     pub work_dir: PathBuf,
     pub on_egress: EgressHandler,
 }
@@ -65,6 +69,7 @@ pub trait Backend: Send + Sync {
     async fn launch(&self, spec: LaunchSpec) -> Result<Box<dyn Vm>>;
 }
 
+#[cfg(unix)]
 /// The kernel command line every backend boots the guest with, after its
 /// own console argument. The image disk is the read-only root.
 pub fn kernel_cmdline(console: &str) -> String {
@@ -97,9 +102,11 @@ pub async fn detect(settings: &crate::settings::Settings) -> Result<Arc<dyn Back
     }
 }
 
-pub const SCRATCH_FILE: &str = "scratch.img";
+#[cfg(unix)]
+const SCRATCH_FILE: &str = "scratch.img";
 
 /// Creates the sparse scratch disk in `dir`.
+#[cfg(unix)]
 pub fn create_scratch(dir: &std::path::Path, bytes: u64) -> Result<PathBuf> {
     let path = dir.join(SCRATCH_FILE);
     let file = std::fs::File::create(&path)?;

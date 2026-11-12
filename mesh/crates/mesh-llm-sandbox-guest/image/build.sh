@@ -47,9 +47,14 @@ docker run --rm -v "$work:/work" -e OWNER="$(id -u):$(id -g)" mesh-sandbox-build
     mkfs.ext4 -q -F -L sandbox-root -O ^has_journal -d /work/root /work/rootfs.ext4 "$(( size + size / 5 + 256 ))M"
     chown "$OWNER" /work/rootfs.ext4'
 
-echo "==> kernel $kernel_version"
-docker run --rm -v "$work:/work" -v "$here:/image:ro" -e KERNEL_VERSION="$kernel_version" \
-    -e OWNER="$(id -u):$(id -g)" mesh-sandbox-builder bash -euo pipefail -c '/image/build-kernel.sh && chown "$OWNER" /work/kernel'
+if [ -f "$dest/kernel" ] && grep -q "\"kernel_version\": \"$kernel_version\"" "$dest/image.json" 2>/dev/null; then
+    echo "==> kernel $kernel_version (reusing $dest/kernel)"
+    cp "$dest/kernel" "$work/kernel"
+else
+    echo "==> kernel $kernel_version"
+    docker run --rm -v "$work:/work" -v "$here:/image:ro" -e KERNEL_VERSION="$kernel_version" \
+        -e OWNER="$(id -u):$(id -g)" mesh-sandbox-builder bash -euo pipefail -c '/image/build-kernel.sh && chown "$OWNER" /work/kernel'
+fi
 
 mkdir -p "$dest"
 mv "$work/kernel" "$dest/kernel"

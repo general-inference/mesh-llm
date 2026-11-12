@@ -55,6 +55,10 @@ impl FirecrackerBackend {
             )?;
         Ok(Self { binary })
     }
+
+    pub fn binary(&self) -> &Path {
+        &self.binary
+    }
 }
 
 #[async_trait]

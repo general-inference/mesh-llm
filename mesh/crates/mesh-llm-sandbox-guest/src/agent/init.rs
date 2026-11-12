@@ -23,8 +23,9 @@ const EXT4_MAGIC: [u8; 2] = [0x53, 0xEF];
 const HOSTNAME: &str = "sandbox";
 
 pub fn prepare_root() -> Result<()> {
-    mount("proc", "/proc", "proc", "")?;
-    mount("devtmpfs", "/dev", "devtmpfs", "")?;
+    // The kernel may have mounted /dev already (CONFIG_DEVTMPFS_MOUNT).
+    mount_unless_busy("proc", "/proc", "proc")?;
+    mount_unless_busy("devtmpfs", "/dev", "devtmpfs")?;
     mount("tmpfs", "/mnt", "tmpfs", "mode=0755")?;
     fs::create_dir_all(SCRATCH_MOUNT)?;
     fs::create_dir_all(NEW_ROOT)?;
@@ -151,6 +152,20 @@ fn mount_runtime_filesystems() -> Result<()> {
     Ok(())
 }
 
+fn mount_unless_busy(source: &str, target: &str, fstype: &str) -> Result<()> {
+    match mount(source, target, fstype, "") {
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                == Some(libc::EBUSY) =>
+        {
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 fn mount(source: &str, target: &str, fstype: &str, data: &str) -> Result<()> {
     if !Path::new(target).exists() {
         fs::create_dir_all(target)?;
@@ -170,9 +185,9 @@ fn mount(source: &str, target: &str, fstype: &str, data: &str) -> Result<()> {
         )
     };
     if rc != 0 {
-        bail!(
-            "mount {fstype} {source} on {target}: {}",
-            std::io::Error::last_os_error()
+        let error = std::io::Error::last_os_error();
+        return Err(
+            anyhow::Error::new(error).context(format!("mount {fstype} {source} on {target}"))
         );
     }
     Ok(())

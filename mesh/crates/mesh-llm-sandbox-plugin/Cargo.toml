@@ -1,0 +1,41 @@
+[package]
+name = "mesh-llm-sandbox-plugin"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "mesh-llm plugin that runs isolated microVM sandboxes across a private mesh"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mesh-sandbox"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+mesh-llm-plugin = { path = "../mesh-llm-plugin", version = "0.79.0" }
+mesh-llm-sandbox-guest = { path = "../mesh-llm-sandbox-guest", version = "0.79.0", features = ["tokio"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-virtualization = { version = "0.3", features = ["block2", "dispatch2"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -75,6 +75,8 @@ members = [
     "skippy/crates/llama-spec-bench",
     "mesh/crates/mesh-mixture-of-agents",
     "mesh/crates/mesh-llm-moa-plugin",
+    "mesh/crates/mesh-llm-sandbox-guest",
+    "mesh/crates/mesh-llm-sandbox-plugin",
     "tools/xtask",
     "tools/ci-controller",
     "tools/process-supervision",

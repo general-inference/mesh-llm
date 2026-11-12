@@ -5,7 +5,7 @@ compute-plugin profile="debug":
     cargo build {{ if profile == "release" { "--release" } else { "" } }} --locked -p mesh-llm-compute-plugin
     {{ if os() == "macos" { "mesh/crates/mesh-llm-compute-plugin/packaging/sign-macos.sh target/" + profile + "/mesh-compute" } else { "" } }}
 
-# Build the sandbox guest image (kernel + root filesystem) for this machine's architecture. Needs Docker.
+# Build the compute guest image (kernel + root filesystem) for this machine's architecture. Needs Docker.
 [unix]
 compute-image out=(home_dir / ".mesh-llm" / "compute" / "images"):
     mesh/crates/mesh-llm-compute-guest/image/build.sh "{{ out }}"
@@ -25,4 +25,4 @@ compute-package profile="release":
         --tag "v$version" --binary "target/{{ profile }}/mesh-compute" --manifest "$manifest" \
         --out target/compute-plugin)"
     echo "$archive"
-    echo "install: mesh-llm plugins install --archive $archive --name sandbox --version $version"
+    echo "install: mesh-llm plugins install --archive $archive --name compute --version $version"

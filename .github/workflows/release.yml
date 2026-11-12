@@ -2235,7 +2235,7 @@ jobs:
     name: Pin the compute plugin in the plugin catalog
     needs: [metadata, publish]
     # Stable releases only: the catalog is what `mesh-llm plugins install
-    # sandbox` resolves, and it pins exactly the archives published above.
+    # compute` resolves, and it pins exactly the archives published above.
     if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && needs.publish.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.preview != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20

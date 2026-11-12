@@ -11,6 +11,8 @@
 # already be signed (sign-macos.sh, which also verifies the entitlement);
 # packaging never changes their bytes, so it can run on any host.
 set -euo pipefail
+# macOS tar would add AppleDouble ._ files for extended attributes.
+export COPYFILE_DISABLE=1
 here="$(cd "$(dirname "$0")" && pwd)"
 crate="$(cd "$here/.." && pwd)"
 
@@ -75,13 +77,13 @@ case "$target" in
         (cd "$stage" && zip -qrX "$archive" compute)
         ;;
     *-linux-gnu)
-        install -m 0755 "$binary" "$stage/compute/sandbox"
+        install -m 0755 "$binary" "$stage/compute/compute"
         fetch_firecracker "${target%%-*}" "$stage/compute"
         archive="$out/compute-$tag-$target.tar.gz"
         tar -czf "$archive" -C "$stage" compute
         ;;
     *-apple-darwin)
-        install -m 0755 "$binary" "$stage/compute/sandbox"
+        install -m 0755 "$binary" "$stage/compute/compute"
         archive="$out/compute-$tag-$target.tar.gz"
         tar -czf "$archive" -C "$stage" compute
         ;;

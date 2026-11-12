@@ -69,9 +69,15 @@ async fn fetch_and_unpack(url: &str, staging: &Path, pin: &ImagePin) -> Result<(
 
 /// Streams `url` to `path` and returns the sha256 of what was written.
 async fn fetch(url: &str, path: &PathBuf) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .read_timeout(READ_TIMEOUT)
-        .build()?;
+    let mut builder = reqwest::Client::builder().read_timeout(READ_TIMEOUT);
+    if url.starts_with("http://") {
+        // A plain-HTTP mirror never needs TLS; trusting no roots means a host
+        // without a CA bundle can still use one.
+        builder = builder.tls_certs_only([]);
+    }
+    let client = builder
+        .build()
+        .context("set up downloads (an https image_url needs the system's CA certificates)")?;
     let mut response = client
         .get(url)
         .send()

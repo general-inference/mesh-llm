@@ -48,5 +48,5 @@ done
 [ -n "$MODEL_ID" ] || { echo "server published no model"; tail -40 "$ART/serve-datagen.log"; exit 1; }
 
 PORT="$PORT" MODEL_ID="$MODEL_ID" PROMPTS="$HERE/train-prompts.jsonl" DOMAINS="${BENCH_DOMAINS:?}" \
-  CONCURRENCY="$PARALLEL" python3 "$HERE/datagen.py"
+  CONCURRENCY="$PARALLEL" LIMIT="${BENCH_LIMIT:-0}" python3 "$HERE/datagen.py"
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

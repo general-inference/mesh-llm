@@ -78,6 +78,7 @@ def main():
     parser.add_argument("--only")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--arms", help="headroom arms to run, e.g. 'ngram' (default: all)")
+    parser.add_argument("--limit", type=int, help="datagen: prompts per domain (default: all)")
     args = parser.parse_args()
     rev = subprocess.run(["git", "rev-parse", args.rev], cwd=HERE, check=True, capture_output=True,
                          text=True).stdout.strip()
@@ -114,6 +115,7 @@ def main():
                     "BENCH_DFLASH_CAP": "7",
                     "BENCH_DOMAINS": domains,
                     **({"BENCH_ARMS": args.arms} if args.arms else {}),
+                    **({"BENCH_LIMIT": str(args.limit)} if args.limit else {}),
                     "BENCH_ALT_DRAFT_URL": ALT_DRAFT["url"], "BENCH_ALT_DRAFT_SHA256": ALT_DRAFT["sha256"],
                 },
                 "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",

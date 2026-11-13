@@ -21,6 +21,11 @@ URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
 
 items = [json.loads(line) for line in open(os.environ["PROMPTS"]) if line.strip()]
 items = [item for item in items if item["domain"] in DOMAINS]
+# LIMIT keeps the first N prompts of each domain, to bound long-reply domains.
+if int(os.environ.get("LIMIT") or 0):
+    kept = {}
+    items = [item for item in items if kept.setdefault(item["domain"], []).append(item) or
+             len(kept[item["domain"]]) <= int(os.environ["LIMIT"])]
 
 
 def answer(item):

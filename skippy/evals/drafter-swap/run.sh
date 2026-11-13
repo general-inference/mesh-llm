@@ -85,13 +85,24 @@ for pair in ${BENCH_SPECIALISTS:-}; do
     "$path" "$CAP" > "$ART/spec_$name.toml"
 done
 
+# The standalone suffix configuration from skippy/docs/SUFFIX_NGRAM_PROPOSER.md. Without a
+# proposal budget and verify window the proposer never drafts.
+cat > "$ART/ngram.toml" <<'TOML'
+[defaults.speculative]
+strategy = "ngram-suffix"
+ngram_min = 5
+ngram_max = 32
+ngram_max_proposal_tokens = 48
+verify_window_min_tokens = 1
+verify_window_max_tokens = 32
+TOML
+
 arm_args() {
   case "$1" in
     off) echo "--no-draft --speculative-strategy disabled" ;;
     dflash) echo "--config $ART/dflash.toml" ;;
     spec_*) echo "--config $ART/$1.toml" ;;
-    # The suffix proposer requires 3 <= min <= max <= 64; 5/32 is SUFFIX_NGRAM_PROPOSER.md's example.
-    ngram) echo "--no-draft --speculative-strategy ngram-suffix --speculative-ngram-min 5 --speculative-ngram-max 32" ;;
+    ngram) echo "--no-draft --config $ART/ngram.toml" ;;
     *) echo "unknown arm $1" >&2; exit 1 ;;
   esac
 }

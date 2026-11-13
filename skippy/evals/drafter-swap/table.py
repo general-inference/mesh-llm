@@ -31,9 +31,18 @@ def main():
     parser.add_argument("--state")
     args = parser.parse_args()
     state = json.loads(Path(args.state or HERE / "out" / f"{args.phase}-state.json").read_text())
+    # Reruns of single arms (out/<phase>-<arms>-state.json) ran on the same node as the
+    # job they complete; their arms fill in the ones that job lacks.
+    extra = {}
+    for path in sorted((HERE / "out").glob(f"{args.phase}-*-state.json")):
+        for job in json.loads(path.read_text())["jobs"]:
+            extra.setdefault(job["node"], {}).update(arms(job["job_id"]))
     rows = []
     for job in state["jobs"]:
         found = arms(job["job_id"])
+        for arm, row in extra.get(job["node"], {}).items():
+            if "groups" in row and "groups" not in found.get(arm, {}):
+                found[arm] = row
         for prefix in ("", "agent_"):
             off = found.get(f"{prefix}off")
             if not off or "groups" not in off:
@@ -45,7 +54,9 @@ def main():
                     continue
                 row = {"workload": f"agent {group}" if prefix else group, "node": job["node"],
                        "off": base["tok_s"]}
-                for arm in ("dflash", "ngram"):
+                specs = sorted({a.removeprefix(prefix) for a in found
+                                if a.startswith(f"{prefix}spec_") and "groups" in found[a]})
+                for arm in ("dflash", "ngram", *specs):
                     got = (found.get(f"{prefix}{arm}") or {}).get("groups", {}).get(group)
                     row[arm] = got["tok_s"] if got else None
                     row[f"{arm}_accept"] = got["accept"] if got else None
@@ -54,13 +65,19 @@ def main():
     def f(value, spec):
         return format(value, spec) if value is not None else "–"
 
-    print("| Workload | Off tok/s | DFlash2 tok/s | × | accept | n-gram tok/s | × | accept | Node |")
-    print("|---|---:|---:|---:|---:|---:|---:|---:|---|")
+    arms_shown = ["dflash", "ngram"] + sorted({k for r in rows for k in r if k.startswith("spec_")
+                                                 and not k.endswith("_accept")})
+    names = {"dflash": "DFlash2", "ngram": "n-gram"}
+    print("| Workload | Off tok/s | " + " | ".join(f"{names.get(a, a)} tok/s | × | accept" for a in arms_shown)
+          + " | Node |")
+    print("|---|---:|" + "---:|---:|---:|" * len(arms_shown) + "---|")
     for r in rows:
-        ratio = lambda arm: r[arm] / r["off"] if r[arm] and r["off"] else None  # noqa: E731
-        print(f"| {r['workload']} | {f(r['off'], '.1f')} | {f(r['dflash'], '.1f')} | {f(ratio('dflash'), '.2f')} | "
-              f"{f(r['dflash_accept'], '.2f')} | {f(r['ngram'], '.1f')} | {f(ratio('ngram'), '.2f')} | "
-              f"{f(r['ngram_accept'], '.2f')} | {r['node']} |")
+        cells = []
+        for arm in arms_shown:
+            speed = r.get(arm)
+            cells += [f(speed, ".1f"), f(speed / r["off"] if speed and r["off"] else None, ".2f"),
+                      f(r.get(f"{arm}_accept"), ".2f")]
+        print(f"| {r['workload']} | {f(r['off'], '.1f')} | " + " | ".join(cells) + f" | {r['node']} |")
     (HERE / "out" / f"{args.phase}-table.json").write_text(json.dumps(rows, indent=1))
 
 

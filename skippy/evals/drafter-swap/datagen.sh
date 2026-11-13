@@ -3,7 +3,9 @@
 # BENCH_DOMAINS, served with its shipped DFlash2 draft and BENCH_PARALLEL slots.
 # Same inputs as run.sh. Run from the jy workspace root after dflash-defaults/build.sh.
 # BENCH_CONTINUE=1 instead continues the capped replies of data/train-<BENCH_DOMAINS>.jsonl
-# to completion (continue_replies.py).
+# to completion (continue_replies.py). BENCH_CTX overrides the server context.
+# Several lanes with DFlash and ~5K-token prompts killed the server without a log line
+# (2026-11-14), so continue with BENCH_PARALLEL=1.
 set -euo pipefail
 
 cd mesh-llm
@@ -36,7 +38,7 @@ printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\ndr
 
 PORT=9391
 "$BIN" --log-format json --parallel "$PARALLEL" --port "$PORT" --console $(( PORT + 600 )) --headless \
-  --config "$ART/dflash.toml" serve --model "$TARGET" --ctx-size $(( (4096 + ${BENCH_MAX_TOKENS:-1024}) * PARALLEL )) \
+  --config "$ART/dflash.toml" serve --model "$TARGET" --ctx-size "${BENCH_CTX:-$(( (4096 + ${BENCH_MAX_TOKENS:-1024}) * PARALLEL ))}" \
   >"$ART/serve-datagen.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT

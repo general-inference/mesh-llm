@@ -78,7 +78,8 @@ arm_args() {
   case "$1" in
     off) echo "--no-draft --speculative-strategy disabled" ;;
     dflash) echo "--config $ART/dflash.toml" ;;
-    ngram) echo "--no-draft --speculative-strategy ngram-suffix" ;;
+    # The suffix proposer requires 3 <= min <= max <= 64; 5/32 is SUFFIX_NGRAM_PROPOSER.md's example.
+    ngram) echo "--no-draft --speculative-strategy ngram-suffix --speculative-ngram-min 5 --speculative-ngram-max 32" ;;
     *) echo "unknown arm $1" >&2; exit 1 ;;
   esac
 }

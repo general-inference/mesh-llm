@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--tag", help="names this submission's spec and state files")
     parser.add_argument("--shard", help="datagen: 'i/n' share of the domain's prompts")
     parser.add_argument("--max-tokens", type=int, help="datagen and headroom: tokens per reply")
+    parser.add_argument("--env", action="append", default=[], help="KEY=VALUE for the job, e.g. LIMIT=100")
     args = parser.parse_args()
     rev = subprocess.run(["git", "rev-parse", args.rev], cwd=HERE, check=True, capture_output=True,
                          text=True).stdout.strip()
@@ -134,6 +135,7 @@ def main():
                     **({"BENCH_SPECIALISTS": args.specialists} if args.specialists else {}),
                     **({"BENCH_SHARD": args.shard} if args.shard else {}),
                     **({"BENCH_MAX_TOKENS": str(args.max_tokens)} if args.max_tokens else {}),
+                    **dict(pair.split("=", 1) for pair in args.env),
                     "BENCH_ALT_DRAFT_URL": ALT_DRAFT["url"], "BENCH_ALT_DRAFT_SHA256": ALT_DRAFT["sha256"],
                 },
                 "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",

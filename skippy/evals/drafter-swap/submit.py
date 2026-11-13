@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Submits drafter-swap jobs: one jy job per Spark, each owning some workloads.
 
-    submit.py [--phase headroom|datagen|swap] [--rev REV] [--dry-run] [--only NODE,...]
+    submit.py [--phase headroom|datagen|swap|trace] [--rev REV] [--dry-run] [--only NODE,...]
 
 headroom  measures off / shipped DFlash2 / n-gram per workload (run.sh)
 datagen   has the target answer train-prompts.jsonl, the drafters' training data (datagen.sh)
@@ -53,6 +53,9 @@ DATAGEN_ASSIGNMENT = {
     "spark-000499": "rust_gen",
 }
 PHASES = {
+    "trace": {"assignment": {}, "command": "trace.sh", "version": "drafter-swap-trace-1",
+              "trace": "workloads.jsonl", "requests": 120, "title": "Drafter swap trace",
+              "description": "Per-token draft acceptance of the shipped and a fine-tuned DFlash draft."},
     "swap": {"assignment": {"spark-000907": "agent,code_edit,code_review,html"}, "command": "swap_probe.sh",
              "version": "drafter-swap-probe-1", "trace": "workloads.jsonl", "requests": 40,
              "title": "Drafter swap probe",

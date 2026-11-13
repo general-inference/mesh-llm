@@ -22,6 +22,7 @@ pub(crate) fn generate_dflash(
 
     let mut current = *run.prompt_tokens.last().expect("checked non-empty prompt");
     let mut generated = Vec::with_capacity(run.max_new_tokens);
+    let mut from_draft = Vec::with_capacity(run.max_new_tokens);
     let mut stats = SpecStats::default();
     let mut target_decode_ms = 0.0;
     let mut draft_decode_ms = 0.0;
@@ -65,6 +66,7 @@ pub(crate) fn generate_dflash(
         let mut committed = 0usize;
         let mut stopped = false;
         for &token in predictions.iter().take(accepted + 1) {
+            from_draft.push(committed < accepted);
             generated.push(token);
             committed += 1;
             current = token;
@@ -85,6 +87,7 @@ pub(crate) fn generate_dflash(
 
     Ok(SpecGeneration {
         tokens: generated,
+        from_draft,
         stats,
         target_prefill_ms,
         draft_prefill_ms: 0.0,

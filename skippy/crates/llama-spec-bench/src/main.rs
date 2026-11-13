@@ -74,6 +74,13 @@ struct Args {
     dump_features: Option<PathBuf>,
     #[arg(long)]
     dump_dir: Option<PathBuf>,
+    /// Wrap each prompt as a Qwen chat turn with thinking off, as served.
+    #[arg(long)]
+    chat: bool,
+    /// Append each prompt's generated tokens, their text, and which came from
+    /// accepted drafts, as JSON lines (DFlash runs).
+    #[arg(long)]
+    trace_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +163,9 @@ struct Generation {
 #[derive(Debug)]
 struct SpecGeneration {
     tokens: Vec<i32>,
+    /// Per generated token: an accepted draft token rather than the target's
+    /// own. Recorded by the DFlash loop only.
+    from_draft: Vec<bool>,
     stats: SpecStats,
     target_prefill_ms: f64,
     draft_prefill_ms: f64,
@@ -279,6 +289,33 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn write_trace(
+    path: &Path,
+    target: &StageModel,
+    prompt: &PromptCase,
+    generation: &SpecGeneration,
+) -> Result<()> {
+    use std::io::Write;
+    let pieces = generation
+        .tokens
+        .iter()
+        .map(|token| target.detokenize(&[*token]))
+        .collect::<Result<Vec<_>>>()?;
+    let line = serde_json::json!({
+        "id": prompt.id,
+        "category": prompt.category,
+        "tokens": generation.tokens,
+        "pieces": pieces,
+        "from_draft": generation.from_draft,
+    });
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
 /// A user turn in Qwen's chat format with thinking off, so the probe drafts
 /// the reply a served request would get rather than a raw-text continuation.
 fn chat_prompt(prompt: &str) -> String {
@@ -381,8 +418,13 @@ struct Baseline {
 }
 
 fn run_baseline(args: &Args, target: &StageModel, prompt: &PromptCase) -> Result<Baseline> {
+    let text = if args.chat {
+        chat_prompt(&prompt.prompt)
+    } else {
+        prompt.prompt.clone()
+    };
     let target_tokens = target
-        .tokenize(&prompt.prompt, true)
+        .tokenize(&text, true)
         .with_context(|| format!("target tokenize prompt {}", prompt.id))?;
     if target_tokens.is_empty() {
         bail!("prompt {} produced no tokens", prompt.id);
@@ -492,6 +534,9 @@ fn run_prompt_pair(
         None => dflash::generate_dflash(target, run),
     }
     .with_context(|| format!("speculative target/draft generation for {}", prompt.id))?;
+    if let Some(path) = args.trace_out.as_ref() {
+        write_trace(path, target, prompt, &speculative)?;
+    }
 
     let mismatch_index = first_mismatch(&baseline.tokens, &speculative.tokens);
     let correct = tokenizer_match && mismatch_index.is_none();
@@ -650,6 +695,7 @@ fn generate_speculative(
 
     Ok(SpecGeneration {
         tokens: generated,
+        from_draft: Vec::new(),
         stats,
         target_prefill_ms,
         draft_prefill_ms,

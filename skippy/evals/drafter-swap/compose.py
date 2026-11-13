@@ -16,7 +16,8 @@ Routers:
                task kind: routine, agent, file type), with a swap at every change
   classifier   metadata routing, but a share --misroute of requests get a random other draft
 A request is `--reply` output tokens; workloads change between requests with probability
---switch. A swap costs its measured time plus the slower first windows the probe measured.
+--switch. A swap costs --swap-cost-s (measured: resident swap plus replay of the kept
+window), or with --probe its measured time plus the slower first windows of a cold restart.
 """
 
 import argparse
@@ -62,7 +63,8 @@ def simulate(matrix, mix, router, args, probe, rng):
                 want = rng.choice([d for d in drafts if d != want] or [want])
         if want != attached:
             swaps += 1
-            total_s += swap_penalty_s(probe, args.reply, args.rows_seen)
+            total_s += args.swap_cost_s if args.swap_cost_s is not None else \
+                swap_penalty_s(probe, args.reply, args.rows_seen)
             attached = want
         speed = row.get(attached) or row["generic"]
         total_s += args.reply / speed
@@ -79,6 +81,8 @@ def main():
     parser.add_argument("--reply", type=int, default=400)
     parser.add_argument("--switch", type=float, default=0.3)
     parser.add_argument("--misroute", type=float, default=0.1)
+    parser.add_argument("--swap-cost-s", type=float,
+                        help="fixed seconds per swap, in place of --probe")
     parser.add_argument("--rows-seen", type=int, default=256,
                         help="prompt rows the new draft sees before the reply (new turn's prefill)")
     args = parser.parse_args()

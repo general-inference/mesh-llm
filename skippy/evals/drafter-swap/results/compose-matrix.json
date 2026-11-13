@@ -1,0 +1,42 @@
+{
+ "html": {
+  "off": 64.5,
+  "generic": 95.6,
+  "html": 147.2,
+  "code_review": 93.5,
+  "rust_gen": 91.8,
+  "code_edit": 91.8
+ },
+ "code_review": {
+  "off": 62.3,
+  "generic": 77.1,
+  "html": 76.7,
+  "code_review": 79.2,
+  "rust_gen": 74.0,
+  "code_edit": 74.0
+ },
+ "prose": {
+  "off": 64.3,
+  "generic": 80.3,
+  "html": 79.9,
+  "code_review": 79.2,
+  "rust_gen": 78.6,
+  "code_edit": 77.1
+ },
+ "rust_gen": {
+  "off": 63.5,
+  "generic": 134.5,
+  "rust_gen": 138.1,
+  "code_edit": 131.2,
+  "html": 129.1,
+  "code_review": 129.1
+ },
+ "code_edit": {
+  "off": 58.9,
+  "generic": 127.7,
+  "rust_gen": 129.5,
+  "code_edit": 136.5,
+  "html": 122.6,
+  "code_review": 122.6
+ }
+}

@@ -1,0 +1,116 @@
+{
+ "jobs": {
+  "spark-000280 html": {
+   "html": {
+    "off": 64.5,
+    "generic": 95.6,
+    "html": 147.2
+   },
+   "code_review": {
+    "off": 62.3,
+    "generic": 77.1,
+    "html": 76.7
+   },
+   "prose": {
+    "off": 64.3,
+    "generic": 80.3,
+    "html": 79.9
+   }
+  },
+  "spark-000265 review": {
+   "html": {
+    "off": 64.3,
+    "generic": 95.7,
+    "review": 93.6
+   },
+   "code_review": {
+    "off": 63.2,
+    "generic": 79.0,
+    "review": 81.2
+   },
+   "prose": {
+    "off": 64.5,
+    "generic": 82.6,
+    "review": 81.5
+   }
+  },
+  "spark-000499 rust+edit": {
+   "rust_gen": {
+    "off": 63.5,
+    "generic": 134.5,
+    "rust": 138.1,
+    "edit": 131.2
+   },
+   "code_edit": {
+    "off": 58.9,
+    "generic": 127.7,
+    "rust": 129.5,
+    "edit": 136.5
+   },
+   "prose": {
+    "off": 63.9,
+    "generic": 82.0,
+    "rust": 80.3,
+    "edit": 78.7
+   }
+  }
+ },
+ "matrix": {
+  "html": {
+   "off": 64.5,
+   "generic": 95.6,
+   "html": 147.2,
+   "review": 93.5,
+   "rust": 91.8,
+   "_estimated": [
+    "rust",
+    "edit"
+   ],
+   "edit": 91.8
+  },
+  "code_review": {
+   "off": 62.3,
+   "generic": 77.1,
+   "html": 76.7,
+   "review": 79.2,
+   "rust": 74.0,
+   "_estimated": [
+    "rust",
+    "edit"
+   ],
+   "edit": 74.0
+  },
+  "prose": {
+   "off": 64.3,
+   "generic": 80.3,
+   "html": 79.9,
+   "review": 79.2,
+   "rust": 78.6,
+   "edit": 77.1
+  },
+  "rust_gen": {
+   "off": 63.5,
+   "generic": 134.5,
+   "rust": 138.1,
+   "edit": 131.2,
+   "html": 129.1,
+   "_estimated": [
+    "html",
+    "review"
+   ],
+   "review": 129.1
+  },
+  "code_edit": {
+   "off": 58.9,
+   "generic": 127.7,
+   "rust": 129.5,
+   "edit": 136.5,
+   "html": 122.6,
+   "_estimated": [
+    "html",
+    "review"
+   ],
+   "review": 122.6
+  }
+ }
+}

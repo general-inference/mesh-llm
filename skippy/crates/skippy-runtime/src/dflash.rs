@@ -1346,6 +1346,31 @@ impl StageSession {
     }
 }
 
+/// A DFlash draft opened for a target but not attached to it.
+pub struct ParkedDFlashDraft(Option<DFlashDraft>);
+
+impl ParkedDFlashDraft {
+    pub fn info(&self) -> &DFlashDraftInfo {
+        self.0
+            .as_ref()
+            .expect("a parked draft holds a draft")
+            .info()
+    }
+}
+
+impl Drop for ParkedDFlashDraft {
+    fn drop(&mut self) {
+        // The attached draft captures the layers it reads; a parked one must not
+        // switch shared layers off when it drops.
+        if let Some(mut draft) = self.0.take() {
+            draft
+                .local_layers
+                .iter_mut()
+                .for_each(|local| *local = false);
+        }
+    }
+}
+
 /// Draft storage owned by a target model.
 pub(crate) type SharedDFlashDraft = Arc<Mutex<DFlashDraft>>;
 
@@ -1396,26 +1421,48 @@ impl StageModel {
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
     ) -> Result<DFlashDraftInfo> {
+        let incoming = self.park_dflash_draft(path, options, config)?;
+        let info = incoming.info().clone();
+        drop(self.swap_parked_dflash_draft(session, incoming)?);
+        Ok(info)
+    }
+
+    /// Opens a DFlash draft for this target without attaching it, so a later
+    /// [`StageModel::swap_parked_dflash_draft`] swaps it in without loading.
+    /// A draft must already be attached.
+    pub fn park_dflash_draft(
+        &self,
+        path: impl AsRef<Path>,
+        options: &DFlashDraftOptions,
+        config: &RuntimeConfig,
+    ) -> Result<ParkedDFlashDraft> {
         let shared = self
             .dflash_draft()
             .ok_or_else(|| anyhow!("no DFlash draft is attached"))?;
+        let target_ctx = lock_draft(shared).target_ctx;
+        let draft = DFlashDraft::open(target_ctx, path.as_ref(), options, config)?;
+        Ok(ParkedDFlashDraft(Some(draft)))
+    }
+
+    /// Attaches `incoming` in place of the attached draft and returns that one
+    /// parked. Sessions restart as after [`StageModel::swap_dflash_draft`].
+    pub fn swap_parked_dflash_draft(
+        &self,
+        session: &StageSession,
+        mut incoming: ParkedDFlashDraft,
+    ) -> Result<ParkedDFlashDraft> {
+        let shared = self
+            .dflash_draft()
+            .ok_or_else(|| anyhow!("no DFlash draft is attached"))?;
+        let draft = incoming.0.take().expect("a parked draft holds a draft");
         let mut guard = lock_draft(shared);
-        let incoming = DFlashDraft::open(guard.target_ctx, path.as_ref(), options, config)?;
-        let info = incoming.info().clone();
-        let layers_changed = guard.info.target_layer_ids != info.target_layer_ids;
-        let mut outgoing = std::mem::replace(&mut *guard, incoming);
+        let layers_changed = guard.info.target_layer_ids != draft.info.target_layer_ids;
+        let outgoing = std::mem::replace(&mut *guard, draft);
         drop(guard);
-        // The new draft already captures the layers it reads; the old one
-        // must not switch shared layers off when it drops.
-        outgoing
-            .local_layers
-            .iter_mut()
-            .for_each(|local| *local = false);
-        drop(outgoing);
         if layers_changed {
             refresh_target_program(session)?;
         }
-        Ok(info)
+        Ok(ParkedDFlashDraft(Some(outgoing)))
     }
 
     /// The attached DFlash draft, if any.

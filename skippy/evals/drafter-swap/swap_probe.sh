@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Step 3: what a draft swap costs. Builds llama-spec-bench against the packaged
-# runtime and runs `--swap-probe` twice on one machine:
-#   reload  the shipped DFlash2 draft swapped for itself: the restart's effect on
-#           acceptance by rows seen, and the cost of opening a draft
-#   cross   DFlash2 and the original DFlash draft swapped back and forth
+# runtime and runs `--swap-probe` on one machine:
+#   resident  DFlash2 swapped for a second open copy of itself: the restart's effect
+#             on acceptance by rows seen, and the cost of exchanging open drafts
+#   load      the same, opening the incoming draft from its file at every swap
+#   cross     DFlash2 and the original DFlash draft, both open, swapped back and forth
 # Prompts: agent transcripts (4-48K tokens) and the eval code/HTML prompts. Same
 # weight inputs as run.sh, plus BENCH_ALT_DRAFT_URL / _SHA256 / _BYTES.
 set -euo pipefail
@@ -52,16 +53,18 @@ for r in rows:
 EOF
 echo "probe prompts: $(wc -l < "$ART/probe-prompts.jsonl")"
 
-probe() { # label swap-draft
-  echo "=== swap probe: $1"
+probe() { # label swap-draft [extra args]
+  local label="$1" swap="$2"; shift 2
+  echo "=== swap probe: $label"
   "$BENCH" --target-model-path "$TARGET" --draft-model-path "$DRAFT" --dflash --swap-probe \
-    --swap-draft-model-path "$2" --prompt-corpus "$ART/probe-prompts.jsonl" \
+    --swap-draft-model-path "$swap" --prompt-corpus "$ART/probe-prompts.jsonl" "$@" \
     --speculative-window 7 --max-new-tokens 256 --ctx-size 40960 \
     --swap-restart-rows "${BENCH_RESTART_ROWS:-0,16,64,256,1024,2048}" \
-    --json-out "$ART/swap-probe-$1.json" 2> "$ART/swap-probe-$1.log" \
-    | sed "s/^SWAP_PROBE /SWAP_PROBE $1 /"
+    --json-out "$ART/swap-probe-$label.json" 2> "$ART/swap-probe-$label.log" \
+    | sed "s/^SWAP_PROBE /SWAP_PROBE $label /"
 }
-probe reload "$DRAFT"
-BENCH_RESTART_ROWS=0,256,2048 probe cross "$ALT"
+probe resident "$DRAFT" --swap-resident
+BENCH_RESTART_ROWS=0,256 probe load "$DRAFT"
+BENCH_RESTART_ROWS=0,256,2048 probe cross "$ALT" --swap-resident
 
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

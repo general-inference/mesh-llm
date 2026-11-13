@@ -5,13 +5,18 @@
 //! reloaded), the session's draft restarts there, and the target prefills the
 //! last R tokens, so the new draft has seen only those rows. The reply is then
 //! drafted as usual. A run without a swap is the reference.
+//!
+//! A resident swap exchanges the attached draft with one opened in advance; a
+//! loading swap opens the incoming draft from its file each time.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use skippy_runtime::{DFlashDraftOptions, RuntimeConfig, StageModel, StageSession};
+use skippy_runtime::{
+    DFlashDraftOptions, ParkedDFlashDraft, RuntimeConfig, StageModel, StageSession,
+};
 
 use crate::{PromptCase, elapsed_ms};
 
@@ -30,6 +35,50 @@ pub(crate) struct ProbeSetup<'a> {
     pub depths: &'a [usize],
     pub max_new_tokens: usize,
     pub window: usize,
+    /// Keep both drafts open and swap by exchanging them.
+    pub resident: bool,
+}
+
+/// Which draft is attached, and the other one when it is kept open.
+#[derive(Default)]
+pub(crate) struct ProbeState {
+    attached: usize,
+    parked: Option<ParkedDFlashDraft>,
+}
+
+impl ProbeSetup<'_> {
+    fn swap(&self, state: &mut ProbeState, session: &StageSession) -> Result<()> {
+        let next = 1 - state.attached;
+        if self.resident {
+            let incoming = match state.parked.take() {
+                Some(parked) => parked,
+                None => self
+                    .target
+                    .park_dflash_draft(&self.drafts[next], self.options, self.config)
+                    .with_context(|| format!("open {}", self.drafts[next].display()))?,
+            };
+            state.parked = Some(self.target.swap_parked_dflash_draft(session, incoming)?);
+        } else {
+            self.target
+                .swap_dflash_draft(session, &self.drafts[next], self.options, self.config)
+                .with_context(|| format!("swap in {}", self.drafts[next].display()))?;
+        }
+        state.attached = next;
+        Ok(())
+    }
+
+    /// Opens the second draft ahead of the first resident swap, so no swap
+    /// pays for loading it.
+    pub(crate) fn prepare(&self, state: &mut ProbeState) -> Result<()> {
+        if self.resident && state.parked.is_none() {
+            state.parked = Some(self.target.park_dflash_draft(
+                &self.drafts[1 - state.attached],
+                self.options,
+                self.config,
+            )?);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -52,11 +101,11 @@ pub(crate) struct ProbeRow {
 
 pub(crate) fn run(
     setup: &ProbeSetup<'_>,
+    state: &mut ProbeState,
     prompt: &PromptCase,
     tokens: &[i32],
 ) -> Result<Vec<ProbeRow>> {
     let mut rows = Vec::new();
-    let mut attached = 0usize;
     let mut depths: Vec<Option<usize>> = vec![None];
     depths.extend(setup.depths.iter().copied().map(Some));
     for depth in depths {
@@ -66,14 +115,9 @@ pub(crate) fn run(
         prefill(&mut session, &body[..split])?;
         let swap_ms = match depth {
             Some(_) => {
-                let next = 1 - attached;
                 let started = Instant::now();
-                setup
-                    .target
-                    .swap_dflash_draft(&session, &setup.drafts[next], setup.options, setup.config)
-                    .with_context(|| format!("swap in {}", setup.drafts[next].display()))?;
+                setup.swap(state, &session)?;
                 let ms = elapsed_ms(started);
-                attached = next;
                 session.dflash_restart();
                 Some(ms)
             }
@@ -135,7 +179,7 @@ pub(crate) fn run(
             prompt_tokens: tokens.len(),
             restart_rows: depth.map(|rows| rows.min(body.len())),
             swap_ms,
-            draft_path: display(&setup.drafts[attached]),
+            draft_path: display(&setup.drafts[state.attached]),
             generated,
             windows: accepted_per_window.len(),
             draft_tokens,

@@ -60,6 +60,9 @@ struct Args {
     /// Prompt rows the swapped-in draft sees before drafting.
     #[arg(long, value_delimiter = ',', default_value = "0,16,64,256,1024,2048")]
     swap_restart_rows: Vec<usize>,
+    /// Keep both drafts open and swap by exchanging them instead of loading.
+    #[arg(long)]
+    swap_resident: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +260,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// A user turn in Qwen's chat format with thinking off, so the probe drafts
+/// the reply a served request would get rather than a raw-text continuation.
+fn chat_prompt(prompt: &str) -> String {
+    format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
+}
+
 fn run_swap_probe(
     args: &Args,
     target: &mut StageModel,
@@ -264,6 +273,9 @@ fn run_swap_probe(
     prompts: &[PromptCase],
 ) -> Result<()> {
     load_draft(args, target, target_config)?;
+    if target.tokenize("<|im_start|>", false)?.len() != 1 {
+        bail!("the tokenizer does not parse chat special tokens; the swap probe needs them");
+    }
     let options = DFlashDraftOptions {
         max_draft_tokens: Some(args.speculative_window),
         ..DFlashDraftOptions::default()
@@ -281,18 +293,21 @@ fn run_swap_probe(
         depths: &args.swap_restart_rows,
         max_new_tokens: args.max_new_tokens,
         window: args.speculative_window,
+        resident: args.swap_resident,
     };
+    let mut state = swap_probe::ProbeState::default();
+    setup.prepare(&mut state)?;
     let mut rows = Vec::new();
     for (index, prompt) in prompts.iter().enumerate() {
         eprintln!("swap probe {}/{} {}", index + 1, prompts.len(), prompt.id);
         let tokens = setup
             .target
-            .tokenize(&prompt.prompt, true)
+            .tokenize(&chat_prompt(&prompt.prompt), true)
             .with_context(|| format!("tokenize prompt {}", prompt.id))?;
         if tokens.len() < 2 {
             continue;
         }
-        for row in swap_probe::run(&setup, prompt, &tokens)? {
+        for row in swap_probe::run(&setup, &mut state, prompt, &tokens)? {
             println!("SWAP_PROBE {}", serde_json::to_string(&row)?);
             rows.push(row);
         }

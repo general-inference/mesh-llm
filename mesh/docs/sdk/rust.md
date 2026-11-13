@@ -199,3 +199,11 @@ errors must migrate to `request_raw`/`stream_raw`. The checked default now
 matches the other language SDKs; raw responses remain explicitly available.
 The temporary local-only `thinking_controls` API is replaced by `models()`
 metadata and native `chat_completion()`.
+
+## Live transcription
+
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.

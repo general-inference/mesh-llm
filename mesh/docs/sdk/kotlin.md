@@ -183,3 +183,11 @@ try {
 Inspect stream failures the same way. The original status and body remain
 available. `details` is `null` for transport failures or an unstructured body;
 missing optional fields stay `null`. Unknown codes are preserved.
+
+## Live transcription
+
+The node must have a local speech model loaded. Embedded transcription uses
+typed in-process audio/event channels; remote-only models fail at startup.
+Closing a session, dropping either native half, or shutting down the node
+cancels the backend. Explicit Rust network sessions remain available through
+`LiveTranscription::start` when mesh relaying is needed.

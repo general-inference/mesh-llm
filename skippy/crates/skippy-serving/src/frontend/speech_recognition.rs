@@ -213,7 +213,12 @@ impl InferenceBackend for SpeechRecognitionBackend {
         tokio::spawn(async move {
             // No thread until the client sends something: an idle or probing
             // connection costs nothing here.
-            let Some(first) = input.recv().await else {
+            let first = tokio::select! {
+                biased;
+                () = live.cancellation.cancelled() => None,
+                first = input.recv() => first,
+            };
+            let Some(first) = first else {
                 return;
             };
             let Ok(slot) = sessions.try_acquire_owned() else {
@@ -331,15 +336,12 @@ impl LiveSession {
                 command = tokio::time::timeout(self.idle_timeout, input.recv()) => match command {
                     Ok(command) => command,
                     Err(_) => {
-                        let _ = self
-                            .output
-                            .send(RealtimeOutput::Failed {
-                                message: format!(
-                                    "live transcription session idle for {} s",
-                                    self.idle_timeout.as_secs()
-                                ),
-                            })
-                            .await;
+                        tokio::select! {
+                            () = self.cancellation.cancelled() => {},
+                            _ = self.output.send(RealtimeOutput::Failed {
+                                message: format!("live transcription session idle for {} s", self.idle_timeout.as_secs()),
+                            }) => {},
+                        }
                         None
                     }
                 },
@@ -395,8 +397,13 @@ impl LiveSession {
     }
 
     fn send(&self, output: RealtimeOutput) {
-        // A closed receiver means the client left; the input side ends the loop.
-        let _ = self.output.blocking_send(output);
+        self.runtime.block_on(async {
+            tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {},
+                _ = self.output.send(output) => {},
+            }
+        });
     }
 }
 
@@ -423,6 +430,9 @@ fn speech_only() -> InferenceError {
 }
 
 #[cfg(test)]
+mod cancellation_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
@@ -436,7 +446,7 @@ mod tests {
 
     /// Returns a fixed transcript and records the options it was given.
     #[derive(Default)]
-    struct FakeModel {
+    pub(super) struct FakeModel {
         seen: Mutex<Vec<TranscriptionOptions>>,
     }
 

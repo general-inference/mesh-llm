@@ -15,11 +15,49 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LiveTranscriptionTest {
+    /** Explicit push-to-talk options survive the native round trip. */
     @Test
     fun optionsPreserveExplicitPushToTalk() {
-        val options = Json.parseToJsonElement(LiveTranscriptionOptions(sampleRate = 48000u, turnDetection = null).json()).jsonObject
+        val options = Json.parseToJsonElement(LiveTranscriptionOptions(model = "speech#fast", language = "de", prompt = "jargon", sampleRate = 48000u, turnDetection = null).json()).jsonObject
+        assertEquals(JsonPrimitive("speech#fast"), options["model"])
+        assertEquals(JsonPrimitive("de"), options["language"])
+        assertEquals(JsonPrimitive("jargon"), options["prompt"])
         assertEquals(JsonPrimitive(48000), options["sample_rate"])
         assertEquals(JsonNull, options["turn_detection"])
+        val defaults = Json.parseToJsonElement(LiveTranscriptionOptions().json()).jsonObject
+        assertNull(defaults["step_ms"])
+        assertEquals(JsonPrimitive(false), defaults["tentative"])
+    }
+
+    /** Incremental options serialize under their native keys. */
+    @Test
+    fun incrementalOptionsUseNativeKeys() {
+        val options = Json.parseToJsonElement(LiveTranscriptionOptions(stepMs = 400u, tentative = true).json()).jsonObject
+        assertEquals(JsonPrimitive(400), options["step_ms"])
+        assertEquals(JsonPrimitive(true), options["tentative"])
+        assertNull(options["stepMs"])
+    }
+
+    /** Tentative replacements and clear remain distinct from final text. */
+    @Test
+    fun tentativeReplacementsAndClearRemainDistinctFromFinalText() = runTest {
+        for (text in listOf("hel", "hello", "")) {
+            val live = LiveTranscription(
+                audio = {}, floatAudio = {}, commitNative = {},
+                eventJson = { """{"type":"tentative","item_id":"turn","text":"$text"}""" },
+                stopJson = { """[{"type":"completed","item_id":"turn","transcript":"Hello!"}]""" },
+                closeNative = {},
+            )
+            val event = live.nextEvent()
+            assertEquals("tentative", event?.type)
+            assertEquals("turn", event?.itemId)
+            assertEquals(text, event?.text)
+            assertNull(event?.transcript)
+            val remaining = live.stop()
+            assertEquals("completed", remaining.first().type)
+            assertEquals("Hello!", remaining.first().transcript)
+            live.close()
+        }
     }
 
     @Test
@@ -47,6 +85,7 @@ class LiveTranscriptionTest {
         live.sendAudio(emptyList())
     }
 
+    /** Cancelling a pending read closes on IO without blocking the collection. */
     @Test
     fun cancellingEventsDuringPendingReadClosesOnIoWithoutBlockingCollection() = runBlocking {
         val readPending = CompletableDeferred<Unit>()

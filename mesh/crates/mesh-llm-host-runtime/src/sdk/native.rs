@@ -1,6 +1,7 @@
 //! Native model discovery and provider-specific inference.
 
 use super::EmbeddedServeHandle;
+pub mod transcription;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

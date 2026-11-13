@@ -1367,6 +1367,18 @@ impl StageSession {
         }
     }
 
+    /// The kept feature rows that end at the target's position, in position
+    /// order, each the draft's target layers concatenated. `None` unless
+    /// [`StageSession::dflash_keep_history`] was called.
+    pub fn dflash_history_rows(&self) -> Result<Option<(Vec<f32>, Vec<i32>)>> {
+        let end = i32::try_from(self.native_position()?).context("target position exceeds i32")?;
+        Ok(self
+            .dflash
+            .as_ref()
+            .and_then(|link| link.history.as_ref())
+            .map(|history| history.run_before(end)))
+    }
+
     /// Restarts this session's draft like [`StageSession::dflash_restart`],
     /// then injects the kept feature rows that end at the target's position,
     /// so the new draft starts with the context the old one had. Returns the

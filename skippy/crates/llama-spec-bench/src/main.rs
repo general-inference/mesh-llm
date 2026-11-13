@@ -14,6 +14,7 @@ use skippy_runtime::{
 };
 
 mod dflash;
+mod feature_dump;
 mod swap_probe;
 
 const DEFAULT_CORPUS: &str = "skippy/evals/corpora/kv_mixed_prompts.jsonl";
@@ -67,6 +68,12 @@ struct Args {
     /// swapped-in draft (0: restart it cold).
     #[arg(long, default_value_t = 0)]
     swap_replay_rows: usize,
+    /// With --dflash: write the draft's target-layer features for each row of
+    /// this token corpus (see feature_dump.rs) instead of benchmarking.
+    #[arg(long, requires = "dflash", requires = "dump_dir")]
+    dump_features: Option<PathBuf>,
+    #[arg(long)]
+    dump_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,8 +195,12 @@ fn main() -> Result<()> {
         );
     }
 
-    let prompts = prompt_cases(&args)?;
-    if prompts.is_empty() {
+    // A feature dump reads its own token corpus.
+    let prompts = match args.dump_features {
+        Some(_) => Vec::new(),
+        None => prompt_cases(&args)?,
+    };
+    if prompts.is_empty() && args.dump_features.is_none() {
         bail!("prompt set is empty");
     }
 
@@ -209,6 +220,10 @@ fn main() -> Result<()> {
         .with_context(|| format!("open target model {}", args.target_model_path.display()))?;
     if args.swap_probe {
         return run_swap_probe(&args, &mut target, &target_config, &prompts);
+    }
+    if let (Some(corpus), Some(dir)) = (args.dump_features.as_ref(), args.dump_dir.as_ref()) {
+        load_draft(&args, &mut target, &target_config)?;
+        return feature_dump::run(&target, corpus, dir);
     }
     // Baselines run before any draft exists: an attached DFlash draft makes
     // every target decode capture hidden states and feed the draft.

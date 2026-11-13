@@ -1284,6 +1284,13 @@ impl StageSession {
         }
     }
 
+    /// Starts this session's draft over at the target's current position,
+    /// after [`StageModel::swap_dflash_draft`]. The draft drafts from the rows
+    /// the target decodes from here on.
+    pub fn dflash_restart(&mut self) {
+        self.dflash_after_replace();
+    }
+
     /// Feature rows this session's draft lost and its context resets, since
     /// the session was last activated. `None` without a draft.
     pub fn dflash_health(&self) -> Option<DFlashHealth> {
@@ -1372,6 +1379,36 @@ impl StageModel {
         refresh_target_program(&probe)?;
         drop(probe);
         self.install_dflash_draft(Arc::new(Mutex::new(draft)))?;
+        Ok(info)
+    }
+
+    /// Replaces the attached DFlash draft with the one at `path`, keeping the
+    /// target and its sessions. Every live session must call
+    /// [`StageSession::dflash_restart`] before it drafts again: the new draft
+    /// holds no rows, and drafts from the rows decoded after the restart.
+    pub fn swap_dflash_draft(
+        &self,
+        path: impl AsRef<Path>,
+        options: &DFlashDraftOptions,
+        config: &RuntimeConfig,
+    ) -> Result<DFlashDraftInfo> {
+        let shared = self
+            .dflash_draft()
+            .ok_or_else(|| anyhow!("no DFlash draft is attached"))?;
+        let mut guard = lock_draft(shared);
+        let incoming = DFlashDraft::open(guard.target_ctx, path.as_ref(), options, config)?;
+        let info = incoming.info().clone();
+        let mut outgoing = std::mem::replace(&mut *guard, incoming);
+        drop(guard);
+        // The new draft already captures the layers it reads; the old one
+        // must not switch shared layers off when it drops.
+        outgoing
+            .local_layers
+            .iter_mut()
+            .for_each(|local| *local = false);
+        drop(outgoing);
+        let probe = self.create_session()?;
+        refresh_target_program(&probe)?;
         Ok(info)
     }
 

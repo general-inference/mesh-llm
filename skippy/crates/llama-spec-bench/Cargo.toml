@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[features]
+default = []
+# Load the native runtime bundle named by MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR at
+# startup instead of linking it, as the host does.
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime", "skippy-runtime/test-support"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

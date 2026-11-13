@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Submits drafter-swap jobs: one jy job per Spark, each owning some workloads.
 
-    submit.py [--phase headroom|datagen] [--rev REV] [--dry-run] [--only NODE,...]
+    submit.py [--phase headroom|datagen|swap] [--rev REV] [--dry-run] [--only NODE,...]
 
 headroom  measures off / shipped DFlash2 / n-gram per workload (run.sh)
 datagen   has the target answer train-prompts.jsonl, the drafters' training data (datagen.sh)
+swap      acceptance and cost of swapping the draft mid-session (swap_probe.sh)
 
 Every arm of a workload runs on the same machine, so speedups compare within a job.
 Acceptance does not depend on the machine, so workloads can be spread freely.
@@ -31,6 +32,12 @@ DRAFT = {
     "sha256": "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44",
     "bytes": 570468544,
 }
+# The original DFlash draft for the same target, swapped against DFlash2 in step 3.
+ALT_DRAFT = {
+    "url": "https://huggingface.co/Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp/resolve/2aa57b642f211d2639083954c5b66d9c1ee503fc/Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
+    "sha256": "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
+    "bytes": 421060800,
+}
 # dan-lab Sparks.
 ASSIGNMENT = {
     "spark-000280": "html",
@@ -46,6 +53,11 @@ DATAGEN_ASSIGNMENT = {
     "spark-000499": "rust_gen",
 }
 PHASES = {
+    "swap": {"assignment": {"spark-000907": "agent,code_edit,code_review,html"}, "command": "swap_probe.sh",
+             "version": "drafter-swap-probe-1", "trace": "workloads.jsonl", "requests": 40,
+             "title": "Drafter swap probe",
+             "description": "Acceptance right after a DFlash draft swap, by rows the new draft has seen, and "
+                            "the time a swap takes."},
     "headroom": {"assignment": ASSIGNMENT, "command": "run.sh", "version": "drafter-swap-headroom-1",
                  "trace": "workloads.jsonl", "requests": 40,
                  "title": "Drafter swap headroom",
@@ -100,6 +112,7 @@ def main():
                     "BENCH_DRAFT_BYTES": str(DRAFT["bytes"]),
                     "BENCH_DFLASH_CAP": "7",
                     "BENCH_DOMAINS": domains,
+                    "BENCH_ALT_DRAFT_URL": ALT_DRAFT["url"], "BENCH_ALT_DRAFT_SHA256": ALT_DRAFT["sha256"],
                 },
                 "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",
             },

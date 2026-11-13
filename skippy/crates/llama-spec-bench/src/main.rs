@@ -14,6 +14,7 @@ use skippy_runtime::{
 };
 
 mod dflash;
+mod swap_probe;
 
 const DEFAULT_CORPUS: &str = "skippy/evals/corpora/kv_mixed_prompts.jsonl";
 
@@ -49,6 +50,16 @@ struct Args {
     /// Treat the draft as a DFlash/DFlash2 block drafter attached to the target.
     #[arg(long)]
     dflash: bool,
+    /// With --dflash: measure drafting right after a draft swap instead of
+    /// checking against a baseline (see swap_probe.rs).
+    #[arg(long, requires = "dflash")]
+    swap_probe: bool,
+    /// The draft swapped in by --swap-probe; defaults to reloading the draft.
+    #[arg(long)]
+    swap_draft_model_path: Option<PathBuf>,
+    /// Prompt rows the swapped-in draft sees before drafting.
+    #[arg(long, value_delimiter = ',', default_value = "0,16,64,256,1024,2048")]
+    swap_restart_rows: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +160,8 @@ struct SpecStats {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    #[cfg(feature = "dynamic-native-runtime")]
+    skippy_runtime::test_support::require_native_runtime();
     if args.max_new_tokens == 0 {
         bail!("--max-new-tokens must be greater than zero");
     }
@@ -187,6 +200,9 @@ fn main() -> Result<()> {
         full_model_config(&args.target_model_path, args.ctx_size, args.n_gpu_layers)?;
     let mut target = StageModel::open(&args.target_model_path, &target_config)
         .with_context(|| format!("open target model {}", args.target_model_path.display()))?;
+    if args.swap_probe {
+        return run_swap_probe(&args, &mut target, &target_config, &prompts);
+    }
     // Baselines run before any draft exists: an attached DFlash draft makes
     // every target decode capture hidden states and feed the draft.
     let mut baselines = Vec::with_capacity(prompts.len());
@@ -237,6 +253,53 @@ fn main() -> Result<()> {
             "speculative verification mismatched {} prompt(s)",
             report.summary.mismatched_prompts
         );
+    }
+    Ok(())
+}
+
+fn run_swap_probe(
+    args: &Args,
+    target: &mut StageModel,
+    target_config: &RuntimeConfig,
+    prompts: &[PromptCase],
+) -> Result<()> {
+    load_draft(args, target, target_config)?;
+    let options = DFlashDraftOptions {
+        max_draft_tokens: Some(args.speculative_window),
+        ..DFlashDraftOptions::default()
+    };
+    let setup = swap_probe::ProbeSetup {
+        target,
+        config: target_config,
+        options: &options,
+        drafts: [
+            args.draft_model_path.clone(),
+            args.swap_draft_model_path
+                .clone()
+                .unwrap_or_else(|| args.draft_model_path.clone()),
+        ],
+        depths: &args.swap_restart_rows,
+        max_new_tokens: args.max_new_tokens,
+        window: args.speculative_window,
+    };
+    let mut rows = Vec::new();
+    for (index, prompt) in prompts.iter().enumerate() {
+        eprintln!("swap probe {}/{} {}", index + 1, prompts.len(), prompt.id);
+        let tokens = setup
+            .target
+            .tokenize(&prompt.prompt, true)
+            .with_context(|| format!("tokenize prompt {}", prompt.id))?;
+        if tokens.len() < 2 {
+            continue;
+        }
+        for row in swap_probe::run(&setup, prompt, &tokens)? {
+            println!("SWAP_PROBE {}", serde_json::to_string(&row)?);
+            rows.push(row);
+        }
+    }
+    if let Some(path) = args.json_out.as_ref() {
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&rows)?))
+            .with_context(|| format!("write JSON report {}", path.display()))?;
     }
     Ok(())
 }
@@ -779,6 +842,7 @@ fn prompt_case_from_value(value: &Value, line_index: usize) -> Result<PromptCase
         .unwrap_or_else(|| format!("line-{}", line_index + 1));
     let category = value
         .get("category")
+        .or_else(|| value.get("domain"))
         .and_then(Value::as_str)
         .map(str::to_string);
     Ok(PromptCase {

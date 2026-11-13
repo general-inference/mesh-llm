@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Builds the per-workload prompt sets for the drafter-swap experiment.
 
-    build_corpora.py --src DIR [--eval N] [--train N]
+    build_corpora.py --src DIR [--eval N]          writes workloads.jsonl
+    build_corpora.py --src DIR --train N           writes train-prompts.jsonl
 
-Writes `workloads.jsonl` (the eval prompts every arm measures) and, with `--train`,
-`train-prompts.jsonl` (disjoint prompts whose target-model replies become drafter
-training data). Every row carries `domain`, `id`, `split` and `prompt`.
+`workloads.jsonl` holds the eval prompts every arm measures. `train-prompts.jsonl` holds
+prompts whose target-model replies become drafter training data; it never contains a
+prompt (or, for commits, a commit) that is in `workloads.jsonl`. Every row carries `domain`, `id`, `split` and `prompt`.
 
 Domains and sources (all public):
   html         HuggingFaceM4/WebSight v0.2 `llm_generated_idea` (CC-BY-4.0)
@@ -128,9 +129,10 @@ def main():
     parser.add_argument("--eval", type=int, default=40)
     parser.add_argument("--train", type=int, default=0)
     args = parser.parse_args()
-    rng = random.Random(20261113)
+    # The eval set is built from this seed; the training set draws its own sample.
+    rng = random.Random(20261114 if args.train else 20261113)
     pools = {}
-    pools["html"] = html_prompts(args.eval + args.train, rng)
+    pools["html"] = html_prompts(args.train or args.eval, rng)
     rows_ = commits(args.src)
     rng.shuffle(rows_)
     # Review and edit draw from different commits, so no file appears in both.
@@ -146,16 +148,21 @@ def main():
     rng.shuffle(prose)
     pools["prose"] = prose
 
+    if args.train:
+        # Keyed without the domain prefix, so an eval commit is not trained on as another domain.
+        held_out = {json.loads(line)["id"].split("-", 1)[1] for line in open(HERE / "workloads.jsonl")}
+        with open(HERE / "train-prompts.jsonl", "w") as f:
+            for domain, items in pools.items():
+                kept = [item for item in items if item["id"].split("-", 1)[1] not in held_out][:args.train]
+                for item in kept:
+                    f.write(json.dumps({"domain": domain, "split": "train"} | item) + "\n")
+                print(f"{domain:12s} train {len(kept):4d}  pool {len(items)}")
+        return
     with open(HERE / "workloads.jsonl", "w") as f:
         for domain, items in pools.items():
             for item in items[:args.eval]:
                 f.write(json.dumps({"domain": domain, "split": "eval"} | item) + "\n")
             print(f"{domain:12s} eval {min(len(items), args.eval):4d}  pool {len(items)}")
-    if args.train:
-        with open(HERE / "train-prompts.jsonl", "w") as f:
-            for domain, items in pools.items():
-                for item in items[args.eval:args.eval + args.train]:
-                    f.write(json.dumps({"domain": domain, "split": "train"} | item) + "\n")
 
 
 if __name__ == "__main__":

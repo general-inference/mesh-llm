@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Submits the drafter-swap headroom jobs: one jy job per Spark, each owning some workloads.
+"""Submits drafter-swap jobs: one jy job per Spark, each owning some workloads.
 
-    submit.py [--rev REV] [--dry-run] [--only NODE,...]
+    submit.py [--phase headroom|datagen] [--rev REV] [--dry-run] [--only NODE,...]
+
+headroom  measures off / shipped DFlash2 / n-gram per workload (run.sh)
+datagen   has the target answer train-prompts.jsonl, the drafters' training data (datagen.sh)
 
 Every arm of a workload runs on the same machine, so speedups compare within a job.
 Acceptance does not depend on the machine, so workloads can be spread freely.
@@ -36,10 +39,29 @@ ASSIGNMENT = {
     "spark-000499": "rust_gen,prose",
     "spark-000907": "agent",
 }
+DATAGEN_ASSIGNMENT = {
+    "spark-000280": "html",
+    "spark-000265": "code_review",
+    "spark-000468": "code_edit",
+    "spark-000499": "rust_gen",
+}
+PHASES = {
+    "headroom": {"assignment": ASSIGNMENT, "command": "run.sh", "version": "drafter-swap-headroom-1",
+                 "trace": "workloads.jsonl", "requests": 40,
+                 "title": "Drafter swap headroom",
+                 "description": "Qwen3.6-35B-A3B decode tok/s and draft acceptance per workload: off, shipped "
+                                "DFlash2, n-gram suffix."},
+    "datagen": {"assignment": DATAGEN_ASSIGNMENT, "command": "datagen.sh", "version": "drafter-swap-datagen-1",
+                "trace": "train-prompts.jsonl", "requests": 1200,
+                "title": "Drafter swap datagen",
+                "description": "Qwen3.6-35B-A3B greedy replies to a workload's training prompts, as DFlash "
+                               "draft training data."},
+}
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", choices=PHASES, default="headroom")
     parser.add_argument("--rev", default="HEAD")
     parser.add_argument("--only")
     parser.add_argument("--dry-run", action="store_true")
@@ -48,21 +70,21 @@ def main():
                          text=True).stdout.strip()
     out = HERE / "out"
     (out / "specs").mkdir(parents=True, exist_ok=True)
-    state = {"rev": rev, "jobs": []}
-    for node, domains in ASSIGNMENT.items():
+    phase = PHASES[args.phase]
+    state = {"rev": rev, "phase": args.phase, "jobs": []}
+    for node, domains in phase["assignment"].items():
         if args.only and node not in args.only.split(","):
             continue
         spec = {"spec": {
-            "name": f"Drafter swap headroom · {domains} · {node} @ {rev[:9]}",
-            "description": "Qwen3.6-35B-A3B decode tok/s and draft acceptance per workload: off, shipped DFlash2, "
-                           "n-gram suffix.",
+            "name": f"{phase['title']} · {domains} · {node} @ {rev[:9]}",
+            "description": phase["description"],
             "priority": 20,
             "target": {"executor": "lab", "nodes": [node]},
-            "harness": {"name": "custom", "version": "drafter-swap-headroom-1",
-                        "trace": {"kind": "file", "ref": f"skippy/evals/drafter-swap/workloads.jsonl@{rev[:9]}"},
-                        "seed": 0, "warmup_requests": 1, "concurrency": [1], "request_count": 40},
+            "harness": {"name": "custom", "version": phase["version"],
+                        "trace": {"kind": "file", "ref": f"skippy/evals/drafter-swap/{phase['trace']}@{rev[:9]}"},
+                        "seed": 0, "warmup_requests": 1, "concurrency": [1], "request_count": phase["requests"]},
             "budget": {"max_usd": 0, "max_duration_s": 21600},
-            "labels": {"suite": "drafter-swap", "phase": "headroom", "domains": domains, "rev": rev[:9]},
+            "labels": {"suite": "drafter-swap", "phase": args.phase, "domains": domains, "rev": rev[:9]},
             "runtime": {
                 "model_package": {"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5#*Q4_K_M*",
                                   "egress": "lab_only"},
@@ -79,10 +101,10 @@ def main():
                     "BENCH_DFLASH_CAP": "7",
                     "BENCH_DOMAINS": domains,
                 },
-                "command": "bash mesh-llm/skippy/evals/drafter-swap/run.sh",
+                "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",
             },
         }}
-        path = out / "specs" / f"headroom-{node}.json"
+        path = out / "specs" / f"{args.phase}-{node}.json"
         path.write_text(json.dumps(spec, indent=1))
         if args.dry_run:
             print(f"{node}: {domains} -> {path}")
@@ -93,7 +115,7 @@ def main():
             sys.exit(f"submit failed for {node}:\n{result.stdout}{result.stderr}")
         print(f"{node:14s} {domains:16s} {match.group(0)}")
         state["jobs"].append({"node": node, "domains": domains, "job_id": match.group(0)})
-        (out / "headroom-state.json").write_text(json.dumps(state, indent=1))
+        (out / f"{args.phase}-state.json").write_text(json.dumps(state, indent=1))
 
 
 if __name__ == "__main__":

@@ -11,9 +11,12 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use skippy_runtime::{DFlashDraftOptions, RuntimeConfig, StageModel};
+use skippy_runtime::{DFlashDraftOptions, RuntimeConfig, StageModel, StageSession};
 
 use crate::{PromptCase, elapsed_ms};
+
+/// Prompt tokens per prefill call; the bench's contexts batch 2048.
+const PREFILL_CHUNK: usize = 1024;
 
 /// Windows counted as "early": the blocks drafted right after the swap.
 const EARLY_WINDOWS: usize = 8;
@@ -60,9 +63,7 @@ pub(crate) fn run(
         let mut session = setup.target.create_session()?;
         let body = &tokens[..tokens.len() - 1];
         let split = depth.map_or(body.len(), |rows| body.len().saturating_sub(rows));
-        if split > 0 {
-            session.prefill_chunk(&body[..split])?;
-        }
+        prefill(&mut session, &body[..split])?;
         let swap_ms = match depth {
             Some(_) => {
                 let next = 1 - attached;
@@ -78,9 +79,7 @@ pub(crate) fn run(
             }
             None => None,
         };
-        if split < body.len() {
-            session.prefill_chunk(&body[split..])?;
-        }
+        prefill(&mut session, &body[split..])?;
         let mut current = *tokens.last().expect("checked non-empty prompt");
         let mut generated = 0usize;
         let mut accepted_per_window = Vec::new();
@@ -147,6 +146,14 @@ pub(crate) fn run(
         });
     }
     Ok(rows)
+}
+
+/// Prefills in chunks no larger than the context's batch.
+fn prefill(session: &mut StageSession, tokens: &[i32]) -> Result<()> {
+    for chunk in tokens.chunks(PREFILL_CHUNK) {
+        session.prefill_chunk(chunk)?;
+    }
+    Ok(())
 }
 
 fn mean(values: &[usize]) -> f64 {

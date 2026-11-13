@@ -3,6 +3,7 @@
 # runtime and runs `--swap-probe` on one machine:
 #   resident  DFlash2 swapped for a second open copy of itself: the restart's effect
 #             on acceptance by rows seen, and the cost of exchanging open drafts
+#   replay    resident, with the last 2048 feature rows replayed into the incoming draft
 #   load      the same, opening the incoming draft from its file at every swap
 #   cross     DFlash2 and the original DFlash draft, both open, swapped back and forth
 # Prompts: agent transcripts (4-48K tokens) and the eval code/HTML prompts. Same
@@ -53,8 +54,9 @@ for r in rows:
 EOF
 echo "probe prompts: $(wc -l < "$ART/probe-prompts.jsonl")"
 
-probe() { # label swap-draft [extra args]
+probe() { # label swap-draft [extra args]; BENCH_PROBES limits which labels run
   local label="$1" swap="$2"; shift 2
+  case " ${BENCH_PROBES:-resident replay load cross} " in *" $label "*) ;; *) return 0 ;; esac
   echo "=== swap probe: $label"
   "$BENCH" --target-model-path "$TARGET" --draft-model-path "$DRAFT" --dflash --swap-probe \
     --swap-draft-model-path "$swap" --prompt-corpus "$ART/probe-prompts.jsonl" "$@" \
@@ -64,6 +66,7 @@ probe() { # label swap-draft [extra args]
     | sed "s/^SWAP_PROBE /SWAP_PROBE $label /"
 }
 probe resident "$DRAFT" --swap-resident
+BENCH_RESTART_ROWS=0,256 probe replay "$DRAFT" --swap-resident --swap-replay-rows 2048
 BENCH_RESTART_ROWS=0,256 probe load "$DRAFT"
 BENCH_RESTART_ROWS=0,256,2048 probe cross "$ALT" --swap-resident
 

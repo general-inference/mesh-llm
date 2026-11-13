@@ -63,6 +63,10 @@ struct Args {
     /// Keep both drafts open and swap by exchanging them instead of loading.
     #[arg(long)]
     swap_resident: bool,
+    /// Keep each session's last N target feature rows and replay them into the
+    /// swapped-in draft (0: restart it cold).
+    #[arg(long, default_value_t = 0)]
+    swap_replay_rows: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +298,7 @@ fn run_swap_probe(
         max_new_tokens: args.max_new_tokens,
         window: args.speculative_window,
         resident: args.swap_resident,
+        replay_rows: args.swap_replay_rows,
     };
     let mut state = swap_probe::ProbeState::default();
     setup.prepare(&mut state)?;

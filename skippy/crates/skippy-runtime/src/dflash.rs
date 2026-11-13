@@ -19,6 +19,7 @@ mod feature_wire;
 mod readout;
 mod split;
 
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::path::Path;
 use std::ptr;
@@ -830,6 +831,52 @@ pub(crate) struct DFlashSessionLink {
     /// Hold back the next decode's feature rows until the next proposal.
     defer_next_ingest: bool,
     pending: Option<PendingIngest>,
+    /// Recent feature rows, kept when a swapped-in draft is to be replayed.
+    history: Option<FeatureHistory>,
+}
+
+/// The last `capacity` target feature rows of a session, by position. A row
+/// of a rejected draft position is overwritten when the target decodes that
+/// position again, and rows past the target's position are ignored on replay.
+struct FeatureHistory {
+    capacity: usize,
+    rows: BTreeMap<i32, Vec<f32>>,
+}
+
+impl FeatureHistory {
+    fn record(&mut self, features: &[f32], positions: &[i32]) {
+        if positions.is_empty() {
+            return;
+        }
+        let row_len = features.len() / positions.len();
+        for (index, &position) in positions.iter().enumerate() {
+            self.rows.insert(
+                position,
+                features[index * row_len..(index + 1) * row_len].to_vec(),
+            );
+        }
+        while self.rows.len() > self.capacity {
+            self.rows.pop_first();
+        }
+    }
+
+    /// The longest run of rows ending just before `end`, as features and
+    /// positions in order.
+    fn run_before(&self, end: i32) -> (Vec<f32>, Vec<i32>) {
+        let mut positions = Vec::new();
+        let mut position = end - 1;
+        while position >= 0 && positions.len() < self.capacity && self.rows.contains_key(&position)
+        {
+            positions.push(position);
+            position -= 1;
+        }
+        positions.reverse();
+        let features = positions
+            .iter()
+            .flat_map(|position| self.rows[position].iter().copied())
+            .collect();
+        (features, positions)
+    }
 }
 
 impl DFlashSessionLink {
@@ -849,6 +896,7 @@ impl DFlashSessionLink {
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,
             pending: None,
+            history: None,
         })
     }
 
@@ -863,6 +911,7 @@ impl DFlashSessionLink {
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,
             pending: None,
+            history: None,
         }
     }
 
@@ -1197,6 +1246,9 @@ impl StageSession {
                 link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
             match gathered {
                 Some(Ok(features)) => {
+                    if let Some(history) = link.history.as_mut() {
+                        history.record(&features, positions);
+                    }
                     link.pending = Some(PendingIngest {
                         features,
                         positions: positions.to_vec(),
@@ -1214,11 +1266,23 @@ impl StageSession {
             }
         }
         let started = Instant::now();
+        let gathered = match link.history.is_some() {
+            true => link
+                .with_draft(|draft, _| draft.gather_features(first_row, positions, remote))
+                .and_then(Result::ok),
+            false => None,
+        };
+        if let (Some(history), Some(features)) = (link.history.as_mut(), gathered.as_ref()) {
+            history.record(features, positions);
+        }
         let injected = link.with_draft(|draft, seq_id| {
             if let Some(from) = truncate_from {
                 draft.truncate(seq_id, i32::try_from(from).unwrap_or(i32::MAX));
             }
-            let injected = draft.ingest(seq_id, first_row, positions, remote);
+            let injected = match gathered.as_ref() {
+                Some(features) => draft.ingest_features(seq_id, features, positions),
+                None => draft.ingest(seq_id, first_row, positions, remote),
+            };
             if injected.is_err() {
                 draft.clear(seq_id);
             }
@@ -1289,6 +1353,53 @@ impl StageSession {
     /// the target decodes from here on.
     pub fn dflash_restart(&mut self) {
         self.dflash_after_replace();
+    }
+
+    /// Keeps this session's last `rows` target feature rows, so that
+    /// [`StageSession::dflash_restart_replaying`] can hand them to a draft
+    /// swapped in later. Costs a copy of every row the draft ingests.
+    pub fn dflash_keep_history(&mut self, rows: usize) {
+        if let Some(link) = self.dflash.as_mut() {
+            link.history = Some(FeatureHistory {
+                capacity: rows,
+                rows: BTreeMap::new(),
+            });
+        }
+    }
+
+    /// Restarts this session's draft like [`StageSession::dflash_restart`],
+    /// then injects the kept feature rows that end at the target's position,
+    /// so the new draft starts with the context the old one had. Returns the
+    /// rows replayed.
+    pub fn dflash_restart_replaying(&mut self) -> Result<usize> {
+        self.dflash_after_replace();
+        let position = self.native_position()?;
+        let Some(link) = self.dflash.as_mut() else {
+            return Ok(0);
+        };
+        let end = i32::try_from(position).context("target position exceeds i32")?;
+        let Some((features, positions)) = link.history.as_ref().map(|h| h.run_before(end)) else {
+            return Ok(0);
+        };
+        let Some(&first) = positions.first() else {
+            return Ok(0);
+        };
+        let injected = link.with_draft(|draft, seq_id| {
+            let injected = draft.ingest_features(seq_id, &features, &positions);
+            if injected.is_err() {
+                draft.clear(seq_id);
+            }
+            injected
+        });
+        match injected {
+            Some(Ok(())) => {
+                link.context.restarted_at(u64::try_from(first).unwrap_or(0));
+                link.context.ingested(position);
+                Ok(positions.len())
+            }
+            Some(Err(error)) => Err(error.context("replay feature rows into the draft")),
+            None => Ok(0),
+        }
     }
 
     /// Feature rows this session's draft lost and its context resets, since
@@ -1487,6 +1598,24 @@ fn refresh_target_program(session: &StageSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feature_history_replays_the_latest_contiguous_run() {
+        let mut history = FeatureHistory {
+            capacity: 4,
+            rows: BTreeMap::new(),
+        };
+        history.record(&[0.0, 0.0, 1.0, 1.0, 2.0, 2.0], &[0, 1, 2]);
+        // A rejected draft row at 3, then the target's own row there.
+        history.record(&[9.0, 9.0], &[3]);
+        history.record(&[3.0, 3.0, 4.0, 4.0], &[3, 4]);
+        // Capacity keeps positions 1..=4.
+        let (features, positions) = history.run_before(5);
+        assert_eq!(positions, vec![1, 2, 3, 4]);
+        assert_eq!(features, vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]);
+        // Rows past the target's position are not replayed.
+        assert_eq!(history.run_before(3).1, vec![1, 2]);
+    }
 
     #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {

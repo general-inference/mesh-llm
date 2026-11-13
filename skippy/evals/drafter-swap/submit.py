@@ -79,6 +79,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--arms", help="headroom arms to run, e.g. 'ngram' (default: all)")
     parser.add_argument("--limit", type=int, help="datagen: prompts per domain (default: all)")
+    parser.add_argument("--probes", help="swap: probes to run, e.g. 'replay' (default: all)")
     args = parser.parse_args()
     rev = subprocess.run(["git", "rev-parse", args.rev], cwd=HERE, check=True, capture_output=True,
                          text=True).stdout.strip()
@@ -90,7 +91,7 @@ def main():
         if args.only and node not in args.only.split(","):
             continue
         spec = {"spec": {
-            "name": f"{phase['title']}{f' ({args.arms})' if args.arms else ''} · {domains} · {node} @ {rev[:9]}",
+            "name": f"{phase['title']}{f' ({args.arms or args.probes})' if args.arms or args.probes else ''} · {domains} · {node} @ {rev[:9]}",
             "description": phase["description"],
             "priority": 20,
             "target": {"executor": "lab", "nodes": [node]},
@@ -116,12 +117,14 @@ def main():
                     "BENCH_DOMAINS": domains,
                     **({"BENCH_ARMS": args.arms} if args.arms else {}),
                     **({"BENCH_LIMIT": str(args.limit)} if args.limit else {}),
+                    **({"BENCH_PROBES": args.probes} if args.probes else {}),
                     "BENCH_ALT_DRAFT_URL": ALT_DRAFT["url"], "BENCH_ALT_DRAFT_SHA256": ALT_DRAFT["sha256"],
                 },
                 "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",
             },
         }}
-        path = out / "specs" / f"{args.phase}{'-' + args.arms if args.arms else ''}-{node}.json"
+        variant = args.arms or (args.probes or "").replace(" ", "+")
+        path = out / "specs" / f"{args.phase}{'-' + variant if variant else ''}-{node}.json"
         path.write_text(json.dumps(spec, indent=1))
         if args.dry_run:
             print(f"{node}: {domains} -> {path}")
@@ -132,7 +135,7 @@ def main():
             sys.exit(f"submit failed for {node}:\n{result.stdout}{result.stderr}")
         print(f"{node:14s} {domains:16s} {match.group(0)}")
         state["jobs"].append({"node": node, "domains": domains, "job_id": match.group(0)})
-        (out / f"{args.phase}{'-' + args.arms if args.arms else ''}-state.json").write_text(json.dumps(state, indent=1))
+        (out / f"{args.phase}{'-' + variant if variant else ''}-state.json").write_text(json.dumps(state, indent=1))
 
 
 if __name__ == "__main__":

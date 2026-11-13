@@ -37,6 +37,9 @@ pub(crate) struct ProbeSetup<'a> {
     pub window: usize,
     /// Keep both drafts open and swap by exchanging them.
     pub resident: bool,
+    /// Keep each session's last this many feature rows and replay them into
+    /// the swapped-in draft; 0 restarts it cold.
+    pub replay_rows: usize,
 }
 
 /// Which draft is attached, and the other one when it is kept open.
@@ -88,7 +91,9 @@ pub(crate) struct ProbeRow {
     prompt_tokens: usize,
     /// Rows the draft saw before drafting; `None` is the run without a swap.
     restart_rows: Option<usize>,
+    /// Swap time, including any replay of kept feature rows.
     swap_ms: Option<f64>,
+    replayed_rows: usize,
     draft_path: String,
     generated: usize,
     windows: usize,
@@ -110,16 +115,23 @@ pub(crate) fn run(
     depths.extend(setup.depths.iter().copied().map(Some));
     for depth in depths {
         let mut session = setup.target.create_session()?;
+        if setup.replay_rows > 0 {
+            session.dflash_keep_history(setup.replay_rows);
+        }
         let body = &tokens[..tokens.len() - 1];
         let split = depth.map_or(body.len(), |rows| body.len().saturating_sub(rows));
         prefill(&mut session, &body[..split])?;
+        let mut replayed_rows = 0;
         let swap_ms = match depth {
             Some(_) => {
                 let started = Instant::now();
                 setup.swap(state, &session)?;
-                let ms = elapsed_ms(started);
-                session.dflash_restart();
-                Some(ms)
+                if setup.replay_rows > 0 {
+                    replayed_rows = session.dflash_restart_replaying()?;
+                } else {
+                    session.dflash_restart();
+                }
+                Some(elapsed_ms(started))
             }
             None => None,
         };
@@ -179,6 +191,7 @@ pub(crate) fn run(
             prompt_tokens: tokens.len(),
             restart_rows: depth.map(|rows| rows.min(body.len())),
             swap_ms,
+            replayed_rows,
             draft_path: display(&setup.drafts[state.attached]),
             generated,
             windows: accepted_per_window.len(),

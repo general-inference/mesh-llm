@@ -14,7 +14,10 @@
 #   BENCH_DFLASH_CAP                      draft tokens per block (default 7)
 #   BENCH_DOMAINS                         comma-separated workloads.jsonl domains, and/or
 #                                         "agent" for the agent transcripts at 64K context
-#   BENCH_ARMS                            arms to run (default "off dflash ngram")
+#   BENCH_ARMS                            arms to run (default "off dflash ngram"); an arm
+#                                         "spec_<name>" drafts with a fine-tuned draft
+#   BENCH_SPECIALISTS                     "name=/abs/path.gguf ..." drafts already on this
+#                                         machine (fine-tuned drafts are not published)
 set -euo pipefail
 
 cd mesh-llm
@@ -74,10 +77,19 @@ echo "weights verified: $TARGET $DRAFT"
 printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\ndraft_max_tokens = %s\n' \
   "$DRAFT" "$CAP" > "$ART/dflash.toml"
 
+for pair in ${BENCH_SPECIALISTS:-}; do
+  name="${pair%%=*}" path="${pair#*=}"
+  [ -f "$path" ] || { echo "specialist draft $name missing: $path" >&2; exit 1; }
+  echo "specialist $name: $path ($( (sha256sum "$path" 2>/dev/null || shasum -a 256 "$path") | cut -c1-16))"
+  printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\ndraft_max_tokens = %s\n' \
+    "$path" "$CAP" > "$ART/spec_$name.toml"
+done
+
 arm_args() {
   case "$1" in
     off) echo "--no-draft --speculative-strategy disabled" ;;
     dflash) echo "--config $ART/dflash.toml" ;;
+    spec_*) echo "--config $ART/$1.toml" ;;
     # The suffix proposer requires 3 <= min <= max <= 64; 5/32 is SUFFIX_NGRAM_PROPOSER.md's example.
     ngram) echo "--no-draft --speculative-strategy ngram-suffix --speculative-ngram-min 5 --speculative-ngram-max 32" ;;
     *) echo "unknown arm $1" >&2; exit 1 ;;

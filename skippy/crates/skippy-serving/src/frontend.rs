@@ -27,6 +27,7 @@ mod sampling_cache_key;
 mod speculation_gate;
 mod speculative;
 mod speech_recognition;
+mod speech_voices;
 mod stop_sequences;
 mod system_one;
 mod token_counting;
@@ -82,6 +83,7 @@ pub use self::speculative::{
     VerifyWindowConfig,
 };
 pub use self::speech_recognition::{SpeechRecognitionBackend, SpeechTranscriber};
+pub use self::speech_voices::{DEFAULT_SPEECH_VOICE, SpeechVoices, validate_speech_voice_name};
 pub use self::system_one::LayaSystemOneBackend;
 
 #[cfg(test)]

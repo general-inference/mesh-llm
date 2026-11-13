@@ -91,6 +91,8 @@ pub struct EmbeddedOpenAiArgs {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Reference voices `POST /v1/audio/speech` selects with `voice`.
+    pub speech_voices: crate::frontend::SpeechVoices,
     /// Scope this backend's request defaults register under, so
     /// [`replace_live_request_defaults`] only reaches the owner that asked.
     /// `0` for backends nobody swaps live.
@@ -451,6 +453,7 @@ fn embedded_openai_backend_with_state_kind(
             model_id.as_str(),
             args.request_defaults,
         ),
+        speech_voices: args.speech_voices,
         thinking: thinking.clone(),
         ctx_size,
         mode,

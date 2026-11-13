@@ -133,6 +133,55 @@ curl -sS http://127.0.0.1:9337/v1/audio/speech \
   --output speech.wav
 ```
 
+### Voices
+
+Without configuration, `"voice": "default"` is the only accepted voice and the
+model picks its own speaker, which changes from request to request. To keep one
+speaker across requests, name reference clips under the model's `multimodal`
+table. Each clip is a few seconds of clean speech in WAV, MP3, or FLAC, given
+as an absolute path or an `http(s)` URL:
+
+```toml
+[[models]]
+model = "/models/Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf"
+mmproj = "/models/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf"
+ctx_size = 4096
+
+[models.multimodal]
+default_voice = "max"   # optional: what "voice": "default" uses
+
+[models.multimodal.voices]
+max = "/Users/Shared/max-voices/max-voice-1.wav"
+narrator = "https://example.com/voices/narrator.wav"
+```
+
+A request selects a voice by name:
+
+```bash
+curl -sS http://127.0.0.1:9337/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M", "input": "The mesh is ready.", "voice": "max", "response_format": "wav"}' \
+  --output speech.wav
+```
+
+The projector's speaker encoder conditions synthesis on the clip, so every
+request in that voice has the same speaker. A named voice also samples with a
+fixed seed derived from its name, so the same text renders the same audio;
+retrying a request that hit the frame limit fails the same way.
+`"voice": "default"` uses `default_voice` when one is set and otherwise keeps
+the model's own random speaker. An unknown voice is refused with a structured
+`unsupported_model_feature` error on `param: "voice"` that lists the voices
+the model has.
+
+Clips are read when the model loads: a missing or unreadable clip fails the
+load. Voice names are ASCII letters, digits, `-`, `_` and `.`; `default` is
+reserved. `[defaults.multimodal]` may hold a node-wide voice table, which a
+model's own `voices` table replaces as a whole. The projector decodes each clip
+once, on first use, and keeps it for the life of the loaded model; the speaker
+encoder still runs on every request, which adds about 20 ms to a request that
+takes about a second (Qwen3-TTS 1.7B Q4_K_M with a Q8_0 projector on an Apple
+M5 Max).
+
 Transcription and translation accept `multipart/form-data` with a required
 `model` field and one `file` field. Uploads are bounded at 64 MiB. Every model
 answers `json` and `text`. Models that report segment timing, such as Whisper,

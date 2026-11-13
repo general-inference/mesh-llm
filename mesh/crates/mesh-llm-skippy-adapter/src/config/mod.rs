@@ -52,4 +52,7 @@ pub use resolution::{
     resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub use support::effective_safety_margin_bytes;
-pub use types::{ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest};
+pub use types::{
+    ResolvedEmbeddedOpenAiArgs, ResolvedMultimodalConfig, ResolvedSkippyConfig,
+    SkippyConfigResolveRequest,
+};

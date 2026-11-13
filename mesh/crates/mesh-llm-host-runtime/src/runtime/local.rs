@@ -1369,6 +1369,8 @@ async fn load_direct_skippy_model(
 ) -> Result<skippy::SkippyModelHandle> {
     let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    embedded_openai.speech_voices =
+        crate::inference::skippy::load_speech_voices(&resolved.multimodal).await?;
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
@@ -1482,6 +1484,8 @@ async fn start_local_package_v2_model(
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let mut embedded_openai = resolved.to_embedded_openai_args(0, true)?;
     embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    embedded_openai.speech_voices =
+        crate::inference::skippy::load_speech_voices(&resolved.multimodal).await?;
     let live_defaults_generation =
         spec.live_request_defaults
             .track_model(&resolved.model_id, spec.config_model_id, None);

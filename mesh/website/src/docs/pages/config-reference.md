@@ -411,6 +411,8 @@ sampling at the backend when it selects mode `1` or `2`.
 | `multimodal.batch_max_tokens` | integer `1..=2147483647` | mtmd default when unset | both | model reload | wired | none |
 | `multimodal.glm_dsa_policy` | string | `auto` (default) or `v1` | both | model reload | wired | none |
 | `multimodal.generation_signal_window` | integer `1..=4096` | `16` when unset | both | model reload | wired | none |
+| `multimodal.voices` | object mapping a voice name to the absolute path or http(s) URL of a WAV, MP3, or FLAC clip | unset; a model's table replaces the defaults' table | both | model reload | wired; a speech request's `voice` selects a clip | none |
+| `multimodal.default_voice` | string naming a voice in `multimodal.voices` | unset; `"voice": "default"` keeps the model's own speaker | both | model reload | wired | none |
 
 ## Group 10: plugins
 

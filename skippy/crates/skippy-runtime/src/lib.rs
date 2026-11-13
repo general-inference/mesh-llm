@@ -72,7 +72,9 @@ pub use logging::{
     register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
     suppress_native_logs, unregister_filtered_native_logs, write_native_log_note,
 };
-pub use media::{MediaRejected, SpeechAudio, SpeechOutputFormat, SpeechSynthesisConfig};
+pub use media::{
+    MediaRejected, SpeechAudio, SpeechOutputFormat, SpeechSpeaker, SpeechSynthesisConfig,
+};
 pub use native::{
     ModelWorkload, PoolingType, StageModel, StageModelReader, SystemOneReadSlot, WorkloadInfo,
 };

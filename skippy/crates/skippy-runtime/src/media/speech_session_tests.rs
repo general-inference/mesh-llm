@@ -62,6 +62,7 @@ fn speech_success_cancellation_and_native_failure_leave_session_reusable() -> Re
         seed: 42,
         output_format: SpeechOutputFormat::Wav,
         max_frames: 2,
+        speaker: None,
     };
     let cancelled = model
         .synthesize_speech(&mut session, &config, || true)
@@ -84,6 +85,41 @@ fn speech_success_cancellation_and_native_failure_leave_session_reusable() -> Re
     assert!(capped.to_string().contains("frame limit"), "{capped:#}");
     assert_generation_reusable(&model, &mut session)?;
     config.max_frames = 512;
+    let audio = model.synthesize_speech(&mut session, &config, || false)?;
+    assert!(audio.sample_count > 0 && audio.bytes.len() > 44);
+    assert_generation_reusable(&model, &mut session)?;
+    Ok(())
+}
+
+#[test]
+/// A reference speaker decodes once per projector and conditions synthesis.
+fn speech_reference_speaker_is_decoded_once_and_synthesizes() -> Result<()> {
+    let Some(model) = speech_fixture()? else {
+        return Ok(());
+    };
+    let Ok(clip) = std::env::var("SKIPPY_WORKLOAD_SPEAKER") else {
+        return Ok(());
+    };
+    let speaker = SpeechSpeaker {
+        name: "fixture".into(),
+        audio: std::fs::read(clip).context("speaker fixture clip")?.into(),
+    };
+    let projector = model.media.as_ref().context("speech fixture projector")?;
+    let first = projector.speakers.bitmap(projector.raw, &speaker)?;
+    let again = projector.speakers.bitmap(projector.raw, &speaker)?;
+    assert!(std::sync::Arc::ptr_eq(&first, &again));
+
+    let mut session = model.create_session()?;
+    let config = SpeechSynthesisConfig {
+        prompt: "The mesh is ready.".into(),
+        language: None,
+        top_k: 20,
+        top_p: 0.8,
+        seed: 42,
+        output_format: SpeechOutputFormat::Wav,
+        max_frames: 512,
+        speaker: Some(speaker),
+    };
     let audio = model.synthesize_speech(&mut session, &config, || false)?;
     assert!(audio.sample_count > 0 && audio.bytes.len() > 44);
     assert_generation_reusable(&model, &mut session)?;

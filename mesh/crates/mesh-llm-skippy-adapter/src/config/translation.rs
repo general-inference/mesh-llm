@@ -345,6 +345,8 @@ impl ResolvedSkippyConfig {
                 .max_tokens
                 .unwrap_or(DEFAULT_EMBEDDED_MAX_TOKENS),
             request_defaults: self.request_defaults.to_embedded()?,
+            // The host reads the clips at load: see `ResolvedMultimodalConfig::voices`.
+            speech_voices: skippy_serving::SpeechVoices::default(),
             live_defaults_scope: 0,
             generation_concurrency: self.throughput.parallel,
             continuous_batching: self.throughput.continuous_batching != "false",

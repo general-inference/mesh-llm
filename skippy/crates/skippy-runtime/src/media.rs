@@ -30,6 +30,8 @@ pub struct SpeechSynthesisConfig {
     pub seed: u32,
     pub output_format: SpeechOutputFormat,
     pub max_frames: usize,
+    /// Reference speaker; `None` lets the model pick a speaker per request.
+    pub speaker: Option<SpeechSpeaker>,
 }
 
 /// Complete generated audio and its native frame count. Reaching the configured
@@ -101,6 +103,7 @@ impl Drop for SpeechEmbeddingsGuard {
 pub(crate) struct MediaProjector {
     pub(crate) raw: *mut skippy_ffi::MtmdContext,
     marker: String,
+    speakers: SpeakerCache,
 }
 
 type MediaFrameEval = (
@@ -116,11 +119,14 @@ mod chunk_capture;
 mod declared_size;
 mod decoded_budget;
 mod rejected;
+mod speaker_reference;
 use chunk_aggregation::aggregate_media_chunk_outputs;
 use chunk_capture::{ChunkCapture, capture_microbatch, split_chunk_frames};
 use declared_size::check_declared_media_size;
 use decoded_budget::DecodedMediaBudget;
 pub use rejected::MediaRejected;
+use speaker_reference::SpeakerCache;
+pub use speaker_reference::SpeechSpeaker;
 
 // The experimental C ABI owns synchronization internally for model/session use.
 // Rust stage-server access is additionally serialized behind a Mutex.
@@ -199,6 +205,7 @@ impl MediaProjector {
         Ok(Self {
             raw,
             marker: config.media_marker.clone().unwrap_or_else(Self::marker),
+            speakers: SpeakerCache::default(),
         })
     }
 
@@ -280,6 +287,12 @@ impl StageModel {
         if lctx.is_null() {
             return Err(anyhow!("speech session did not expose a llama context"));
         }
+        // Held until generation ends: the generator reads the clip in set_input.
+        let speaker = config
+            .speaker
+            .as_ref()
+            .map(|speaker| projector.speakers.bitmap(projector.raw, speaker))
+            .transpose()?;
 
         struct AudioGenerator(*mut skippy_ffi::MtmdHelperGenAudio);
         impl Drop for AudioGenerator {
@@ -351,7 +364,9 @@ impl StageModel {
         input.seq_id = session.native_sequence_id()?;
         input.prompt = prompt.as_ptr();
         input.prompt_len = config.prompt.len();
-        input.speaker_ref = ptr::null_mut();
+        input.speaker_ref = speaker
+            .as_ref()
+            .map_or(ptr::null_mut(), |bitmap| bitmap.raw());
         input.lang = language
             .as_ref()
             .map_or(ptr::null(), |value| value.as_ptr());

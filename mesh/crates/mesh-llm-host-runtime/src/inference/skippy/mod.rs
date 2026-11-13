@@ -28,8 +28,10 @@ pub(crate) use dflash_draft::{
 };
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
+pub(crate) use speech_voices::load_speech_voices;
 pub(crate) mod runtime_events;
 mod source_fetch;
+mod speech_voices;
 mod split_certification;
 mod stage;
 mod topology;

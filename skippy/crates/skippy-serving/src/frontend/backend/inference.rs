@@ -595,7 +595,7 @@ impl InferenceBackend for StageOpenAiBackend {
                 "speech speed control is not supported by the native model",
             ));
         }
-        non_chat::validate_speech_voice(&request.voice)?;
+        let voice = self.speech_voices.resolve(&request.voice)?;
         let output_format = match request.response_format {
             AudioFormat::Wav => SpeechOutputFormat::Wav,
             AudioFormat::Pcm => SpeechOutputFormat::PcmS16Le,
@@ -625,9 +625,10 @@ impl InferenceBackend for StageOpenAiBackend {
             language: None,
             top_k: 20,
             top_p: 0.8,
-            seed: u32::MAX,
+            seed: voice.seed,
             output_format,
             max_frames: 512,
+            speaker: voice.speaker,
         };
         let audio = self
             .run_local_workload(

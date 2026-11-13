@@ -66,6 +66,10 @@ pub struct ResolvedMultimodalConfig {
     pub batch_max_tokens: Option<u32>,
     pub glm_dsa_policy: skippy_protocol::GlmDsaPolicy,
     pub generation_signal_window: Option<u32>,
+    /// Speech reference clip sources (absolute path or URL) by voice name.
+    /// A model's own table replaces the defaults' table as a whole.
+    pub voices: std::collections::BTreeMap<String, String>,
+    pub default_voice: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

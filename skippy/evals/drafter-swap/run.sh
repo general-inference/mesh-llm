@@ -14,6 +14,7 @@
 #   BENCH_DFLASH_CAP                      draft tokens per block (default 7)
 #   BENCH_DOMAINS                         comma-separated workloads.jsonl domains, and/or
 #                                         "agent" for the agent transcripts at 64K context
+#   BENCH_MAX_TOKENS                      tokens per reply (default 512)
 #   BENCH_ARMS                            arms to run (default "off dflash ngram"); an arm
 #                                         "spec_<name>" drafts with a fine-tuned draft
 #   BENCH_SPECIALISTS                     "name=/abs/path.gguf ..." drafts already on this
@@ -131,6 +132,7 @@ run_arm() { # label arm prompts split domains ctx
     echo "DFLASH_BENCH {\"arm\": \"$label\", \"error\": \"server published no model\"}"
   else
     ARM="$label" PORT="$port" MODEL_ID="$model_id" TEMP=0 SPLIT="$split" PROMPTS="$prompts" DOMAINS="$domains" \
+      MAX_TOKENS="${BENCH_MAX_TOKENS:-512}" \
       python3 "$HERE/measure.py" || echo "DFLASH_BENCH {\"arm\": \"$label\", \"error\": \"measurement failed\"}"
   fi
   kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true

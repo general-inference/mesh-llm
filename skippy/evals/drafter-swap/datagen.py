@@ -26,6 +26,10 @@ if int(os.environ.get("LIMIT") or 0):
     kept = {}
     items = [item for item in items if kept.setdefault(item["domain"], []).append(item) or
              len(kept[item["domain"]]) <= int(os.environ["LIMIT"])]
+# SHARD "i/n" keeps every n-th prompt starting at i, so n jobs split one domain.
+if os.environ.get("SHARD"):
+    shard, shards = (int(x) for x in os.environ["SHARD"].split("/"))
+    items = items[shard::shards]
 
 
 def answer(item):
@@ -47,7 +51,8 @@ def answer(item):
             time.sleep(10)
 
 
-files = {domain: open(os.path.join(ART, f"train-{domain}.jsonl"), "a") for domain in DOMAINS}
+suffix = f"-{os.environ['SHARD'].replace('/', 'of')}" if os.environ.get("SHARD") else ""
+files = {domain: open(os.path.join(ART, f"train-{domain}{suffix}.jsonl"), "a") for domain in DOMAINS}
 done = {domain: set() for domain in DOMAINS}
 started, tokens, finished = time.monotonic(), 0, 0
 with ThreadPoolExecutor(CONCURRENCY) as pool:

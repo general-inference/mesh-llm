@@ -34,7 +34,8 @@ printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\ndr
 
 PORT=9391
 "$BIN" --log-format json --parallel "$PARALLEL" --port "$PORT" --console $(( PORT + 600 )) --headless \
-  --config "$ART/dflash.toml" serve --model "$TARGET" --ctx-size $(( 8192 * PARALLEL )) >"$ART/serve-datagen.log" 2>&1 &
+  --config "$ART/dflash.toml" serve --model "$TARGET" --ctx-size $(( (4096 + ${BENCH_MAX_TOKENS:-1024}) * PARALLEL )) \
+  >"$ART/serve-datagen.log" 2>&1 &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null || true' EXIT
 MODEL_ID=""
@@ -48,5 +49,6 @@ done
 [ -n "$MODEL_ID" ] || { echo "server published no model"; tail -40 "$ART/serve-datagen.log"; exit 1; }
 
 PORT="$PORT" MODEL_ID="$MODEL_ID" PROMPTS="$HERE/train-prompts.jsonl" DOMAINS="${BENCH_DOMAINS:?}" \
-  CONCURRENCY="$PARALLEL" LIMIT="${BENCH_LIMIT:-0}" python3 "$HERE/datagen.py"
+  CONCURRENCY="$PARALLEL" LIMIT="${BENCH_LIMIT:-0}" SHARD="${BENCH_SHARD:-}" \
+  MAX_TOKENS="${BENCH_MAX_TOKENS:-1024}" python3 "$HERE/datagen.py"
 echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"

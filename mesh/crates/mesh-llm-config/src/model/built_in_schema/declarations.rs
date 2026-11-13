@@ -1090,6 +1090,11 @@ fn multimodal_settings(
             &format!("{prefix}.generation_signal_window"),
             ConfigValueSchema::Integer,
         ),
+        basic_setting(&format!("{prefix}.voices"), ConfigValueSchema::object()),
+        basic_setting(
+            &format!("{prefix}.default_voice"),
+            ConfigValueSchema::String,
+        ),
         rejected_setting(
             &format!("{prefix}.embeddings"),
             ConfigValueSchema::object(),

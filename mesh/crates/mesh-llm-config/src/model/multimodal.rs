@@ -23,6 +23,13 @@ pub struct MultimodalConfig {
     pub glm_dsa_policy: Option<String>,
     #[serde(default)]
     pub generation_signal_window: Option<u32>,
+    /// Speech reference voices by request name. Each value is an absolute
+    /// path or an http(s) URL to a WAV, MP3, or FLAC clip of the speaker.
+    #[serde(default)]
+    pub voices: Option<std::collections::BTreeMap<String, String>>,
+    /// The voice a speech request with `"voice": "default"` uses.
+    #[serde(default)]
+    pub default_voice: Option<String>,
     #[serde(default)]
     pub embeddings: Option<toml::Value>,
     #[serde(default)]

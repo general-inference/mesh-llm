@@ -57,6 +57,8 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     /// Read through [`LiveRequestDefaults::snapshot`] once per request so a
     /// config change applies to the next request without a model reload.
     pub(in crate::frontend) request_defaults: super::LiveRequestDefaults,
+    /// Reference voices a speech request's `voice` selects.
+    pub(in crate::frontend) speech_voices: crate::frontend::SpeechVoices,
     /// Render-only reasoning-control observations for this loaded model.
     pub(in crate::frontend) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(in crate::frontend) ctx_size: usize,

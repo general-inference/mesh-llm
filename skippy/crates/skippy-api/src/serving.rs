@@ -3,7 +3,7 @@ use skippy_inference_api::InferenceHookPolicy;
 use skippy_protocol::StageConfig;
 use skippy_serving::{
     DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults,
-    NativeMtpProposalConfig, SpeculativeDecodeConfig,
+    NativeMtpProposalConfig, SpeculativeDecodeConfig, SpeechVoices,
     telemetry::{Telemetry, TelemetryLevel},
 };
 use std::{
@@ -24,6 +24,8 @@ pub struct InferenceOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Reference voices for `POST /v1/audio/speech`.
+    pub speech_voices: SpeechVoices,
     /// See `EmbeddedOpenAiArgs::live_defaults_scope`.
     pub live_defaults_scope: u64,
     pub generation_concurrency: usize,
@@ -80,6 +82,7 @@ impl InferenceOptions {
             model_id,
             default_max_tokens,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            speech_voices: SpeechVoices::default(),
             live_defaults_scope: 0,
             generation_concurrency,
             continuous_batching: skippy_config::local_serving::CONTINUOUS_BATCHING,
@@ -142,6 +145,7 @@ impl InferenceOptions {
             model_id: self.model_id,
             default_max_tokens: self.default_max_tokens,
             request_defaults: self.request_defaults,
+            speech_voices: self.speech_voices,
             live_defaults_scope: self.live_defaults_scope,
             generation_concurrency: self.generation_concurrency,
             continuous_batching: self.continuous_batching,

@@ -173,6 +173,15 @@ fn resolve_multimodal_config(context: &ResolverContext<'_>) -> Result<ResolvedMu
             model.and_then(|value| value.generation_signal_window),
             defaults.and_then(|value| value.generation_signal_window),
         ),
+        voices: pick_owned(
+            model.and_then(|value| value.voices.clone()),
+            defaults.and_then(|value| value.voices.clone()),
+        )
+        .unwrap_or_default(),
+        default_voice: pick_owned(
+            model.and_then(|value| value.default_voice.clone()),
+            defaults.and_then(|value| value.default_voice.clone()),
+        ),
     })
 }
 

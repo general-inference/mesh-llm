@@ -56,18 +56,6 @@ fn workload_error(error: anyhow::Error) -> InferenceError {
     InferenceError::backend(format!("workload execution failed: {error:#}"))
 }
 
-/// Accept only the implemented default speaker; do not reinterpret voice as language.
-pub(super) fn validate_speech_voice(voice: &str) -> InferenceResult<()> {
-    if voice == "default" {
-        Ok(())
-    } else {
-        Err(InferenceError::unsupported(
-            "native speech synthesis currently supports only voice 'default'; speaker selection is not implemented",
-        )
-        .with_param("voice"))
-    }
-}
-
 impl StageOpenAiBackend {
     /// Recognize complete local models in both standalone and embedded serving modes.
     pub(in crate::frontend) fn has_unsplit_full_model_topology(&self) -> bool {
@@ -374,7 +362,7 @@ mod tests {
 
     use super::{
         audio_text_instruction, audio_text_user_message, audio_transcript_text,
-        collect_workload_batch, validate_speech_voice, workload_error,
+        collect_workload_batch, workload_error,
     };
     use skippy_inference_api::{AudioTranscriptionRequest, MessageContent};
 
@@ -460,22 +448,6 @@ mod tests {
         };
         assert_eq!(parts[0].content_type, "text");
         assert_eq!(parts[1].content_type, "input_audio");
-    }
-
-    #[test]
-    /// Voice selection must not be silently repurposed as a language selector.
-    fn speech_voice_rejects_unsupported_speakers_without_reinterpreting_language() {
-        validate_speech_voice("default").expect("the default native speaker is supported");
-
-        for voice in ["alloy", "english", ""] {
-            let error = validate_speech_voice(voice).expect_err("speaker selection is unsupported");
-            assert_eq!(
-                error.body().error.code.as_deref(),
-                Some("unsupported_model_feature")
-            );
-            assert_eq!(error.body().error.param.as_deref(), Some("voice"));
-            assert!(error.body().error.message.contains("voice 'default'"));
-        }
     }
 
     #[test]

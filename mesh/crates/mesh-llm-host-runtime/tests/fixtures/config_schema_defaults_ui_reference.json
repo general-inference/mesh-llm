@@ -246,6 +246,13 @@
       }
     },
     {
+      "canonical_path": "defaults.multimodal.default_voice",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.multimodal.generation_signal_window",
       "support": "supported",
       "source": {
@@ -296,6 +303,13 @@
     },
     {
       "canonical_path": "defaults.multimodal.mmproj_url",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.multimodal.voices",
       "support": "supported",
       "source": {
         "kind": "built_in"

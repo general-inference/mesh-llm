@@ -107,6 +107,7 @@ fn deterministic_tts_candidate_when_fixture_is_set() -> Result<()> {
             seed,
             output_format: SpeechOutputFormat::Wav,
             max_frames,
+            speaker: None,
         },
         || false,
     )?;

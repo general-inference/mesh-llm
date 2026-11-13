@@ -665,6 +665,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         model_id: "mm-smoke".to_string(),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
+        speech_voices: Default::default(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::EmbeddedStageZero {

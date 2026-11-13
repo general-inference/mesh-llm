@@ -80,6 +80,9 @@ def main():
     parser.add_argument("--arms", help="headroom arms to run, e.g. 'ngram' (default: all)")
     parser.add_argument("--limit", type=int, help="datagen: prompts per domain (default: all)")
     parser.add_argument("--probes", help="swap: probes to run, e.g. 'replay' (default: all)")
+    parser.add_argument("--domains", help="headroom: workloads for every selected node, e.g. 'html,prose'")
+    parser.add_argument("--specialists", help="headroom: 'name=/abs/path.gguf ...' drafts on the node")
+    parser.add_argument("--tag", help="names this submission's spec and state files")
     args = parser.parse_args()
     rev = subprocess.run(["git", "rev-parse", args.rev], cwd=HERE, check=True, capture_output=True,
                          text=True).stdout.strip()
@@ -87,9 +90,14 @@ def main():
     (out / "specs").mkdir(parents=True, exist_ok=True)
     phase = PHASES[args.phase]
     state = {"rev": rev, "phase": args.phase, "jobs": []}
-    for node, domains in phase["assignment"].items():
+    assignment = dict(phase["assignment"])
+    for node in (args.only or "").split(","):
+        if node and node not in assignment:
+            assignment[node] = args.domains or ""
+    for node, domains in assignment.items():
         if args.only and node not in args.only.split(","):
             continue
+        domains = args.domains or domains
         spec = {"spec": {
             "name": f"{phase['title']}{f' ({args.arms or args.probes})' if args.arms or args.probes else ''} · {domains} · {node} @ {rev[:9]}",
             "description": phase["description"],
@@ -118,12 +126,13 @@ def main():
                     **({"BENCH_ARMS": args.arms} if args.arms else {}),
                     **({"BENCH_LIMIT": str(args.limit)} if args.limit else {}),
                     **({"BENCH_PROBES": args.probes} if args.probes else {}),
+                    **({"BENCH_SPECIALISTS": args.specialists} if args.specialists else {}),
                     "BENCH_ALT_DRAFT_URL": ALT_DRAFT["url"], "BENCH_ALT_DRAFT_SHA256": ALT_DRAFT["sha256"],
                 },
                 "command": f"bash mesh-llm/skippy/evals/drafter-swap/{phase['command']}",
             },
         }}
-        variant = args.arms or (args.probes or "").replace(" ", "+")
+        variant = args.tag or args.arms or (args.probes or "").replace(" ", "+")
         path = out / "specs" / f"{args.phase}{'-' + variant if variant else ''}-{node}.json"
         path.write_text(json.dumps(spec, indent=1))
         if args.dry_run:

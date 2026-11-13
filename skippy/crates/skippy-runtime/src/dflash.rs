@@ -1386,8 +1386,12 @@ impl StageModel {
     /// target and its sessions. Every live session must call
     /// [`StageSession::dflash_restart`] before it drafts again: the new draft
     /// holds no rows, and drafts from the rows decoded after the restart.
+    /// `session` is a live session of this target; when the new draft reads
+    /// other target layers, the target's stage program is refreshed through
+    /// it, since every lane may be taken.
     pub fn swap_dflash_draft(
         &self,
+        session: &StageSession,
         path: impl AsRef<Path>,
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
@@ -1398,6 +1402,7 @@ impl StageModel {
         let mut guard = lock_draft(shared);
         let incoming = DFlashDraft::open(guard.target_ctx, path.as_ref(), options, config)?;
         let info = incoming.info().clone();
+        let layers_changed = guard.info.target_layer_ids != info.target_layer_ids;
         let mut outgoing = std::mem::replace(&mut *guard, incoming);
         drop(guard);
         // The new draft already captures the layers it reads; the old one
@@ -1407,8 +1412,9 @@ impl StageModel {
             .iter_mut()
             .for_each(|local| *local = false);
         drop(outgoing);
-        let probe = self.create_session()?;
-        refresh_target_program(&probe)?;
+        if layers_changed {
+            refresh_target_program(session)?;
+        }
         Ok(info)
     }
 

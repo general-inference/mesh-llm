@@ -70,7 +70,7 @@ pub(crate) fn run(
                 let started = Instant::now();
                 setup
                     .target
-                    .swap_dflash_draft(&setup.drafts[next], setup.options, setup.config)
+                    .swap_dflash_draft(&session, &setup.drafts[next], setup.options, setup.config)
                     .with_context(|| format!("swap in {}", setup.drafts[next].display()))?;
                 let ms = elapsed_ms(started);
                 attached = next;

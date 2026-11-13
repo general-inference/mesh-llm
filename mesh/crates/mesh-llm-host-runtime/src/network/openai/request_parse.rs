@@ -40,12 +40,36 @@ pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
-const MAX_DOCUMENT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
+const DEFAULT_DOCUMENT_UPLOAD_BODY_BYTES: usize = 100 * 1024 * 1024 + 64 * 1024;
+
+/// The document-upload cap. The default is generous for OCR pipelines that
+/// spool and page through large scans; operators can lower it with
+/// `MESH_DOCUMENT_UPLOAD_MAX_BYTES` when the node fronts a small disk or
+/// memory budget.
+fn max_document_upload_body_bytes() -> usize {
+    static BYTES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        document_upload_body_bytes_from(
+            std::env::var("MESH_DOCUMENT_UPLOAD_MAX_BYTES")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+fn document_upload_body_bytes_from(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|bytes| *bytes > 0)
+        .unwrap_or(DEFAULT_DOCUMENT_UPLOAD_BODY_BYTES)
+}
+
+fn max_document_upload_chunked_wire_bytes() -> usize {
+    max_document_upload_body_bytes() * 6 + 64 * 1024
+}
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 const MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_AUDIO_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
-const MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES: usize =
-    MAX_DOCUMENT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
 const CRLF: &[u8] = b"\r\n";
 const LF: &[u8] = b"\n";
@@ -703,8 +727,8 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
     } else if is_document_ocr_path(path_only) {
         HttpReadLimits {
             max_header_bytes: default.max_header_bytes,
-            max_body_bytes: MAX_DOCUMENT_UPLOAD_BODY_BYTES,
-            max_chunked_wire_bytes: MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES,
+            max_body_bytes: max_document_upload_body_bytes(),
+            max_chunked_wire_bytes: max_document_upload_chunked_wire_bytes(),
         }
     } else {
         default

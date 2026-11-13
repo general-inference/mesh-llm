@@ -828,10 +828,27 @@ async fn document_ocr_upload_extracts_model_from_multipart() {
 #[test]
 fn document_ocr_upload_limits_are_path_scoped() {
     let limits = body_limits_for_path("/mesh/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
-    assert_eq!(limits.max_body_bytes, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
+    assert_eq!(limits.max_body_bytes, max_document_upload_body_bytes());
     assert_eq!(
         limits.max_chunked_wire_bytes,
-        MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES
+        max_document_upload_chunked_wire_bytes()
+    );
+}
+
+#[test]
+fn document_upload_cap_reads_the_environment_override() {
+    assert_eq!(
+        document_upload_body_bytes_from(None),
+        DEFAULT_DOCUMENT_UPLOAD_BODY_BYTES
+    );
+    assert_eq!(document_upload_body_bytes_from(Some("1048576")), 1_048_576);
+    assert_eq!(
+        document_upload_body_bytes_from(Some("0")),
+        DEFAULT_DOCUMENT_UPLOAD_BODY_BYTES
+    );
+    assert_eq!(
+        document_upload_body_bytes_from(Some("garbage")),
+        DEFAULT_DOCUMENT_UPLOAD_BODY_BYTES
     );
 }
 

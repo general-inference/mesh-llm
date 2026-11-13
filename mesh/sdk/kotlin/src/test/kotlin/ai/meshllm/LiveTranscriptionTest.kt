@@ -3,6 +3,7 @@ package ai.meshllm
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -47,9 +48,11 @@ class LiveTranscriptionTest {
     }
 
     @Test
-    fun cancellingEventsDuringPendingReadClosesOnIoWithoutBlockingCollection() = runTest {
+    fun cancellingEventsDuringPendingReadClosesOnIoWithoutBlockingCollection() = runBlocking {
         val readPending = CompletableDeferred<Unit>()
         val closeStarted = CompletableDeferred<Unit>()
+        val readFinished = CompletableDeferred<Unit>()
+        val closeFinished = CompletableDeferred<Unit>()
         // closeNative is a plain () -> Unit, so the park must be a blocking
         // wait rather than a suspending await; the reader callback stays
         // suspending either way.
@@ -57,19 +60,35 @@ class LiveTranscriptionTest {
         val live = LiveTranscription(
             audio = {}, floatAudio = {}, commitNative = {},
             // The reader parks in a pending native read until close releases it.
-            eventJson = { readPending.complete(Unit); release.await(); null },
+            eventJson = {
+                readPending.complete(Unit)
+                try { release.await(); null }
+                finally { readFinished.complete(Unit) }
+            },
             stopJson = { "[]" },
             // Native close waits for the session pump, like a pending final transcript.
-            closeNative = { closeStarted.complete(Unit); release.await() },
+            closeNative = {
+                closeStarted.complete(Unit)
+                try { release.await() }
+                finally { closeFinished.complete(Unit) }
+            },
         )
         val collection = launch { live.events().collect { } }
-        readPending.await()
-        withTimeout(5_000) {
-            // Cancellation must return even though the native close is parked:
-            // the collector's dispatcher never runs the blocking cleanup.
-            collection.cancelAndJoin()
+        try {
+            withTimeout(5_000) {
+                readPending.await()
+                // Cancellation must return even though the native close is parked:
+                // the collector's dispatcher never runs the blocking cleanup.
+                collection.cancelAndJoin()
+                closeStarted.await()
+            }
+        } finally {
+            // A failed cancellation assertion must still release both native calls.
+            release.countDown()
         }
-        release.countDown()
-        withTimeout(5_000) { closeStarted.await() }
+        withTimeout(5_000) {
+            readFinished.await()
+            closeFinished.await()
+        }
     }
 }

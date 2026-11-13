@@ -2,6 +2,7 @@ package ai.meshllm
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -87,7 +88,10 @@ class LiveTranscription internal constructor(
     }
     suspend fun close(): Unit = withContext(Dispatchers.IO) { closeNative() }
     fun events(): Flow<LiveTranscriptionEvent> = callbackFlow {
-        val reader = launch(Dispatchers.IO) {
+        // A blocking native read cannot be cancelled until native close returns.
+        // Keep its lifetime outside the collector's structured cancellation join.
+        val nativeScope = CoroutineScope(Dispatchers.IO)
+        nativeScope.launch {
             try {
                 while (true) { send(nextEvent() ?: break) }
                 channel.close()
@@ -98,9 +102,12 @@ class LiveTranscription internal constructor(
             // same wait close() performs on Dispatchers.IO — and unblocks a
             // reader parked in a pending read. Run it on IO so cancellation
             // never blocks the collector's dispatcher.
-            CoroutineScope(Dispatchers.IO).launch {
-                closeNative()
-                reader.cancel()
+            nativeScope.launch {
+                try {
+                    closeNative()
+                } finally {
+                    nativeScope.cancel()
+                }
             }
         }
     }

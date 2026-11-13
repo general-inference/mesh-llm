@@ -2,6 +2,8 @@
 # Generates drafter training data: the target answers train-prompts.jsonl for
 # BENCH_DOMAINS, served with its shipped DFlash2 draft and BENCH_PARALLEL slots.
 # Same inputs as run.sh. Run from the jy workspace root after dflash-defaults/build.sh.
+# BENCH_CONTINUE=1 instead continues the capped replies of data/train-<BENCH_DOMAINS>.jsonl
+# to completion (continue_replies.py).
 set -euo pipefail
 
 cd mesh-llm
@@ -48,6 +50,12 @@ for _ in $(seq 450); do
 done
 [ -n "$MODEL_ID" ] || { echo "server published no model"; tail -40 "$ART/serve-datagen.log"; exit 1; }
 
+if [ "${BENCH_CONTINUE:-0}" = 1 ]; then
+  PORT="$PORT" MODEL_ID="$MODEL_ID" DATA="$HERE/data/train-${BENCH_DOMAINS:?}.jsonl" CONCURRENCY="$PARALLEL" \
+    SHARD="${BENCH_SHARD:-}" MAX_TOKENS="${BENCH_MAX_TOKENS:-12288}" python3 "$HERE/continue_replies.py"
+  echo '{"points": [], "provenance": {"stack_commit": "'"${JIANYANG_COMMIT:-}"'"}}' > "${JIANYANG_RESULT_PATH:-/dev/null}"
+  exit 0
+fi
 PORT="$PORT" MODEL_ID="$MODEL_ID" PROMPTS="$HERE/train-prompts.jsonl" DOMAINS="${BENCH_DOMAINS:?}" \
   CONCURRENCY="$PARALLEL" LIMIT="${BENCH_LIMIT:-0}" SHARD="${BENCH_SHARD:-}" \
   MAX_TOKENS="${BENCH_MAX_TOKENS:-1024}" python3 "$HERE/datagen.py"

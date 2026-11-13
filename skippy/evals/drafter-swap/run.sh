@@ -102,7 +102,7 @@ arm_args() {
     off) echo "--no-draft --speculative-strategy disabled" ;;
     dflash) echo "--config $ART/dflash.toml" ;;
     spec_*) echo "--config $ART/$1.toml" ;;
-    ngram) echo "--no-draft --config $ART/ngram.toml" ;;
+    ngram|ngram_nogate) echo "--no-draft --config $ART/ngram.toml" ;;
     *) echo "unknown arm $1" >&2; exit 1 ;;
   esac
 }
@@ -112,8 +112,11 @@ run_arm() { # label arm prompts split domains ctx
   local port=$(( 9400 + $(printf '%s%s' "${JIANYANG_RUN_ID:-run}" "$label" | cksum | cut -d' ' -f1) % 500 ))
   gpu_state "$label"
   echo "=== $label: $arm on ${domains:-$split} (port $port, ctx $ctx)"
+  # ngram_nogate turns off the closed-loop gate that can stand speculation down.
+  local gate=1
+  [ "$arm" = ngram_nogate ] && gate=0
   # shellcheck disable=SC2046
-  "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless $(arm_args "$arm") \
+  SKIPPY_SPECULATION_GATE=$gate "$BIN" --log-format json --parallel 1 --port "$port" --console $(( port + 600 )) --headless $(arm_args "$arm") \
     serve --model "$TARGET" --ctx-size "$ctx" >"$ART/serve-$label.log" 2>&1 &
   local server=$! model_id="" t0; t0=$(date +%s)
   while [ $(( $(date +%s) - t0 )) -lt 900 ]; do

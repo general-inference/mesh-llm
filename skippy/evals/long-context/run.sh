@@ -59,8 +59,12 @@ fetch "${BENCH_DRAFT_URL:?}" "${BENCH_DRAFT_SHA256:?}" "${BENCH_DRAFT_BYTES:?}" 
 echo "weights verified: $SOURCE $DRAFT"
 
 FACTOR="${BENCH_YARN_FACTOR:-4}" ORIGINAL="${BENCH_YARN_ORIGINAL:-262144}"
-TARGET="$MODELS/yarn${FACTOR}-${BENCH_TARGET_SHA256:0:12}-${SOURCE##*/}"
-[ -f "$TARGET" ] || python3 -I "$HERE/yarn_gguf.py" "$SOURCE" "$TARGET" --factor "$FACTOR" --original "$ORIGINAL"
+# A factor of 0 serves the GGUF as published (native window, no YaRN), as a control.
+TARGET="$SOURCE"
+if [ "$FACTOR" != 0 ]; then
+  TARGET="$MODELS/yarn${FACTOR}-${BENCH_TARGET_SHA256:0:12}-${SOURCE##*/}"
+  [ -f "$TARGET" ] || python3 -I "$HERE/yarn_gguf.py" "$SOURCE" "$TARGET" --factor "$FACTOR" --original "$ORIGINAL"
+fi
 echo "target: $TARGET"
 
 model_fit() {

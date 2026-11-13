@@ -656,9 +656,14 @@ impl MeshApi {
             .await;
         let topologies = node.stage_topologies().await;
         let statuses = node.stage_runtime_statuses().await;
+        let local_node = node.id();
         let stage_statuses = statuses
             .iter()
             .map(|status| {
+                let meter = reported_stage_meter(status, local_node, |run_id| {
+                    crate::inference::skippy::stage0_compute_meter(run_id)
+                        .map(|meter| meter.snapshot())
+                });
                 serde_json::json!({
                     "topology_id": status.topology_id.clone(),
                     "run_id": status.run_id.clone(),
@@ -701,6 +706,10 @@ impl MeshApi {
                     "lane_count": status.lane_count,
                     "error": status.error.clone(),
                     "shutdown_generation": status.shutdown_generation,
+                    "compute_busy_nanos": meter.busy_nanos,
+                    "compute_operations": meter.operations,
+                    "compute_decode_tokens": meter.decode_tokens,
+                    "compute_verify_tokens": meter.verify_tokens,
                 })
             })
             .collect::<Vec<_>>();
@@ -1056,6 +1065,28 @@ impl MeshApi {
         inner.runtime_data_producer.mark_status_dirty();
         inner.sse_clients.retain(|tx| !tx.is_closed());
     }
+}
+
+/// The compute meter `/api/runtime/stages` reports for a stage. Stage 0 runs in
+/// the node's own runtime, whose meter its status does not carry, so this
+/// node's own stage 0 reads that runtime's meter (`stage0`, by run id). Every
+/// other status reports its own figures, including a peer's stage 0 whose run
+/// id matches a local one.
+pub(crate) fn reported_stage_meter(
+    status: &mesh::StageRuntimeStatus,
+    local_node: iroh::EndpointId,
+    stage0: impl FnOnce(&str) -> Option<skippy_serving::compute_meter::StageComputeSnapshot>,
+) -> skippy_serving::compute_meter::StageComputeSnapshot {
+    let own = skippy_serving::compute_meter::StageComputeSnapshot {
+        busy_nanos: status.compute_busy_nanos,
+        operations: status.compute_operations,
+        decode_tokens: status.compute_decode_tokens,
+        verify_tokens: status.compute_verify_tokens,
+    };
+    if status.stage_index != 0 || status.node_id != Some(local_node) {
+        return own;
+    }
+    stage0(&status.run_id).unwrap_or(own)
 }
 
 async fn peer_reporting_snapshot(

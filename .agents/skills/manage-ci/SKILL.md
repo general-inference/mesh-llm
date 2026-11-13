@@ -46,6 +46,30 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/authority-automation` owns the commands that consumers of the protected
+authority artifacts run: `models resolve`, `models restore-inputs`,
+`ci-ops authority-audit`, `ci-ops pr-authority-audit`, and
+`artifact file-projection`, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, serde_json,
+sha2, hex, and libc on Unix; it never links process supervision, HTTP, async
+runtime, archive, or product crates. Full xtask keeps every command and
+delegates these to the library. The protected authority producers compile only
+this executable and stage it under the unchanged `xtask` artifact member, so
+consumers restore and verify the same layout. A command joins it only when every
+consumer of those artifacts needs it and it fits that boundary.
+
+`tools/runner-cleanup` owns `ci-ops runner-cleanup`, the bounded deletion of a
+persistent job's own outputs, plus its own `automation bootstrap` descriptor.
+Its normal dependencies are limited to the controller library, process
+supervision, and thiserror; it never links HTTP, async runtime, archive, or
+product crates. Full xtask keeps the command and delegates it to the library,
+so stdout, stderr, and exit codes match. A job whose only automation is that
+cleanup prepares this executable through `just runner-cleanup-bootstrap`
+instead of full xtask: today only the trusted runner-image job. Its private
+copy keeps the `xtask` name and the `ci-ops runner-cleanup` argv, so the
+cleanup and finalization guards are unchanged. Jobs that run any other xtask
+command keep `just automation-bootstrap`.
+
 `tools/process-supervision` owns bounded child-process supervision
 (`supervise*`, `retained`) and the command interruption scope (`interrupt`).
 Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
@@ -64,8 +88,16 @@ measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
 Persistent canary jobs use the runner OS's `preinstalled-macos` or
-`preinstalled-linux` automation profile. The native producers request their OS
-and at least 128 GiB; preflight, family and infrastructure-retry jobs request
+`preinstalled-linux` automation profile. The resolver, attempt selectors,
+package combination, aggregation, and reconciliation use the protected 128 GiB
+managed pool; the initial resolver uses those literal closed labels before it
+can emit placement outputs. The credentialed publisher and scheduled alert use
+the same closed managed lab pool. No Llama Upgrade job uses a GitHub-hosted
+runner. Persistent control jobs use the typed `canary-controller` finalizer;
+failed uploads leave the local handoff intact for same-job diagnosis. A failed
+upload blocks the pass, and a rerun reconstructs the handoff from its uploaded
+producer inputs. The native producers
+request their OS and at least 128 GiB; preflight, family and infrastructure-retry jobs request
 the controller's memory tier without an OS or machine type. The worker restores
 the matching native payload from one candidate-bound combined package. Backend
 selection uses Metal on macOS and CUDA on Linux; the Linux image must carry a
@@ -98,11 +130,14 @@ not wait on a producer and only plan or validate (the entry planners through
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, Docker precheck, and preview
+such as authority audits, canary summaries, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
-always compiled in-run.
+always compiled in-run. `prepare-automation` takes a closed `tool` input
+(`xtask` by default, or `authority-automation`); `upload-automation` selects
+`authority-automation` exactly for the `protected-clean` source profile, and
+only full xtask may use the hosted executable cache.
 
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
@@ -349,6 +384,13 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Dependencies, summaries, and cancellation
 
+- Quality candidate-source consistency runs in a required hosted peer job,
+  independent of protected authority production and the full contract suite.
+  Check crate lists, publishing, release targets, client dependency purity,
+  console output and environment mutation on `inputs.source_sha`. Keep the
+  full automation and legacy contract suite in the existing Quality slice,
+  with its authority dependencies intact. Consistency failure must not gate
+  that suite on main or manual-full; PR sibling cancellation remains unchanged.
 - If a consumer downloads an artifact, its producer must be reachable under
   the same plan and declared through `needs`. Consumers never rebuild missing
   producer inputs.
@@ -541,13 +583,27 @@ checked-in expiry are the maintainer-controlled approval boundary.
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
 - Every `release.yml` job that can reach cargo — directly, or through
-  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
+  `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
   the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
   they stay cargo-free. `tools/xtask` rejects a cargo caller without
   initialization and any cargo call inside a composition-only job, because a
   canary cannot exercise the canary-skipped jobs.
+- Windows jobs that install sccache through `mozilla-actions/sccache-action`
+  pin `version: v0.16.0`. sccache 0.17 and later expand Cargo's rustc argfile,
+  and with Rust 1.100's build-dir layout the expanded command exceeds the
+  Windows command-line limit (os error 206, mozilla/sccache#2787). This matches
+  the 0.16.0 developer bootstrap. `tools/xtask` rejects an unpinned or
+  different version in a managed Windows compilation job and in
+  `prepare-automation`. 0.16.0 doesn't cache a rustc call that uses an argfile;
+  it hands it to rustc. Cargo uses an argfile only for over-long command lines,
+  so the largest crates (`skippy-commands`, `skippy-api`,
+  `mesh-llm-skippy-adapter`, likely `mesh-llm`) recompile on every Windows run,
+  warm or cold. A slow warm Windows lane is expected while the pin holds, not a
+  cache regression. Lift the pin once an upstream fix is released and a Windows
+  lane passes with it.
 - Cache keys include every compatibility boundary: provider where necessary,
   OS, architecture, backend/toolchain, profile, image/toolchain epoch,
   lockfiles, recipe inputs, and `.github/cache-version.txt`. Do not use broad
@@ -564,8 +620,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` and
-  `tools/process-supervision/**` because xtask compiles both libraries. A
+  executable, whose key also hashes `tools/authority-automation/**`,
+  `tools/ci-controller/**`, `tools/process-supervision/**`, and
+  `tools/runner-cleanup/**` because xtask compiles those libraries. A
   library crate that xtask or the controller starts compiling joins the
   matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
@@ -630,6 +687,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Operational safety
 
+- Stability and KV ownership coverage are manual-only while their nightly
+  schedules are paused. Keep both manual entrypoints and their evidence gates;
+  restoring a schedule requires reviewed live qualification.
+
 - Self-hosted jobs must finish with bounded cleanup of their own generated
   files after artifact uploads and explicit cache saves. Preserve shared model,
   compiler and package caches, source checkouts, and local recovery artifacts
@@ -661,10 +722,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   invoking Goose; valid candidate failures from a mixed pass are retained.
   Repeated infrastructure failure, or corrupt/foreign/contract evidence, stops
   without invoking Goose. There are at most three distributed repair attempts.
-  Every edited candidate must
+  Outside the recovered-retry exception below, every edited candidate must
   rebuild and rerun the complete candidate family pass, followed by a fresh
   independent build and complete family pass on the same commit. Agent test
-  results must never replace either trusted full pass. Coding turns are admitted
+  results must never replace trusted certification. Coding turns are admitted
   only within a bounded repair window. Each returned candidate receives a full,
   separately bounded verification pass; earlier repairs and failed gates must
   not shorten that pass. Outer workflow limits must cover each admitted repair
@@ -680,10 +741,30 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- When protected `main` requires pull requests and checks, prepare the complete
+  version update with `scripts/release-version.sh` in a reviewed PR before
+  dispatching a release. The workflow must reapply it idempotently. Do not
+  bypass branch rules to make its version-preparation push succeed.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Successful same-candidate infrastructure retries reuse the original complete
+family results and the admitted retry receipts. Reconciliation marks this case
+`retry_recovered=true`; all three outer `verify_*` jobs skip it, and attempt
+selection may continue to publication without another native build or family
+matrix. This is the exception to the independent-pass requirements below.
+Unrecovered or invalid evidence still blocks publication. A new candidate or
+producer identity invalidates earlier receipts and requires fresh validation.
+The `retry_recovered` marker flows through attempt selection, the `result` job
+outputs and the publication input; the handoff gate admits the recovered
+`repair-*` package only when that marker is present, and ordinary candidates
+still require a `verify-*` package.
+This also applies to unchanged selected-source `certify-and-publish` runs:
+final selection retains the recovery marker, and the publisher exports the
+exact selected repair commit from the frozen controller checkout. It does not
+require a `verify-1` package after successful retry reconciliation.
 
 Repair iterations use `automation canary-receipts repair-check --phase fast`.
 The same typed command owns local and CI environments, static native/Rust builds,
@@ -739,6 +820,11 @@ agents remain credential-free. Runner placement uses managed labels and queues
 when matching capacity is unavailable; it never queries the repository runner
 API or adds an administrator credential to repair workers.
 
+Native candidate producers on both macOS and Linux cap CTest concurrency at
+four processes. Graph-contract cases construct many full-model contexts; do
+not saturate the host with sixteen such cases or increase per-case timeouts
+to mask contention. Keep the complete suite and its 900-second case deadline.
+
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
 generation, patch equality and idempotence must pass before rebuilding and
@@ -766,8 +852,12 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases both native build runners before scheduling
-one job per certified family. The combined handoff binds one source, plan and
+The trusted-main canary runs macOS and Linux native producers concurrently for
+the first unchanged selected-source certification pass. Both independently
+build the frozen commit, and combination requires matching source, plan and
+candidate receipts. Changed-pin repair and independent verification keep the
+Mac-to-Linux candidate dependency. Both native build runners are released before
+scheduling one job per certified family. The combined handoff binds one source, plan and
 manifest to separate macOS and Linux executable sets; each worker chooses its
 set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level
@@ -825,9 +915,9 @@ restores the prior candidate as uncommitted changes on the frozen base and
 starts a new bounded session that must read the supplied evidence. Every edit
 invalidates all family results. A complete green candidate pass must be
 followed by a fresh independent build and complete per-family pass on the same
-commit. A hosted aggregate
+commit. A managed aggregate
 rejects missing, duplicate, failed, cancelled, or mismatched results. Only the
-final hosted publisher receives the repair credential, and a failed or
+final managed lab publisher receives the repair credential, and a failed or
 exhausted pass publishes no branch or PR.
 
 The family plan must require executable coverage for every integrated MTP head
@@ -876,7 +966,7 @@ bounds, and never falls back from a newer failure to an older success. The
 family job-result gate remains mandatory so missing uploads cannot hide failures.
 Failed certifications upload their evidence and then fail the family job, so
 GitHub's failed-job rerun can select them instead of only retrying aggregation.
-GitHub failed-job reruns retain attempt-labelled evidence. The hosted aggregate
+GitHub failed-job reruns retain attempt-labelled evidence. The managed aggregate
 classifies newest candidate failures separately from runner/workflow failures.
 It emits a digest-bound classification artifact for either a candidate repair
 or the one targeted infrastructure recheck. Reconciliation combines retained
@@ -911,6 +1001,48 @@ Also run what applies:
 Finish with changed files, validation results, expected skips, unresolved
 risks, external state changes, and live configuration that could not be
 verified.
+
+## Proving a lane change before merge
+
+PR entrypoints call the protected default-branch lanes
+(`ci-<platform>-lane.yml@main`), so a PR does **not** execute its own
+lane-workflow changes in its PR checks; the first real execution of a lane
+edit is the next `main` push after merge. Local-action changes are the
+exception: a lane that checks out `source_sha` and invokes a local action
+runs the action from the PR — for example the Windows product slice checks
+out `inputs.source_sha` and invokes its local `compose-product-input`, so a
+change to that action can run in the PR row. Do not describe a PR's green
+lanes as evidence for a change its row never executed.
+
+For CI-plumbing PRs, attach lane-dispatch evidence from the branch instead:
+generate a plan locally, project the lane exactly as
+`.github/actions/plan-ci` does, narrow its matrices to the rows under test,
+and run `gh workflow run ci-<platform>-lane.yml --ref <branch>` with
+`lane_plan_json`, `plan_digest`, `source_sha` (the branch head) and
+`original_event_name=workflow_dispatch`. The planner reads exactly one JSON
+request from stdin (`tools/ci-controller/src/plan/request.rs`): closed fields
+`profile`, `event_name`, 40-hex `source_sha`, 40-hex `base_sha`, and
+`changed_files` as a JSON array of repository-relative POSIX paths. Pipe the
+request into the command and compute `plan_digest` exactly as
+`.github/actions/plan-ci` does:
+
+```bash
+jq -cn \
+  --arg profile pr-ready \
+  --arg event_name pull_request \
+  --arg source_sha <40-hex branch head> \
+  --arg base_sha <40-hex merge base> \
+  --argjson changed_files '[".github/workflows/ci-<platform>-lane.yml"]' \
+  '{profile: $profile, event_name: $event_name, source_sha: $source_sha,
+    base_sha: $base_sha, changed_files: $changed_files}' \
+  | cargo xtool ci plan --manifest-root . > ci-plan.json
+plan_json=$(jq -c . ci-plan.json)
+plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')
+```
+
+(`sha256sum` is `shasum -a 256` on macOS.) Where the change is a new gate, run
+it twice — once on a branch without the fix it is meant to catch (expected
+red) and once with it (expected green) — and link both runs in the PR.
 
 ## Rolling previews
 

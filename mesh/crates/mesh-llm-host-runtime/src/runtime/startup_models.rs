@@ -183,6 +183,17 @@ pub(super) fn owner_runtime_config(
         None => None,
     };
 
+    let peer_model_downloads =
+        config.runtime.peer_model_downloads_enabled() && !options.no_peer_model_downloads;
+    if !peer_model_downloads {
+        let _ = emit_event(OutputEvent::Info {
+            message:
+                "Peer model downloads are off: peers may only use model files already on this node"
+                    .to_string(),
+            context: None,
+        });
+    }
+
     Ok(mesh::OwnerRuntimeConfig {
         keypair,
         control_bind: options.control_bind.or(config.owner_control.bind),
@@ -192,10 +203,20 @@ pub(super) fn owner_runtime_config(
         node_label: options.node_label.clone(),
         trust_store,
         trust_policy,
+        private_nodes: options
+            .private_nodes
+            .iter()
+            .map(|id| {
+                mesh::endpoint_id_from_hex(id.trim()).with_context(|| {
+                    format!("--private-node {id} is not a node id (64 hex characters)")
+                })
+            })
+            .collect::<Result<_>>()?,
         activity: config.runtime.activity.clone(),
         drain_timeout_secs: config.runtime.drain_timeout_secs,
         drain_timeout_max_secs: config.runtime.drain_timeout_max_secs,
         public_mesh: options.publish || options.nostr_discovery,
+        peer_model_downloads,
     })
 }
 

@@ -24,7 +24,7 @@ class LiveTranscription {
   [Symbol.asyncIterator]() { return this.events() }
 }
 
-/** Opens an in-process session on a locally loaded speech model. Close it to cancel inference. */
+/** Opens an in-process session on a locally loaded speech model, mapping camelCase options to the native wire keys. Close it to cancel inference. */
 async function startLiveTranscription(handle, options = {}) {
   const { sampleRate, turnDetection, stepMs, ...rest } = options
   const wire = { ...rest, sample_rate: sampleRate, step_ms: stepMs }

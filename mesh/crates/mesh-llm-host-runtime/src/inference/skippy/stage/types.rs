@@ -11,6 +11,8 @@ pub(crate) enum StageControlCommand {
         /// control channel. Stage transitions bind terms and shutdown to it
         /// (#2217).
         requester: iroh::EndpointId,
+        /// `LocalOnly` for a peer's request when peer model downloads are off.
+        source_fetch: crate::inference::skippy::StageSourceFetch,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {
@@ -285,8 +287,20 @@ pub(crate) struct StageStatusSnapshot {
     /// Cumulative runtime compute-busy time; see `skippy_serving::compute_meter`.
     pub(crate) compute_busy_nanos: u64,
     pub(crate) compute_operations: u64,
+    /// Serial decode steps run on this stage; see `skippy_serving::compute_meter`.
+    pub(crate) compute_decode_tokens: u64,
+    /// Token positions run in speculative verify windows on this stage.
+    pub(crate) compute_verify_tokens: u64,
     /// On a split final stage that attached its DFlash draft, the target
     /// layers the draft reads. `None` when the stage drafts nothing, so the
     /// coordinator serves stage 0 without DFlash.
     pub(crate) dflash_target_layers: Option<Vec<u32>>,
+    /// With those layers: how many positions back the draft attends, when
+    /// every draft attention layer slides over a window. Stage 0 then sends
+    /// no feature rows for prompt tokens before it. `None` when any layer
+    /// attends the whole context.
+    pub(crate) dflash_context_window: Option<u32>,
+    /// With those layers: the feature-row encodings the stage reads, by name.
+    /// Empty from a stage that drafts nothing.
+    pub(crate) dflash_feature_encodings: Vec<String>,
 }

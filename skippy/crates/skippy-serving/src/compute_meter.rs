@@ -18,6 +18,7 @@ pub struct StageComputeMeter {
     busy_nanos: AtomicU64,
     operations: AtomicU64,
     decode_tokens: AtomicU64,
+    verify_tokens: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -28,8 +29,13 @@ pub struct StageComputeSnapshot {
     pub operations: u64,
     /// Single-token decode steps run on this stage. Every generated token
     /// takes one decode step on every stage, so on stage 0 this is the
-    /// split's decode throughput counter.
+    /// split's decode throughput counter. Tokens committed by a speculative
+    /// verify window take no serial step and are not counted, on any stage.
     pub decode_tokens: u64,
+    /// Token positions this stage computed in speculative verify windows,
+    /// committed or not. Nonzero means `decode_tokens` leaves out the tokens
+    /// those windows committed.
+    pub verify_tokens: u64,
 }
 
 impl StageComputeMeter {
@@ -43,11 +49,16 @@ impl StageComputeMeter {
         self.decode_tokens.fetch_add(tokens, Ordering::Relaxed);
     }
 
+    pub fn record_verify_tokens(&self, tokens: u64) {
+        self.verify_tokens.fetch_add(tokens, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> StageComputeSnapshot {
         StageComputeSnapshot {
             busy_nanos: self.busy_nanos.load(Ordering::Relaxed),
             operations: self.operations.load(Ordering::Relaxed),
             decode_tokens: self.decode_tokens.load(Ordering::Relaxed),
+            verify_tokens: self.verify_tokens.load(Ordering::Relaxed),
         }
     }
 }
@@ -62,6 +73,7 @@ mod tests {
         meter.record(Duration::from_millis(3));
         meter.record(Duration::from_millis(4));
         meter.record_decode_tokens(5);
+        meter.record_verify_tokens(4);
 
         assert_eq!(
             meter.snapshot(),
@@ -69,6 +81,7 @@ mod tests {
                 busy_nanos: 7_000_000,
                 operations: 2,
                 decode_tokens: 5,
+                verify_tokens: 4,
             }
         );
     }

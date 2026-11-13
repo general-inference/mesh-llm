@@ -18,8 +18,8 @@ use std::ffi::{c_char, c_int, c_void};
 use crate::bindings::{llama, mtmd};
 use crate::llama_draft::{LlamaBatch, LlamaContextParams, LlamaModelParams};
 use crate::{
-    LlamaLogCallback, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperGenAudio,
-    MtmdInputChunkType, MtmdInputChunks, Opaque,
+    LlamaLogCallback, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdHelperDecodeBudget,
+    MtmdHelperGenAudio, MtmdInputChunkType, MtmdInputChunks, Opaque,
 };
 
 pub use crate::bindings::skippy::*;
@@ -32,7 +32,8 @@ pub use llama::{
 pub use mtmd::{
     mtmd_bitmap_free, mtmd_bitmap_get_n_bytes, mtmd_context_params_default, mtmd_decode_use_mrope,
     mtmd_default_marker, mtmd_free, mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf,
-    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output,
+    mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
     mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_init_opt_default, mtmd_helper_video_free, mtmd_input_chunks_free,
@@ -175,6 +176,15 @@ pub unsafe fn mtmd_helper_eval_chunk_single_with_callback(
             user_data,
         )
     }
+}
+
+/// # Safety
+/// The path must point to a readable projector file for the loaded runtime.
+pub unsafe fn mtmd_helper_get_decode_budget(
+    mmproj_fname: *const c_char,
+    ctx_params: MtmdContextParams,
+) -> MtmdHelperDecodeBudget {
+    unsafe { mtmd::mtmd_helper_get_decode_budget(mmproj_fname, ctx_params) }
 }
 
 /// # Safety
@@ -364,6 +374,8 @@ unsafe extern "C" {
     pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
     #[link_name = "_Z30llama_get_embeddings_layer_inpP13llama_contextj"]
     pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "_Z25llama_layer_inp_publishedP13llama_contextj"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
     #[link_name = "_Z28llama_model_target_layer_idsPK11llama_model"]
     pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
     #[link_name = "_Z30llama_model_target_layer_ids_nPK11llama_model"]
@@ -382,6 +394,8 @@ unsafe extern "C" {
     pub fn llama_set_embeddings_layer_inp(ctx: *mut Opaque, lid: u32, value: bool);
     #[link_name = "?llama_get_embeddings_layer_inp@@YAPEAMPEAUllama_context@@I@Z"]
     pub fn llama_get_embeddings_layer_inp(ctx: *mut Opaque, lid: u32) -> *mut f32;
+    #[link_name = "?llama_layer_inp_published@@YA_NPEAUllama_context@@I@Z"]
+    pub fn llama_layer_inp_published(ctx: *mut Opaque, lid: u32) -> bool;
     #[link_name = "?llama_model_target_layer_ids@@YAPEBHPEBUllama_model@@@Z"]
     pub fn llama_model_target_layer_ids(model: *const Opaque) -> *const i32;
     #[link_name = "?llama_model_target_layer_ids_n@@YAIPEBUllama_model@@@Z"]

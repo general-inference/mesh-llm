@@ -288,9 +288,9 @@ pub struct SpeculativeOptions {
     #[arg(long, hide = true)]
     pub draft: Option<PathBuf>,
 
-    /// Max draft tokens (default: 8).
-    #[arg(long, default_value = "8", hide = true)]
-    pub draft_max: u16,
+    /// Max draft tokens per step (default: the runtime's for the strategy).
+    #[arg(long, hide = true)]
+    pub draft_max: Option<u16>,
 
     /// Disable automatic draft model detection.
     #[arg(long, hide = true)]
@@ -455,4 +455,10 @@ pub struct OwnerOptions {
     /// Add trusted owner IDs on top of the local trust store.
     #[arg(long)]
     pub trust_owner: Vec<String>,
+
+    /// Another of your nodes that may serve this node's private requests, by
+    /// the node id `mesh-llm auth status` prints. Repeatable. Without any, a
+    /// private request stays on this node.
+    #[arg(long = "private-node", value_name = "NODE_ID")]
+    pub private_node: Vec<String>,
 }

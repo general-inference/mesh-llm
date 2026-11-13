@@ -199,3 +199,35 @@ typed in-process audio/event channels; remote-only models fail at startup.
 Closing a session, dropping either native half, or shutting down the node
 cancels the backend. Explicit Rust network sessions remain available through
 `LiveTranscription::start` when mesh relaying is needed.
+
+```js
+const session = await node.startLiveTranscription({
+  model: 'speech-model', sampleRate: 16000, turnDetection: null,
+  stepMs: 400, tentative: true
+})
+try {
+  await session.sendAudio(pcm16Samples)
+  await session.commit()
+  console.log(await session.nextEvent())
+  console.log(await session.stop())
+} finally {
+  await session.close()
+}
+```
+
+Supply signed 16-bit mono samples, or use `sendAudioF32` for float samples.
+`stepMs` accepts 200 to 5000 ms; omission keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `item_id`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input. `stop()` finishes the turn and returns
+unread events; `close()` abandons the session.

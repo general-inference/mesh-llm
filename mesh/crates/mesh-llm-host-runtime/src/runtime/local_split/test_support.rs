@@ -183,7 +183,9 @@ pub(super) fn split_test_peer(
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         decode_batch_policy_supported: stage_protocol_generation_supported,
         plugin_origin_signature_supported: false,
+        private_routing_supported: false,
         persistent_lane_marker_supported: false,
+        refuses_peer_model_downloads: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
 
@@ -371,6 +373,8 @@ pub(super) fn runtime_status_for_stage(
         shutdown_generation: generation.generation,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
     }
 }
 
@@ -706,6 +710,7 @@ fn write_fake_native_mtp_gguf_model(path: &Path) {
 
 #[tokio::test]
 async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9339 })
         .await
         .unwrap();
@@ -780,8 +785,15 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     assert!(settings.final_stage_native_mtp());
 
     // The final stage reports no draft: stage 0 keeps native MTP.
-    settings.settle_split_dflash(None);
+    let mut unreadable = split_generation_load_settings_with(&spec, SplitDefaultDraft::Uncached)
+        .await
+        .expect("split settings should resolve");
+    settings.settle_split_dflash(None, None, &[]);
     assert!(settings.split_dflash.is_none());
+    // A draft whose stage reads no encoding this stage sends is no draft.
+    unreadable.settle_split_dflash(Some(&[6, 20, 34]), None, &["zstd-q2".to_string()]);
+    assert!(unreadable.split_dflash.is_none());
+    assert!(unreadable.embedded_openai.native_mtp_enabled);
     assert!(settings.runtime_options.config.native_mtp_enabled);
     assert!(settings.embedded_openai.native_mtp_enabled);
     assert!(settings.embedded_openai.speculative.dflash.is_none());
@@ -834,6 +846,7 @@ fn split_dflash_spec<'a>(
 
 #[tokio::test]
 async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9342 })
         .await
         .unwrap();
@@ -873,7 +886,11 @@ async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
         .expect("split settings should resolve");
 
     // The worker had the draft cached even though this node does not.
-    settings.settle_split_dflash(Some(&[6, 20, 34, 48, 62]));
+    settings.settle_split_dflash(
+        Some(&[6, 20, 34, 48, 62]),
+        Some(2048),
+        &["bf16".to_string(), "q8".to_string(), "q4".to_string()],
+    );
 
     let plan = settings
         .split_dflash
@@ -892,6 +909,21 @@ async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
             .as_ref()
             .map(|dflash| dflash.target_layers.clone()),
         Some(vec![6, 20, 34, 48, 62])
+    );
+    // Stages before the final one send the encoding it reads.
+    assert_eq!(
+        plan.feature_encoding,
+        Some(skippy_runtime::DFlashFeatureEncoding::Q4)
+    );
+    // Stage 0 learns how far back the final stage's draft attends.
+    assert_eq!(
+        settings
+            .embedded_openai
+            .speculative
+            .dflash
+            .as_ref()
+            .and_then(|dflash| dflash.context_window),
+        Some(2048)
     );
     assert!(!settings.embedded_openai.native_mtp_enabled);
 }
@@ -917,6 +949,7 @@ fn write_fake_dflash_draft(path: &Path, target_layers: &[u32]) {
 
 #[tokio::test]
 async fn split_load_of_a_cataloged_target_serves_its_default_dflash_draft() {
+    let _default_drafts = mesh_llm_skippy_adapter::config::with_default_dflash_drafts();
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9341 })
         .await
         .unwrap();
@@ -1278,7 +1311,11 @@ pub(super) fn test_stage_status_from_load(
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 
@@ -1333,7 +1370,11 @@ pub(super) fn test_stage_status_from_stop(
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
+        compute_verify_tokens: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 

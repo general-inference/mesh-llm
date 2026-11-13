@@ -12,14 +12,14 @@ use crate::{
     GenerationSignalWindow, IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel,
     LayaSequence, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
-    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
-    MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
-    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
-    SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
-    StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
-    TokenSignal, WorkloadInfoV1, runtime_abi_supported,
+    MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperDecodeBudget, MtmdHelperGenAudio,
+    MtmdHelperGenAudioInput, MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType,
+    MtmdInputChunks, MtmdInputText, NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque,
+    RuntimeConfig, SamplingConfig, Session, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1,
+    StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1,
+    StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo,
+    TokenLogprobs, TokenSignal, WorkloadInfoV1, runtime_abi_supported,
 };
 
 static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
@@ -296,6 +296,7 @@ dynamic_symbols! {
     mtmd_context_params_default() -> MtmdContextParams;
     mtmd_gen_audio_get_info(ctx: *const MtmdContext) -> MtmdGenAudioInfo;
     mtmd_helper_gen_audio_init(lctx: *mut Opaque, mctx: *mut MtmdContext) -> *mut MtmdHelperGenAudio;
+    mtmd_helper_gen_audio_inp_default() -> MtmdHelperGenAudioInput;
     mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
     mtmd_helper_gen_audio_reset(ctx: *mut MtmdHelperGenAudio);
     mtmd_helper_gen_audio_set_input(ctx: *mut MtmdHelperGenAudio, input: *const MtmdHelperGenAudioInput) -> i32;
@@ -325,6 +326,7 @@ dynamic_symbols! {
     mtmd_helper_eval_chunks(ctx: *mut MtmdContext, lctx: *mut Opaque, chunks: *const MtmdInputChunks, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
     mtmd_helper_eval_chunk_single(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
     mtmd_helper_eval_chunk_single_with_callback(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32, callback: Option<unsafe extern "C" fn(i32, *mut c_void) -> c_int>, user_data: *mut c_void) -> c_int;
+    mtmd_helper_get_decode_budget(mmproj_fname: *const c_char, ctx_params: MtmdContextParams) -> MtmdHelperDecodeBudget;
 }
 
 // -----------------------------------------------------------------------
@@ -554,6 +556,10 @@ pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
                 get_embeddings_layer_inp: symbols.lookup_cpp(CppEntryPoint {
                     itanium: b"_Z30llama_get_embeddings_layer_inpP13llama_contextj\0",
                     msvc: b"?llama_get_embeddings_layer_inp@@YAPEAMPEAUllama_context@@I@Z\0",
+                })?,
+                layer_inp_published: symbols.lookup_cpp(CppEntryPoint {
+                    itanium: b"_Z25llama_layer_inp_publishedP13llama_contextj\0",
+                    msvc: b"?llama_layer_inp_published@@YA_NPEAUllama_context@@I@Z\0",
                 })?,
                 model_target_layer_ids: symbols.lookup_cpp(CppEntryPoint {
                     itanium: b"_Z28llama_model_target_layer_idsPK11llama_model\0",

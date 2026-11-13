@@ -159,7 +159,9 @@ fn actual_matrix_and_literal_runner_routes_are_included_without_freezing_job_cou
         .get("jobs")
         .unwrap();
     assert!(persistent_runner(jobs.get("family").unwrap()));
-    assert!(!persistent_runner(jobs.get("aggregate").unwrap()));
+    for name in ["combine", "aggregate", "reconcile"] {
+        assert!(persistent_runner(jobs.get(name).unwrap()), "{name}");
+    }
 }
 
 fn prepared_jobs() -> [(&'static str, &'static str); 4] {
@@ -256,6 +258,29 @@ fn prepared_cleanup_requires_private_copy_effective_source_and_ready_before_effe
             check(&workflows).is_err(),
             "admission cannot follow managed effects"
         );
+    }
+}
+
+#[test]
+fn prepared_cleanup_binds_each_job_to_its_bootstrap_recipe() {
+    for (workflow, name) in prepared_jobs() {
+        let (bound, swapped) = if name == "trusted_runner_image" {
+            ("just runner-cleanup-bootstrap", "just automation-bootstrap")
+        } else {
+            ("just automation-bootstrap", "just runner-cleanup-bootstrap")
+        };
+        let mut workflows = actual();
+        let prepare = named_step_mut(
+            job_mut(&mut workflows, workflow, name),
+            "Prepare source-bound native cleanup before managed work",
+        );
+        let source = field(prepare, "run").unwrap().to_owned();
+        assert!(
+            source.contains(&format!("report=\"$({bound})\"")),
+            "{workflow}/{name}"
+        );
+        *field_mut(prepare, "run") = Node::Scalar(source.replace(bound, swapped));
+        assert!(check(&workflows).is_err(), "{workflow}/{name}: {swapped}");
     }
 }
 

@@ -72,11 +72,6 @@ impl DFlashDraft {
     }
 
     pub(super) fn blocks_fit(&self, blocks: &[NoiseBlock]) -> bool {
-        // The selector/convolution heads require their own sequence-layout
-        // proof before they can share a graph. Keep their existing forwards.
-        if blocks.len() > 1 && self.info.variant != DFlashVariant::DFlash {
-            return false;
-        }
         let capacity = self
             .n_ubatch
             .min(unsafe { (self.api.n_batch)(self.ctx) } as usize);
@@ -87,7 +82,10 @@ impl DFlashDraft {
             self.lanes,
             capacity,
         )
-        .is_some()
+        .is_some_and(|spans| {
+            self.noise_batch_layout
+                .permits(spans.iter().map(|span| span.rows))
+        })
     }
 
     pub(super) fn propose_blocks(&mut self, blocks: &[NoiseBlock]) -> Result<Vec<Vec<i32>>> {

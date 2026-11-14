@@ -80,6 +80,79 @@ progress, and the audit are retained locally in
 `target/pr33-integration-evidence/`. The following sections retain their
 original pre-PR #33 measurements and patch numbers for provenance.
 
+## Batch equal-width selector draft blocks
+
+The Rust draft scheduler previously admitted multiple noise blocks only for
+the basic DFlash head. The native selector and convolution graphs already
+isolate sequences by reshaping rows into equally sized blocks. The scheduler
+now admits that layout when every active block has the same actual row count
+and the whole batch fits one native microbatch. Basic heads still accept
+ragged blocks. Markov heads and unverified lattice heads remain independent.
+Admission uses tensor and graph metadata: a selector requires the complete
+predecessor, successor, and hidden projection set; a top-k count alone is
+insufficient. There is no new model-family allowlist or native ABI change.
+
+These measurements compare independent versus shared DFlash2 submissions on
+M5 Max, starting from `69e122f69`, which includes PR #33 and the earlier decode
+changes. Both arms use the original target weights, the same Q8 DFlash2 draft,
+the same ABI 0.1.85 native bundle, and six maximum draft tokens. Shared verify,
+shared draft, and adaptive widths are enabled in both arms; GPU draft readout
+and device feature retention are disabled. Shared execution remains opt-in.
+
+Each comparison uses four fresh processes in control/candidate/candidate/control
+order and six measured batches per arm. No build or test load ran alongside
+the performance comparisons.
+
+| Workload | Independent tok/s | Shared tok/s | Change |
+| --- | ---: | ---: | ---: |
+| PP512/TG256, one request | 136.378 | 133.086 | -2.41% |
+| PP512/TG256, two requests, aggregate | 163.905 | 184.419 | +12.52% |
+| Fixed coding prompts, two requests, aggregate | 219.785 | 231.738 | +5.44% |
+| Fixed coding prompts, eight requests, aggregate | 272.976 | 302.289 | +10.74% |
+
+The long benchmark uses pinned llama-benchy
+`e9be344578cec17745066b220798b80a0d2686d3`, two warmups and three measured
+batches per concurrency per process. All 36 measured requests succeeded; two
+control requests stopped at 240 and 241 tokens and all others reached 256.
+Its single-request results overlap substantially and show no established gain.
+Telemetry confirms zero shared draft forwards in the controls and 457/473
+two-lane shared forwards in the candidates. Eight separate fixed 64-token
+outputs match exactly across arms.
+
+The fixed coding probes use one warmup and three measured batches per process,
+128 output tokens per request, greedy sampling, f16 KV, and disabled prefix and
+disk caches. Their metric is total completion tokens divided by the slowest
+request's HTTP elapsed time, including prefill and request overhead; it differs
+from the long benchmark's metric and workload. All 32 two-request completions
+and all 128 eight-request completions reached 128 tokens. Each prompt produced
+one byte-identical output across both arms and all measured repeats. The
+two-request probe uses the final CLI including the startup guards below.
+
+The real-checkpoint Metal regression compares three independent lanes with
+shared proposals at widths 1, 3, and 6, reverses lane order, checks scratch
+cleanup by proposing independently again, and verifies that ragged widths
+fall back without incrementing shared-forward counts. It passes with the
+actual selector/convolution draft and target features. Unit tests cover
+incomplete selector projections, absent blocks, unequal widths, and serial
+head admission.
+
+Qualification also exposed model-free startup calls into an unloaded dynamic
+FFI table. Scheduler platform detection now returns its existing generic
+policy before native startup, and the media marker uses its existing default
+until the native runtime is loaded. All 21 affected serving tests pass in
+separate fresh processes without a runtime-bundle environment override.
+The final full Skippy/Mesh release build passes, as do 521 runtime library
+tests, 1,352 serving library tests, warning-denying all-target Clippy for the
+affected runtime/serving/benchmark/Mesh packages, formatting, and the console
+output contract. This Rust change does not resolve the previously recorded
+inherited native test-target gate failure.
+
+Commands, CLI hashes, native manifest, raw responses, telemetry, audits, and
+validation logs remain under `target/dflash2-batch-evidence/`. These gains
+qualify batching this particular draft; replacing DFlash1 with DFlash2 alone
+was slower in the initial diagnostic. They do not establish BaseRT parity or
+justify choosing DFlash2 for every workload.
+
 ## Post-PR #33 dense-weight precision diagnostic
 
 This is a model-format experiment, not an equivalent-output engine change.

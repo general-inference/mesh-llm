@@ -51,6 +51,8 @@ positions before submission, and uses the same 300-microsecond idle waiting
 budget. `stage.shared_draft` records the number of lanes actually sharing a
 forward; unsupported draft heads or excess capacity run independently. The
 draft and verification switches can be measured separately or enabled together.
+Selector/convolution drafts share only equal-width blocks; different widths
+run independently, while ordinary independent-row drafts retain ragged batching.
 With shared drafting, adaptive sizing learns each lane's share of execution
 cost for drafting, verification, repair and measured serial steps. Queue time
 remains in request latency telemetry; it is excluded from the cost fit, so a

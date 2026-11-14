@@ -17,7 +17,11 @@ mod backend_readout;
 mod context;
 mod device_features;
 mod draft_batch;
+mod draft_tensors;
 mod feature_wire;
+#[cfg(test)]
+mod head_isolation_tests;
+mod heads;
 mod noise_blocks;
 pub mod proposal_batch;
 mod readout;
@@ -41,6 +45,7 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
+use draft_tensors::{DraftTensors, inspect_draft_tensors};
 use noise_blocks::NoiseBlock;
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 
@@ -174,6 +179,7 @@ pub(crate) struct DFlashDraft {
     mask_token: i32,
     mrope: bool,
     layout: BlockLayout,
+    noise_batch_layout: heads::NoiseBatchLayout,
     batch: DraftBatch,
     backend_readout: Option<backend_readout::BackendReadout>,
     device_features: Option<device_features::DeviceFeatures>,
@@ -237,12 +243,13 @@ impl DFlashDraft {
             mask_token: -1,
             mrope: false,
             layout: BlockLayout::BonusAnchor,
+            noise_batch_layout: heads::NoiseBatchLayout::Independent,
             batch: DraftBatch::default(),
             backend_readout: None,
             device_features: None,
         };
         // From here the Drop impl owns the native handles.
-        draft.configure(target_model, options, config, tensors.markov)?;
+        draft.configure(target_model, options, config, &tensors)?;
         Ok(draft)
     }
 
@@ -251,7 +258,7 @@ impl DFlashDraft {
         target_model: *const Opaque,
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
-        markov: bool,
+        tensors: &DraftTensors,
     ) -> Result<()> {
         let api = self.api;
         let architecture =
@@ -335,7 +342,7 @@ impl DFlashDraft {
                 self.info.block_size
             );
         }
-        self.select_variant(markov)?;
+        self.select_variant(tensors)?;
         self.info.max_draft_tokens = self.layout.capacity(
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
@@ -403,35 +410,6 @@ impl DFlashDraft {
             self.mask_token,
             self.mrope,
         ));
-        Ok(())
-    }
-
-    /// Picks the draft family and its block layout: DSpark when the draft has
-    /// a Markov head, DFlash2 when it has a selector lattice, else DFlash.
-    fn select_variant(&mut self, markov: bool) -> Result<()> {
-        let selector_top_k = unsafe { (self.api.model_dflash_selector_top_k)(self.model) };
-        if markov {
-            if selector_top_k > 0 {
-                bail!(
-                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
-                );
-            }
-            self.info.variant = DFlashVariant::DSpark;
-            let anchor_first = unsafe {
-                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
-            }
-            .is_none_or(|value| value == "true");
-            if anchor_first {
-                self.layout = BlockLayout::AnchorFirst;
-            }
-        } else if selector_top_k > 0 {
-            self.info.variant = DFlashVariant::DFlash2;
-            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
-            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
-            if row_used > self.n_embd_draft {
-                bail!("draft hidden size is too small for the DFlash2 selector lattice");
-            }
-        }
         Ok(())
     }
 
@@ -657,25 +635,6 @@ fn check_lilicorr_draft(model: *const Opaque) -> Result<()> {
 
 fn lilicorr_headless_enabled_by(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("1" | "true"))
-}
-
-/// What a draft's tensors say about how it runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DraftTensors {
-    /// The draft carries its own token embeddings.
-    embeds: bool,
-    /// The draft is a DSpark draft with a Markov head.
-    markov: bool,
-}
-
-fn inspect_draft_tensors(path: &Path) -> Result<DraftTensors> {
-    let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
-        .with_context(|| format!("read draft GGUF {}", path.display()))?;
-    let has = |name: &str| catalog.tensors.iter().any(|tensor| tensor.name == name);
-    Ok(DraftTensors {
-        embeds: has(DFLASH_BORROWED_TARGET_TENSOR),
-        markov: has(DSPARK_MARKOV_TENSOR),
-    })
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -1704,53 +1663,6 @@ mod tests {
         let mut with_embeddings = final_stage.to_vec();
         with_embeddings.push("token_embd.weight".to_string());
         assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
-    }
-
-    /// A GGUF holding one-float tensors named `names`.
-    fn gguf_with_tensors(names: &[&str]) -> tempfile::NamedTempFile {
-        use std::io::Write;
-        let mut bytes = b"GGUF".to_vec();
-        bytes.extend_from_slice(&3u32.to_le_bytes());
-        bytes.extend_from_slice(&(names.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        for (index, name) in names.iter().enumerate() {
-            bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.extend_from_slice(&1u32.to_le_bytes());
-            bytes.extend_from_slice(&1u64.to_le_bytes());
-            bytes.extend_from_slice(&0u32.to_le_bytes()); // f32
-            bytes.extend_from_slice(&(32 * index as u64).to_le_bytes());
-        }
-        bytes.resize(bytes.len().next_multiple_of(32), 0);
-        bytes.resize(bytes.len() + 32 * names.len(), 0);
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        file.write_all(&bytes).unwrap();
-        file
-    }
-
-    #[test]
-    fn a_markov_head_marks_a_dspark_draft() {
-        let dflash = gguf_with_tensors(&["blk.0.attn_q.weight", "fc.weight"]);
-        assert_eq!(
-            inspect_draft_tensors(dflash.path()).unwrap(),
-            DraftTensors {
-                embeds: false,
-                markov: false
-            }
-        );
-        let dspark = gguf_with_tensors(&[
-            "blk.0.attn_q.weight",
-            "token_embd.weight",
-            "markov_w1.weight",
-            "markov_w2.weight",
-        ]);
-        assert_eq!(
-            inspect_draft_tensors(dspark.path()).unwrap(),
-            DraftTensors {
-                embeds: true,
-                markov: true
-            }
-        );
     }
 
     #[test]

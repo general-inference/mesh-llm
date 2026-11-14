@@ -41,10 +41,28 @@ diagnostic. Serving can opt into scheduler coalescing with
 `dflash::proposal_batch::DFlashBatchRequest` values. Compatible lanes share
 one noise-block forward, including different requested block lengths. Each
 lane keeps its own feature context, and every scratch block is removed after
-readout. Native capacity limits, separate draft models, and selector or
-convolution heads retain independent submissions. Draft failure clears the
+readout. Batches exceeding native capacity and lanes using separate draft
+models retain independent submissions. Draft failure clears the
 affected draft contexts and returns empty proposals without changing target
 state. `DFlashDraftStats::shared_proposals` counts observed shared submissions.
+
+Selector and convolution heads group noise rows into one block per sequence.
+They can share a forward when the actual block widths are equal; differing
+widths fall back to independent forwards before any draft state changes.
+Heads with independent rows retain ragged batching. Markov heads remain
+independent. Capacity and duplicate-sequence checks apply to every layout.
+
+The optional real-checkpoint isolation proof compares independent and shared
+selector proposals, reverses lane order, checks scratch removal, and exercises
+ragged fallback. It requires local GGUF paths and a packaged Metal runtime:
+
+```sh
+SKIPPY_DRAFT_LAYOUT_TARGET_MODEL=/path/to/target.gguf \
+SKIPPY_DRAFT_LAYOUT_DRAFT_MODEL=/path/to/selector-draft.gguf \
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/dist/native-runtimes" \
+just with-lld cargo test -p skippy-runtime --features dynamic-native-runtime \
+  --lib selector_noise_blocks_match_independent_lanes_and_remove_scratch -- --ignored
+```
 
 The default remains host readout until matched parity and performance trials
 qualify the backend path. `StageModel::dflash_backend_readout_rows` distinguishes

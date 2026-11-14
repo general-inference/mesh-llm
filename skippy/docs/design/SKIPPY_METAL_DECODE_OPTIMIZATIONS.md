@@ -412,3 +412,35 @@ performance measurements. Some prompts produced more than one output across
 the runs; exact serving-output parity is not established. The interrupted
 eight-request speed comparison above remains historical evidence, not a
 speedup claim. Artifacts and commands are in `target/peer-rollback-evidence/`.
+
+The interrupted comparison was then repeated with the repaired native bundle
+in **both** arms. The independent controller (`18e4e04e6`) and aligned
+controller (`8a0e553fe`, unchanged by the native fix) each ran two fresh
+processes in ABBA order, one warmup batch and three measured batches per
+process, using eight concurrent 128-token coding completions. Median batch
+throughput increased from **196.960 to 259.046 aggregate tok/s (+31.52%)**.
+Control batches ranged from 162.0 to 252.7 tok/s; aligned batches ranged from
+252.0 to 262.0. All 96 measured requests completed 128 tokens without errors;
+all 128 requests including warmups completed. Across arms and repeats, five
+of eight prompts had two output variants, so exact text parity remains
+unqualified. Including warmups, shared verification covered 88.1% of control
+lane-windows and 95.4% of aligned lane-windows. Eight-lane shared draft batches
+increased from 29 to 199. These figures qualify this policy on the tested
+eight-request workload, not an independent throughput gain from the memory fix
+or parity with BaseRT. Raw responses, timings, logs and audits are retained in
+`target/peer-rollback-evidence/aligned-c8-*`.
+
+The complete Skippy and Mesh release build passed after the final native queue
+replay. Runtime library tests passed 503 tests with 12 existing opt-in tests
+ignored; serving library tests passed 1,201 with 18 ignored.
+
+Jianyang job `job_arc0cvavycafvvb` built exact local commit
+`f6dbb9090694e907684191968528968545b9499d` natively on Dan's M4 mini
+(16 GB, macOS 26.5.1). The eight fixture/rollback tests and all four explicit
+Metal delayed-peer scenarios passed; the job succeeded at $0. Source was
+fetched at the pinned commit from a temporary read-only private-LAN Git
+listener, which was stopped after checkout. No GitHub push or binary transfer
+was needed. The static test recipe first exposed an existing unquoted
+prefix-map path problem under JY's `Application Support` workspace; validation
+used the normal dynamic Metal build instead. This run establishes additional
+hardware correctness coverage, not M4 model throughput.

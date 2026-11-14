@@ -456,6 +456,41 @@ quality evaluation, raw requests and benchmark audit are retained under
 only a small additional single-request gain and does not close the BaseRT
 speed gap. Further work must measure execution cost as well as stored bytes.
 
+## Rejected flat-Q4 dense/head format
+
+The next format diagnostic uses Q4_0 for the same 251 dense/head matrices as
+the Q4_K dense/head trial. Both formats store 4.5 bits per weight at these
+aligned shapes, and both complete files are exactly 21,829,728,544 bytes.
+The flat format removes packed scale/minimum decoding at the cost of a less
+expressive quantizer. All 502 other tensors remain byte-identical to the
+original source, including experts, routers, embeddings and the MTP sidecar.
+Original model files and serving defaults are unchanged.
+
+On 32,640 scored WikiText-2 positions, flat Q4 has perplexity 6.873154 versus
+6.732749 for the preceding Q4_K dense/head trial. Against the compressed
+original reference, its perplexity ratio is 1.034363 ± 0.002194, mean KL is
+0.056068 ± 0.000625, and top-token agreement is 88.824 ± 0.174%. Its perplexity
+is slightly below the previously tested BaseRT artifact's 6.916309 on this
+corpus; this does not establish general or statistically demonstrated quality
+superiority.
+
+A fresh plain-decode ABBA comparison uses the same CLI and frozen native
+runtime for both formats, the pinned PP512/TG256 benchmark, two warmups and
+three measured batches per concurrency per process, greedy sampling, f16 KV,
+and disabled prefix/disk caches. Medians cover six measured batches per arm.
+
+| Workload | Q4_K dense/head tok/s | Q4_0 dense/head tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 136.418 | 137.347 | +0.68% |
+| Two requests, aggregate | 188.036 | 178.992 | -4.81% |
+
+All 36 measured requests succeed; one flat-Q4 request stops at 253 tokens
+and the other 35 reach 256. Every two-request control batch exceeds every
+candidate batch. The small single-request difference does not compensate for
+the two-request slowdown and worse quality. The format is rejected rather
+than supplied as a performance profile. Recipes, tensor audits, quality logs,
+raw responses and throughput audit remain under `target/flat-q4-evidence/`.
+
 ## Gated activations
 
 Core patch `0020-metal-fuse-contiguous-float32-gated-activations.patch` adds

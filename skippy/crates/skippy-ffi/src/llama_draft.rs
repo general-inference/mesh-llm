@@ -18,6 +18,9 @@ use std::ffi::c_char;
 use crate::Opaque;
 use crate::bindings;
 
+mod device;
+pub use device::{LlamaDraftDeviceApi, LlamaProcessType};
+
 pub type LlamaToken = bindings::llama::llama_token;
 pub type LlamaPos = bindings::llama::llama_pos;
 pub type LlamaSeqId = bindings::llama::llama_seq_id;
@@ -32,6 +35,20 @@ pub type LlamaFlashAttnType = bindings::llama::llama_flash_attn_type;
 pub type LlamaRopeType = bindings::llama::llama_rope_type;
 pub type LlamaSplitMode = bindings::llama::llama_split_mode;
 pub type GgmlType = bindings::llama::ggml_type;
+pub type LlamaSamplerChainParams = bindings::llama::llama_sampler_chain_params;
+
+/// Optional backend sampler operations. Older runtime exports can still draft
+/// through the original host logits readout when these symbols are absent.
+#[derive(Clone, Copy)]
+pub struct LlamaDraftSamplingApi {
+    pub chain_default_params: unsafe extern "C" fn() -> LlamaSamplerChainParams,
+    pub chain_init: unsafe extern "C" fn(LlamaSamplerChainParams) -> *mut Opaque,
+    pub chain_add: unsafe extern "C" fn(*mut Opaque, *mut Opaque),
+    pub init_greedy: unsafe extern "C" fn() -> *mut Opaque,
+    pub free: unsafe extern "C" fn(*mut Opaque),
+    pub set_sampler: unsafe extern "C" fn(*mut Opaque, i32, *mut Opaque) -> bool,
+    pub get_token: unsafe extern "C" fn(*mut Opaque, i32) -> i32,
+}
 
 /// `LLAMA_CONTEXT_TYPE_DEFAULT`.
 pub const LLAMA_CONTEXT_TYPE_DEFAULT: LlamaContextType = LlamaContextType::Default;
@@ -102,6 +119,8 @@ pub fn ggml_type_from_cache_code(code: i32) -> Option<GgmlType> {
 /// `llama_vocab`, `llama_memory_t`, or `ggml_backend_dev_t`).
 #[derive(Clone, Copy)]
 pub struct LlamaDraftApi {
+    pub device_features: Option<LlamaDraftDeviceApi>,
+    pub sampling: Option<LlamaDraftSamplingApi>,
     pub model_default_params: unsafe extern "C" fn() -> LlamaModelParams,
     pub context_default_params: unsafe extern "C" fn() -> LlamaContextParams,
     pub model_load_from_file:
@@ -154,6 +173,16 @@ pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
 pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     use crate::static_bindings as raw;
     static API: LlamaDraftApi = LlamaDraftApi {
+        device_features: Some(device::static_api()),
+        sampling: Some(LlamaDraftSamplingApi {
+            chain_default_params: crate::bindings::llama::llama_sampler_chain_default_params,
+            chain_init: raw::llama_draft_sampler_chain_init,
+            chain_add: raw::llama_draft_sampler_chain_add,
+            init_greedy: raw::llama_draft_sampler_init_greedy,
+            free: raw::llama_draft_sampler_free,
+            set_sampler: raw::llama_draft_set_sampler,
+            get_token: raw::llama_draft_get_sampled_token,
+        }),
         model_default_params: raw::llama_model_default_params,
         context_default_params: raw::llama_context_default_params,
         model_load_from_file: raw::llama_model_load_from_file,

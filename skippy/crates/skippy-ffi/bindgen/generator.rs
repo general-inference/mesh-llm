@@ -229,6 +229,12 @@ impl BindingGenerator {
                          llama_memory_seq_rm|llama_get_logits_ith|llama_n_ctx|llama_n_batch|\
                          llama_n_ubatch|llama_model_n_embd|llama_model_n_layer|\
                          llama_model_rope_type|llama_set_causal_attn|\
+                         llama_sampler_chain_default_params|llama_sampler_chain_init|\
+                         llama_sampler_chain_add|llama_sampler_init_greedy|llama_sampler_free|\
+                         llama_set_sampler|llama_get_sampled_token_ith|\
+                         llama_batch_ext_init|llama_batch_ext_free|llama_batch_ext_clear|\
+                         llama_batch_ext_set_pos|llama_batch_ext_set_output_logits|\
+                         llama_process|llama_synchronize|\
                          ggml_backend_dev_by_name)$",
                     )
                     .allowlist_type(

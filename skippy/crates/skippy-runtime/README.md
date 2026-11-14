@@ -11,6 +11,29 @@ into typed runtime structures.
 diagnostic prompt clients, benchmarks, correctness checks, and slicing tools.
 It does not own TCP transport, mesh lifecycle, or telemetry export.
 
+### Experimental draft readout
+
+`SKIPPY_DFLASH_GPU_READOUT=1` attaches stateless greedy backend samplers to
+DFlash/DSpark draft lanes. Supported backends return token IDs instead of
+copying vocabulary-sized logits to the host. Missing optional sampler exports,
+refused attachments, or a backend returning processed logits retain host
+argmax. DFlash2 continues to read its selector lattice. The target sampler and
+verification semantics are unchanged.
+
+`SKIPPY_DFLASH_DEVICE_FEATURES=1` enables direct device-row feature injection
+for a complete local target with strictly ordered capture layers. The draft
+consumes the capture buffer before the next target forward; upstream device
+events protect its lifetime. Unsupported layouts or missing optional exports
+keep the host feature path. This requires native ABI `0.1.81`, whose graph
+admission explicitly validates auxiliary capture writes. Both optimizations
+remain opt-in pending repeatable end-to-end gains.
+
+The default remains host readout until matched parity and performance trials
+qualify the backend path. `StageModel::dflash_backend_readout_rows` distinguishes
+observed token rows from host fallbacks; attachment alone is not evidence of
+offload. Compare `llama-spec-bench --dflash` with the variable unset and set to
+`1`, using the same models, prompt corpus, draft window and native build.
+
 ```mermaid
 flowchart TB
     Mesh["mesh-llm<br/>embedded serving + lifecycle"] --> R["skippy-runtime"]

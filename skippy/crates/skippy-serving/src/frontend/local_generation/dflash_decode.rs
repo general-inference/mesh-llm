@@ -59,6 +59,7 @@ pub(super) struct DFlashDecodeState {
 /// Per-request state for block lengths chosen from measured cost.
 pub(in crate::frontend) struct AdaptiveBlocks {
     draft_model_path: PathBuf,
+    load: (usize, u64),
     cost: BlockCost,
     acceptance: Acceptance,
     windows: u64,
@@ -73,9 +74,10 @@ pub(in crate::frontend) struct AdaptiveBlocks {
 
 impl AdaptiveBlocks {
     fn new(draft_model_path: PathBuf) -> Self {
-        let shared = shared_model(&draft_model_path);
+        let shared = shared_model(&draft_model_path, 1);
         Self {
             draft_model_path,
+            load: (1, 0),
             cost: shared.cost,
             acceptance: shared.acceptance.capped(),
             windows: 0,
@@ -84,6 +86,20 @@ impl AdaptiveBlocks {
             serial_started: None,
             paused: false,
         }
+    }
+
+    /// Discard timings that straddle a load transition. Keep this request's
+    /// acceptance history, but learn execution costs separately per lane count.
+    fn update_load(&mut self, load: (usize, u64)) {
+        if self.load == load {
+            return;
+        }
+        self.serial_started = None;
+        self.load = load;
+        self.cost = shared_model(&self.draft_model_path, load.0).cost;
+        self.windows = 0;
+        self.serial_since_probe = 0;
+        self.paused = false;
     }
 
     /// Block lengths for stage 0 of a split DFlash target, or `None` when
@@ -102,7 +118,7 @@ impl AdaptiveBlocks {
         };
         let micros = started.elapsed().as_secs_f64() * 1_000_000.0;
         self.cost.observe_serial(micros);
-        record_shared_serial(&self.draft_model_path, micros);
+        record_shared_serial(&self.draft_model_path, self.load.0, micros);
     }
 
     /// Drafts for the next window, or 0 to decode this token serially.
@@ -160,6 +176,7 @@ impl AdaptiveBlocks {
         self.acceptance.observe(drafts, accepted);
         record_shared(
             &self.draft_model_path,
+            self.load.0,
             verify_rows,
             verify_micros,
             draft_micros,
@@ -322,6 +339,7 @@ impl StageOpenAiBackend {
             return Ok(DFlashSpanProgress::NotUsed);
         };
         if let Some(adaptive) = dflash.adaptive.as_mut() {
+            adaptive.update_load(self.generation_limit.generation_load());
             adaptive.finish_serial_step();
         }
         // The adaptive chooser already weighs misses against serial steps.
@@ -397,13 +415,18 @@ impl StageOpenAiBackend {
             );
             dflash.backoff.record_window(accepted);
             if let Some(adaptive) = dflash.adaptive.as_mut() {
-                adaptive.record(
-                    verify_inputs.len(),
-                    (execution.verification_elapsed_us + execution.repair_elapsed_us) as f64,
-                    draft_micros,
-                    proposal.tokens.len(),
-                    accepted,
-                );
+                let load = self.generation_limit.generation_load();
+                if adaptive.load == load {
+                    adaptive.record(
+                        verify_inputs.len(),
+                        (execution.verification_elapsed_us + execution.repair_elapsed_us) as f64,
+                        draft_micros,
+                        proposal.tokens.len(),
+                        accepted,
+                    );
+                } else {
+                    adaptive.update_load(load);
+                }
             }
         }
         apply_committed_tokens(state, &execution)?;
@@ -445,6 +468,25 @@ fn apply_committed_tokens(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn changing_load_discards_pending_serial_timing_and_reloads_costs() {
+        let path = std::path::PathBuf::from("/test/dflash-load-transition.gguf");
+        let mut blocks = super::AdaptiveBlocks::new(path.clone());
+        blocks.update_load((1, 1));
+        blocks.record(3, 30_000.0, 1_000.0, 2, 2);
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.update_load((2, 2));
+        assert!(blocks.serial_started.is_none());
+        assert_eq!(blocks.windows, 0);
+        assert!(!blocks.cost.serial_measured());
+        blocks.finish_serial_step();
+        assert!(!super::shared_model(&path, 2).cost.serial_measured());
+        // The count returning to one is still a new measurement interval.
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.update_load((1, 3));
+        assert!(blocks.serial_started.is_none());
+    }
+
     use super::*;
     use crate::frontend::NativeMtpVerifyWindowDecision;
 

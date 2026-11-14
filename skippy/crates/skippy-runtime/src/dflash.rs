@@ -13,7 +13,9 @@
 //! than through the Skippy model ABI. Draft state is advisory: a failed draft
 //! operation clears that lane's draft cache and never fails the target.
 
+mod backend_readout;
 mod context;
+mod device_features;
 mod draft_batch;
 mod feature_wire;
 mod readout;
@@ -167,6 +169,8 @@ pub(crate) struct DFlashDraft {
     mrope: bool,
     layout: BlockLayout,
     batch: DraftBatch,
+    backend_readout: Option<backend_readout::BackendReadout>,
+    device_features: Option<device_features::DeviceFeatures>,
 }
 
 // The draft model and context are only touched behind the owning Mutex, and
@@ -228,6 +232,8 @@ impl DFlashDraft {
             mrope: false,
             layout: BlockLayout::BonusAnchor,
             batch: DraftBatch::default(),
+            backend_readout: None,
+            device_features: None,
         };
         // From here the Drop impl owns the native handles.
         draft.configure(target_model, options, config, tensors.markov)?;
@@ -335,6 +341,15 @@ impl DFlashDraft {
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "dflash.attention.causal") }
                 .is_some_and(|value| value == "true");
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
+        if !dflash2 && backend_readout::enabled() {
+            self.backend_readout = api.sampling.and_then(|sampling| {
+                backend_readout::BackendReadout::attach(sampling, self.ctx, self.lanes)
+            });
+            write_native_log_note(format!(
+                "dflash backend readout enabled={}",
+                self.backend_readout.is_some()
+            ));
+        }
         unsafe {
             // DFlash2 reads its lattice from every row of the nextn output.
             (api.set_embeddings_nextn)(self.ctx, true, !dflash2);
@@ -344,6 +359,32 @@ impl DFlashDraft {
                     (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
                 }
             }
+        }
+        if device_features::enabled()
+            && device_features::eligible(
+                config.layer_start,
+                config.layer_end,
+                target_layers,
+                &self.local_layers,
+                &self.info.target_layer_ids,
+            )
+        {
+            self.device_features = api.device_features.and_then(|device| {
+                device_features::DeviceFeatures::attach(
+                    device,
+                    self.target_ctx,
+                    self.ctx,
+                    device_features::FeatureShape {
+                        ubatch: self.n_ubatch,
+                        capacity: self.target_n_batch,
+                        mrope: self.mrope,
+                    },
+                )
+            });
+            write_native_log_note(format!(
+                "dflash device features enabled={}",
+                self.device_features.is_some()
+            ));
         }
         write_native_log_note(format!(
             "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} input_layer={:?} mask_token={} causal={causal} mrope={}",
@@ -409,6 +450,9 @@ impl DFlashDraft {
     ) -> Result<()> {
         if positions.is_empty() {
             return Ok(());
+        }
+        if let Some(device) = self.device_features.as_mut() {
+            return device.ingest(seq_id, first_row, positions);
         }
         let layers = self.feature_layers(first_row, positions.len(), remote)?;
         let n_embd = self.n_embd_target;
@@ -604,6 +648,12 @@ impl DFlashDraft {
         let first = self.layout.first_draft_row();
         for row in first..first + draft_tokens {
             let row = i32::try_from(row).context("draft row exceeds i32")?;
+            if let Some(readout) = &self.backend_readout
+                && let Some(token) = readout.token(row, self.n_vocab)?
+            {
+                tokens.push(token);
+                continue;
+            }
             let logits = unsafe { (self.api.get_logits_ith)(self.ctx, row) };
             if logits.is_null() {
                 bail!("draft produced no logits for block row {row}");
@@ -617,6 +667,9 @@ impl DFlashDraft {
 
 impl Drop for DFlashDraft {
     fn drop(&mut self) {
+        // Detach/free samplers before their borrowed context is destroyed.
+        self.backend_readout.take();
+        self.device_features.take();
         unsafe {
             for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
                 if local {
@@ -804,7 +857,17 @@ fn load_draft(
         device_name,
         model_params.n_gpu_layers
     ));
-    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
+    let mut context_params = draft_context_params(api, target_ctx, config, lanes)?;
+    if backend_readout::enabled() && api.sampling.is_some() {
+        // Reserve only the allowed noise block, rather than the full prefill
+        // batch. Anchor-first blocks need no additional row, but reserving it
+        // is harmless and keeps both layouts within the trained block bound.
+        context_params.n_outputs_max_per_seq = options
+            .max_draft_tokens
+            .unwrap_or(MAX_BLOCK_SIZE - 1)
+            .saturating_add(1)
+            .clamp(1, MAX_BLOCK_SIZE) as u32;
+    }
     let model = unsafe { (api.model_load_from_file)(path.as_ptr(), model_params) };
     if model.is_null() {
         bail!(
@@ -1296,7 +1359,12 @@ impl StageSession {
             }
         };
         let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
-        if defer && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
+        // Device rows borrow the current capture buffer. Consume them now;
+        // deferred host rows instead own a copy that survives another decode.
+        let device_rows = link
+            .with_draft(|draft, _| draft.device_features.is_some())
+            .unwrap_or(false);
+        if defer && !device_rows && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
             let gathered =
                 link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
             match gathered {
@@ -1512,6 +1580,34 @@ impl StageModel {
     pub fn dflash_info(&self) -> Option<DFlashDraftInfo> {
         let draft = self.dflash_draft()?;
         Some(lock_draft(draft).info().clone())
+    }
+
+    /// Whether the attached draft uses backend sampling rather than requesting
+    /// host logits. DFlash2's lattice readout is independent of this path.
+    pub fn dflash_backend_readout_enabled(&self) -> bool {
+        self.dflash_draft()
+            .is_some_and(|draft| lock_draft(draft).backend_readout.is_some())
+    }
+
+    /// Observed backend token rows and rows that fell back to host logits for
+    /// the attached draft's lifetime. Attachment alone does not prove offload.
+    pub fn dflash_backend_readout_rows(&self) -> (u64, u64) {
+        self.dflash_draft().map_or((0, 0), |draft| {
+            lock_draft(draft)
+                .backend_readout
+                .as_ref()
+                .map_or((0, 0), backend_readout::BackendReadout::rows)
+        })
+    }
+
+    /// Feature rows consumed directly from the target's device capture buffer.
+    pub fn dflash_device_feature_rows(&self) -> u64 {
+        self.dflash_draft().map_or(0, |draft| {
+            lock_draft(draft)
+                .device_features
+                .as_ref()
+                .map_or(0, device_features::DeviceFeatures::rows)
+        })
     }
 }
 

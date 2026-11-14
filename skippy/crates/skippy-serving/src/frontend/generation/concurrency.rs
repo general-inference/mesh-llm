@@ -131,6 +131,8 @@ struct AdaptiveGenerationConcurrencyState {
 #[derive(Default)]
 struct PermitRetirementState {
     pending: usize,
+    active: usize,
+    load_epoch: u64,
 }
 
 #[derive(Default)]
@@ -155,6 +157,8 @@ impl Drop for GenerationConcurrencyPermit {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        retirement.active -= 1;
+        retirement.load_epoch = retirement.load_epoch.wrapping_add(1);
         if retirement.pending > 0 {
             retirement.pending -= 1;
             permit.forget();
@@ -269,11 +273,31 @@ impl GenerationConcurrencyController {
         &self,
         permit: OwnedSemaphorePermit,
     ) -> GenerationConcurrencyPermit {
+        {
+            let mut state = self
+                .retirement
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.active += 1;
+            state.load_epoch = state.load_epoch.wrapping_add(1);
+        }
         GenerationConcurrencyPermit {
             permit: Some(permit),
             retirement: Arc::clone(&self.retirement),
             admission_queue: Arc::clone(&self.admission_queue),
         }
+    }
+
+    /// Active generation permits and a revision that changes on every arrival
+    /// and departure, including a departure followed by a replacement lane.
+    pub(in crate::frontend) fn generation_load(&self) -> (usize, u64) {
+        let state = self
+            .retirement
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.active, state.load_epoch)
     }
 
     #[cfg(test)]
@@ -704,6 +728,23 @@ mod tests {
                 })
                 .expect("window decision")
         }
+    }
+
+    #[test]
+    fn generation_load_counts_owned_lanes_and_detects_replacements() {
+        let controller = GenerationConcurrencyController::fixed(2);
+        assert_eq!(controller.generation_load(), (0, 0));
+        let first = controller.try_acquire_owned().unwrap();
+        let second = controller.try_acquire_owned().unwrap();
+        let full = controller.generation_load();
+        assert_eq!(full.0, 2);
+        drop(second);
+        assert_eq!(controller.generation_load().0, 1);
+        let replacement = controller.try_acquire_owned().unwrap();
+        assert_eq!(controller.generation_load().0, 2);
+        assert_ne!(controller.generation_load().1, full.1);
+        drop((first, replacement));
+        assert_eq!(controller.generation_load().0, 0);
     }
 
     #[test]

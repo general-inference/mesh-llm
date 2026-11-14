@@ -5,8 +5,8 @@
 //! where rows are expensive or drafts miss. This picks, per window, the length
 //! that maximises expected committed tokens per unit of measured time.
 //!
-//! Cost is learned per draft model and shared by every request on it, because
-//! it is a property of the machine. Acceptance is learned per request, seeded
+//! Cost is learned per draft model and active lane count, so concurrent
+//! requests do not overwrite the lone-stream baseline. Acceptance is learned per request, seeded
 //! from the shared estimate, because it is a property of the text.
 
 use std::collections::HashMap;
@@ -229,24 +229,29 @@ pub(super) struct SharedBlockModel {
     pub(super) acceptance: Acceptance,
 }
 
-fn registry() -> &'static Mutex<HashMap<PathBuf, SharedBlockModel>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, SharedBlockModel>>> = OnceLock::new();
+fn registry() -> &'static Mutex<HashMap<(PathBuf, usize), SharedBlockModel>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<(PathBuf, usize), SharedBlockModel>>> = OnceLock::new();
     REGISTRY.get_or_init(Default::default)
 }
 
 /// The current shared estimates for a draft model.
-pub(super) fn shared_model(draft_model_path: &Path) -> SharedBlockModel {
+pub(super) fn shared_model(draft_model_path: &Path, lanes: usize) -> SharedBlockModel {
     registry()
         .lock()
-        .map(|models| models.get(draft_model_path).cloned().unwrap_or_default())
+        .map(|models| {
+            models
+                .get(&(draft_model_path.to_path_buf(), lanes.max(1)))
+                .cloned()
+                .unwrap_or_default()
+        })
         .unwrap_or_default()
 }
 
 /// Folds one measured serial step into the shared estimates for a draft model.
-pub(super) fn record_shared_serial(draft_model_path: &Path, micros: f64) {
+pub(super) fn record_shared_serial(draft_model_path: &Path, lanes: usize, micros: f64) {
     if let Ok(mut models) = registry().lock() {
         models
-            .entry(draft_model_path.to_path_buf())
+            .entry((draft_model_path.to_path_buf(), lanes.max(1)))
             .or_default()
             .cost
             .observe_serial(micros);
@@ -256,6 +261,7 @@ pub(super) fn record_shared_serial(draft_model_path: &Path, micros: f64) {
 /// Folds one window into the shared estimates for a draft model.
 pub(super) fn record_shared(
     draft_model_path: &Path,
+    lanes: usize,
     verify_rows: usize,
     verify_micros: f64,
     draft_micros: f64,
@@ -263,7 +269,9 @@ pub(super) fn record_shared(
     accepted: usize,
 ) {
     if let Ok(mut models) = registry().lock() {
-        let model = models.entry(draft_model_path.to_path_buf()).or_default();
+        let model = models
+            .entry((draft_model_path.to_path_buf(), lanes.max(1)))
+            .or_default();
         model.cost.observe_verify(verify_rows, verify_micros);
         model.cost.observe_draft(draft_micros);
         model.acceptance.observe(drafts, accepted);
@@ -273,6 +281,18 @@ pub(super) fn record_shared(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_costs_do_not_cross_lane_counts() {
+        let path = Path::new("/test/lane-isolation.gguf");
+        record_shared_serial(path, 1, 100.0);
+        record_shared_serial(path, 1, 100.0);
+        record_shared_serial(path, 2, 400.0);
+        record_shared_serial(path, 2, 400.0);
+        assert_eq!(shared_model(path, 1).cost.serial_micros(), Some(100.0));
+        assert_eq!(shared_model(path, 2).cost.serial_micros(), Some(400.0));
+        assert_eq!(shared_model(path, 3).cost.serial_micros(), None);
+    }
 
     #[test]
     fn adaptive_is_on_unless_turned_off() {

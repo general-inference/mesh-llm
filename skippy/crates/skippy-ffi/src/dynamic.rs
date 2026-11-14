@@ -519,6 +519,41 @@ pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
         .get_or_init(|| {
             let symbols = symbols();
             Some(LlamaDraftApi {
+                device_features: (|| {
+                    Some(crate::llama_draft::LlamaDraftDeviceApi {
+                        set_capture: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z34llama_set_embeddings_layer_inp_devP13llama_contextb\0",
+                            msvc: b"?llama_set_embeddings_layer_inp_dev@@YAXPEAUllama_context@@_N@Z\0",
+                        })?,
+                        supports_rows: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z23llama_supports_embd_rowPK13llama_context\0",
+                            msvc: b"?llama_supports_embd_row@@YA_NPEBUllama_context@@@Z\0",
+                        })?,
+                        add_row: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z28llama_batch_ext_add_embd_rowP15llama_batch_extii\0",
+                            msvc: b"?llama_batch_ext_add_embd_row@@YAHPEAUllama_batch_ext@@HH@Z\0",
+                        })?,
+                        batch_init: symbols.lookup_optional(b"llama_batch_ext_init\0")?,
+                        batch_free: symbols.lookup_optional(b"llama_batch_ext_free\0")?,
+                        batch_clear: symbols.lookup_optional(b"llama_batch_ext_clear\0")?,
+                        set_pos: symbols.lookup_optional(b"llama_batch_ext_set_pos\0")?,
+                        set_output: symbols.lookup_optional(b"llama_batch_ext_set_output_logits\0")?,
+                        process: symbols.lookup_optional(b"llama_process\0")?,
+                        synchronize: symbols.lookup_optional(b"llama_synchronize\0")?,
+                    })
+                })(),
+                sampling: (|| {
+                    Some(crate::llama_draft::LlamaDraftSamplingApi {
+                        chain_default_params: symbols
+                            .lookup_optional(b"llama_sampler_chain_default_params\0")?,
+                        chain_init: symbols.lookup_optional(b"llama_sampler_chain_init\0")?,
+                        chain_add: symbols.lookup_optional(b"llama_sampler_chain_add\0")?,
+                        init_greedy: symbols.lookup_optional(b"llama_sampler_init_greedy\0")?,
+                        free: symbols.lookup_optional(b"llama_sampler_free\0")?,
+                        set_sampler: symbols.lookup_optional(b"llama_set_sampler\0")?,
+                        get_token: symbols.lookup_optional(b"llama_get_sampled_token_ith\0")?,
+                    })
+                })(),
                 model_default_params: symbols.lookup_optional(b"llama_model_default_params\0")?,
                 context_default_params: symbols
                     .lookup_optional(b"llama_context_default_params\0")?,

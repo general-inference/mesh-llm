@@ -16,7 +16,7 @@ pub(crate) fn generate_dflash(
     let mut session = target.create_session()?;
     let target_prefill_started = Instant::now();
     if run.prompt_tokens.len() > 1 {
-        session.prefill_chunk(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
+        session.prefill_chunked(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
     }
     let target_prefill_ms = elapsed_ms(target_prefill_started);
 
@@ -83,7 +83,12 @@ pub(crate) fn generate_dflash(
         }
     }
 
+    let decode_wall_ms = elapsed_ms(started);
+    let rollback = session.verify_rollback_counts()?;
     Ok(SpecGeneration {
+        verify_windows_in_place: rollback.in_place,
+        verify_windows_checkpointed: rollback.checkpointed,
+        decode_wall_ms,
         tokens: generated,
         stats,
         target_prefill_ms,

@@ -1,0 +1,314 @@
+From ef5f1cc41de491298ed25a58616f2016bfd011c1 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 19:12:07 +1100
+Subject: [PATCH] metal: fuse contiguous float32 gated activations
+
+---
+ ggml/src/ggml-metal/ggml-metal-device.cpp | 10 ++++
+ ggml/src/ggml-metal/ggml-metal-device.h   |  1 +
+ ggml/src/ggml-metal/ggml-metal-fusion.cpp | 51 +++++++++++++++++
+ ggml/src/ggml-metal/ggml-metal-fusion.h   |  1 +
+ ggml/src/ggml-metal/ggml-metal-impl.h     |  7 +++
+ ggml/src/ggml-metal/ggml-metal-ops.cpp    | 23 ++++++++
+ ggml/src/ggml-metal/kernels/unary.metal   | 24 ++++++++
+ tests/test-metal-graph-optimize.cpp       | 70 ++++++++++++++++++++++-
+ 8 files changed, 186 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 0d18a5f01..9ef7c6033 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -303,6 +303,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary(ggml_metal
+     return res;
+ }
+ 
++ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary_mul(ggml_metal_library_t lib, const ggml_tensor * op) {
++    const char * name = ggml_get_unary_op(op) == GGML_UNARY_OP_SILU ?
++        "kernel_unary_mul_silu_f32" : "kernel_unary_mul_sigmoid_f32";
++    auto res = ggml_metal_library_get_pipeline(lib, name);
++    if (!res.pipeline) {
++        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
++    }
++    return res;
++}
++
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_glu(ggml_metal_library_t lib, const ggml_tensor * op) {
+     GGML_ASSERT(ggml_is_contiguous_1(op->src[0]));
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 56b795790..bf32502f0 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -118,6 +118,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_diag
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repeat            (ggml_metal_library_t lib, enum ggml_type tsrc);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_concat            (ggml_metal_library_t lib, enum ggml_type tsrc);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary             (ggml_metal_library_t lib, const struct ggml_tensor * op);
++struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary_mul         (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_silu_back         (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_glu               (ggml_metal_library_t lib, const struct ggml_tensor * op);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_sum               (ggml_metal_library_t lib, const struct ggml_tensor * op);
+diff --git a/ggml/src/ggml-metal/ggml-metal-fusion.cpp b/ggml/src/ggml-metal/ggml-metal-fusion.cpp
+index 6766b4bd9..737eb4cf2 100644
+--- a/ggml/src/ggml-metal/ggml-metal-fusion.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-fusion.cpp
+@@ -815,6 +815,55 @@ static bool ggml_metal_fusion_check_mul_mat_add(
+ 
+ // ---- patterns ------------------------------------------------------------
+ 
++static bool ggml_metal_fusion_check_unary_mul(
++        const ggml_metal_fusion *,
++        const ggml_tensor * const * nodes,
++        const ggml_cgraph * gf, const int * node_idxs, int idx,
++        ggml_metal_fusion_mode mode) {
++    const ggml_tensor * unary = nodes[0];
++    const ggml_tensor * mul = nodes[1];
++    const auto op = ggml_get_unary_op(unary);
++    if (op != GGML_UNARY_OP_SILU && op != GGML_UNARY_OP_SIGMOID) {
++        return false;
++    }
++    const ggml_tensor * other = mul->src[0] == unary ? mul->src[1] :
++                               mul->src[1] == unary ? mul->src[0] : nullptr;
++    if (!other || !unary->src[0] || ggml_nelements(mul) > INT32_MAX - 255) {
++        return false;
++    }
++    // This pattern permits a scalar gate, unlike the generic equal-shape
++    // chain. Retain its elision and view checks explicitly.
++    const ggml_op ops[] = { GGML_OP_UNARY, GGML_OP_MUL };
++    const int output = node_idxs[idx + 1];
++    if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, 2, ops, &output, 1)) {
++        return false;
++    }
++    const ggml_tensor * tensors[] = { unary->src[0], unary, other, mul };
++    for (const ggml_tensor * tensor : tensors) {
++        if (tensor->type != GGML_TYPE_F32 || !ggml_is_contiguous(tensor) ||
++            (tensor->ne[0] != 1 && tensor->ne[0] != mul->ne[0])) {
++            return false;
++        }
++        for (int d = 1; d < GGML_MAX_DIMS; ++d) {
++            if (tensor->ne[d] != mul->ne[d]) {
++                return false;
++            }
++        }
++    }
++    if (mode == GGML_METAL_FUSION_FULL) {
++        // Equal-shape in-place writes are safe. Partial overlaps and broadcast
++        // inputs aliased with the output could destroy another thread's input.
++        const ggml_tensor * inputs[] = { unary->src[0], other };
++        for (const ggml_tensor * input : inputs) {
++            if (ggml_metal_fusion_overlap(mul, input) &&
++                (mul->data != input->data || !ggml_are_same_shape(mul, input))) {
++                return false;
++            }
++        }
++    }
++    return true;
++}
++
+ static const std::vector<ggml_op> ops_norm_mul         = { GGML_OP_NORM, GGML_OP_MUL };
+ static const std::vector<ggml_op> ops_norm_mul_add     = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
+ static const std::vector<ggml_op> ops_norm_scale       = { GGML_OP_NORM, GGML_OP_SCALE };
+@@ -863,6 +912,7 @@ static const std::vector<ggml_op> ops_moe_reduce_8 = {
+ };
+ 
+ static const std::vector<ggml_op> ops_mul_mat_add = { GGML_OP_MUL_MAT, GGML_OP_ADD };
++static const std::vector<ggml_op> ops_unary_mul = { GGML_OP_UNARY, GGML_OP_MUL };
+ 
+ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
+     { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         {}, false, ggml_metal_fusion_check_norm },
+@@ -913,6 +963,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
+     { GGML_METAL_FUSION_SSM_CONV_SILU, ops_ssm_conv_silu, {}, false, ggml_metal_fusion_check_ssm_conv_silu },
+ 
+     { GGML_METAL_FUSION_MUL_MAT_ADD, ops_mul_mat_add, {}, false, ggml_metal_fusion_check_mul_mat_add },
++    { GGML_METAL_FUSION_UNARY_MUL, ops_unary_mul, {}, true, ggml_metal_fusion_check_unary_mul },
+ };
+ 
+ // ---- alloc deps -----------------------------------------------------------
+diff --git a/ggml/src/ggml-metal/ggml-metal-fusion.h b/ggml/src/ggml-metal/ggml-metal-fusion.h
+index 5d994c249..f49f02b7e 100644
+--- a/ggml/src/ggml-metal/ggml-metal-fusion.h
++++ b/ggml/src/ggml-metal/ggml-metal-fusion.h
+@@ -43,6 +43,7 @@ typedef enum ggml_metal_fusion_id {
+     GGML_METAL_FUSION_MOE_REDUCE,   // MUL + expert VIEWs + ADD chain (MoE output reduction)
+     GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
+     GGML_METAL_FUSION_MUL_MAT_ADD,  // MUL_MAT + ADD (residual added in the few-row MMA store)
++    GGML_METAL_FUSION_UNARY_MUL,    // contiguous f32 SiLU/sigmoid + MUL, including scalar gates
+ } ggml_metal_fusion_id;
+ 
+ struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
+diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
+index 7fd9d97cf..823a43933 100644
+--- a/ggml/src/ggml-metal/ggml-metal-impl.h
++++ b/ggml/src/ggml-metal/ggml-metal-impl.h
+@@ -247,6 +247,13 @@ typedef struct {
+     float    max;
+ } ggml_metal_kargs_unary;
+ 
++typedef struct {
++    uint64_t n;
++    int32_t width;
++    int32_t unary_width;
++    int32_t other_width;
++} ggml_metal_kargs_unary_mul;
++
+ typedef struct {
+     int32_t  ne00;
+     int32_t  ne01;
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 5c93bc4f0..13fab80bb 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -821,6 +821,29 @@ int ggml_metal_op_acc(ggml_metal_op_t ctx, int idx) {
+ int ggml_metal_op_unary(ggml_metal_op_t ctx, int idx) {
+     ggml_tensor * op = ctx->node(idx);
+ 
++    if (op->op == GGML_OP_UNARY && ctx->use_fusion()) {
++        int n = 1;
++        const auto * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
++        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_UNARY_MUL) {
++            ggml_tensor * mul = ctx->node(idx + n - 1);
++            ggml_tensor * other = mul->src[0] == op ? mul->src[1] : mul->src[0];
++            ggml_metal_kargs_unary_mul args = {
++                (uint64_t) ggml_nelements(mul), (int32_t) mul->ne[0],
++                (int32_t) op->src[0]->ne[0], (int32_t) other->ne[0],
++            };
++            const auto pipeline = ggml_metal_library_get_pipeline_unary_mul(ctx->lib, op);
++            const int nth = std::min(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
++            ggml_metal_encoder_set_pipeline(ctx->enc, pipeline);
++            ggml_metal_encoder_set_bytes(ctx->enc, &args, sizeof(args), 0);
++            ggml_metal_encoder_set_buffer(ctx->enc, ggml_metal_get_buffer_id(op->src[0]), 1);
++            ggml_metal_encoder_set_buffer(ctx->enc, ggml_metal_get_buffer_id(other), 2);
++            ggml_metal_encoder_set_buffer(ctx->enc, ggml_metal_get_buffer_id(mul), 3);
++            ggml_metal_encoder_dispatch_threadgroups(ctx->enc, (args.n + nth - 1)/nth, 1, 1, nth, 1, 1);
++            ctx->count_fusions(fusion);
++            return n;
++        }
++    }
++
+     // the sigmoid and sqrt(softplus) TOPK_MOE fusions anchor at the gating unary node
+     if (op->op == GGML_OP_UNARY && ctx->use_fusion() &&
+         (ggml_get_unary_op(op) == GGML_UNARY_OP_SOFTPLUS || ggml_get_unary_op(op) == GGML_UNARY_OP_SIGMOID)) {
+diff --git a/ggml/src/ggml-metal/kernels/unary.metal b/ggml/src/ggml-metal/kernels/unary.metal
+index b361da996..8ccb689fc 100644
+--- a/ggml/src/ggml-metal/kernels/unary.metal
++++ b/ggml/src/ggml-metal/kernels/unary.metal
+@@ -3,6 +3,30 @@
+ constant short FC_unary_op [[function_constant(FC_UNARY + 0)]];
+ constant bool  FC_unary_cnt[[function_constant(FC_UNARY + 1)]];
+ 
++// Keep the unary result as f32 before multiplying, just as the two unfused
++// kernels do. Only dim 0 can broadcast; all other dimensions share row order.
++template <bool silu>
++kernel void kernel_unary_mul_f32(
++        constant ggml_metal_kargs_unary_mul & args,
++        device const float * src0,
++        device const float * src1,
++        device float * dst,
++        uint i [[thread_position_in_grid]]) {
++    if (i >= args.n) {
++        return;
++    }
++    const uint row = i / args.width;
++    const uint col = i % args.width;
++    const float x = src0[row * args.unary_width + (args.unary_width == 1 ? 0 : col)];
++    const float y = src1[row * args.other_width + (args.other_width == 1 ? 0 : col)];
++    const float activated = (silu ? x : 1.0f) / (1.0f + exp(-x));
++    dst[i] = activated * y;
++}
++
++typedef decltype(kernel_unary_mul_f32<true>) kernel_unary_mul_f32_t;
++template [[host_name("kernel_unary_mul_silu_f32")]] kernel kernel_unary_mul_f32_t kernel_unary_mul_f32<true>;
++template [[host_name("kernel_unary_mul_sigmoid_f32")]] kernel kernel_unary_mul_f32_t kernel_unary_mul_f32<false>;
++
+ template <typename T, typename U>
+ inline constexpr T ggml_metal_unary_cast(U x) {
+     return (T) x;
+diff --git a/tests/test-metal-graph-optimize.cpp b/tests/test-metal-graph-optimize.cpp
+index c46987b12..29e700cd8 100644
+--- a/tests/test-metal-graph-optimize.cpp
++++ b/tests/test-metal-graph-optimize.cpp
+@@ -273,13 +273,81 @@ static bool check_chained_pack_reader() {
+     return report_reader("reader of a chained MUL_MAT+ADD sum", packed, after);
+ }
+ 
++static bool check_unary_mul(ggml_unary_op op, bool gate, bool swap, bool reuse, bool capture, bool strided,
++                            ggml_type type = GGML_TYPE_F32, int alias = 0) {
++    ggml_init_params params = { n_tensors*ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
++    ggml_context * ctx = ggml_init(params);
++    ggml_tensor * input = ggml_new_tensor_2d(ctx, type, gate ? 1 : 32, 4);
++    if (strided) {
++        ggml_tensor * padded = ggml_new_tensor_2d(ctx, type, 64, 4);
++        input = ggml_view_2d(ctx, padded, 32, 4, padded->nb[1], 0);
++    }
++    ggml_tensor * unary = ggml_unary(ctx, input, op);
++    if (capture) {
++        ggml_set_output(unary);
++    }
++    ggml_tensor * other = ggml_new_tensor_2d(ctx, type, gate ? 32 : input->ne[0], input->ne[1]);
++    ggml_tensor * mul = gate || swap ? ggml_mul(ctx, other, unary) : ggml_mul(ctx, unary, other);
++    ggml_cgraph * graph = ggml_new_graph(ctx);
++    ggml_build_forward_expand(graph, mul);
++    if (reuse) {
++        ggml_build_forward_expand(graph, ggml_add(ctx, unary, unary));
++    }
++    const auto buft = ggml_backend_dev_buffer_type(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU));
++    auto buffer = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
++    if (alias) {
++        // Structural checks only: overlapping storage must not turn a scalar
++        // broadcast or a shifted vector into an unsafe in-place kernel.
++        mul->data = (char *) input->data + (alias == 2 ? sizeof(float) : 0);
++    }
++    std::vector<int> idxs;
++    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
++        if (!ggml_op_is_empty(ggml_graph_node(graph, i)->op)) {
++            idxs.push_back(i);
++        }
++    }
++    int count = 1;
++    const auto * fusion = ggml_metal_fusion_next(graph, idxs.data(), idxs.size(), 0,
++                                                GGML_METAL_FUSION_FULL, &count);
++    const bool fused = fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_UNARY_MUL;
++    const bool expected = (op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID) &&
++                          !reuse && !capture && !strided && type == GGML_TYPE_F32 &&
++                          alias != 2 && !(gate && alias);
++    const bool ok = fused == expected && (!fused || count == 2);
++    std::printf("unary mul: op=%s gate=%d swap=%d reuse=%d capture=%d strided=%d type=%s alias=%d fused=%d expected=%d: %s\n",
++                ggml_unary_op_name(op), gate, swap, reuse, capture, strided, ggml_type_name(type),
++                alias, fused, expected, ok ? "OK" : "FAIL");
++    ggml_backend_buffer_free(buffer);
++    ggml_free(ctx);
++    return ok;
++}
++
++static int run_unary_mul_cases() {
++    int failures = 0;
++    for (auto op : { GGML_UNARY_OP_SILU, GGML_UNARY_OP_SIGMOID }) {
++        for (bool swap : { false, true }) {
++            failures += !check_unary_mul(op, false, swap, false, false, false);
++        }
++        failures += !check_unary_mul(op, true, true, false, false, false);
++        failures += !check_unary_mul(op, false, false, true, false, false);
++        failures += !check_unary_mul(op, false, false, false, true, false);
++        failures += !check_unary_mul(op, false, false, false, false, true);
++        failures += !check_unary_mul(op, false, false, false, false, false, GGML_TYPE_F16);
++        failures += !check_unary_mul(op, false, false, false, false, false, GGML_TYPE_F32, 1);
++        failures += !check_unary_mul(op, false, false, false, false, false, GGML_TYPE_F32, 2);
++        failures += !check_unary_mul(op, true, true, false, false, false, GGML_TYPE_F32, 1);
++    }
++    failures += !check_unary_mul(GGML_UNARY_OP_RELU, false, false, false, false, false);
++    return failures;
++}
++
+ int main() {
+     const std::vector<device_case> devices = {
+         { "native simdgroup matrices",       true,  true },
+         { "probed or no simdgroup matrices", false, true },
+     };
+     const int failures = run_pack_cases(devices) + (check_chained_pack_reader() ? 0 : 1) + run_row_independent_pack_cases() +
+-        (check_encoder_skips_weight_residual() ? 0 : 1);
++        (check_encoder_skips_weight_residual() ? 0 : 1) + run_unary_mul_cases();
+ 
+     return failures == 0 ? 0 : 1;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

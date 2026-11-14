@@ -1,0 +1,114 @@
+From 740a8603b6d10f2651f6bd7e91de245fe8408afe Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 15 Nov 2026 04:08:11 +1100
+Subject: [PATCH] metal: reuse multi-row routed vector activations on M5 Max
+
+---
+ ggml/src/ggml-metal/ggml-metal-device.cpp     |  8 ++++++++
+ .../src/ggml-metal/ggml-metal-routed-tuning.h | 19 +++++++++++++++++++
+ ggml/src/ggml-metal/kernels/mul_mv.metal      |  2 ++
+ tests/test-metal-graph-optimize.cpp           | 16 ++++++++++++++++
+ 4 files changed, 45 insertions(+)
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index e6c95c3af..8b7569b75 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "ggml-metal-impl.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-routed-tuning.h"
+ 
+ #include "ggml-impl.h"
+ 
+@@ -1540,6 +1541,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
+             }
+     };
+ 
++    const auto * props = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
++    const int tuned_rows = ggml_metal_routed_tuning::rows(
++            props->device_id, props->use_shared_buffers, tsrc0, ne00, ne01, op->src[2]->ne[1], nsg, nr0);
++    if (tuned_rows != nr0) {
++        nr0 = tuned_rows;
++        suffix = tsrc0 == GGML_TYPE_Q4_K ? "_r4" : "_r2";
++    }
+     snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
+     snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-routed-tuning.h b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+new file mode 100644
+index 000000000..c85524e52
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+@@ -0,0 +1,19 @@
++#pragma once
++
++#include "ggml-metal-device.h"
++
++namespace ggml_metal_routed_tuning {
++
++// Reuse the per-lane activation registers across more output rows. Preserve
++// complete SIMDgroup row tiles: the vector bodies load every unrolled row.
++inline int rows(ggml_metal_device_id device, bool shared_buffers, ggml_type type, int64_t inner,
++                int64_t output, int64_t tokens, int nsg, int fallback) {
++    if (device != GGML_METAL_DEVICE_M5_MAX || !shared_buffers || tokens < 3 || inner < 512 || inner > 4096 ||
++            output < 512 || tokens > 31 || nsg <= 0) {
++        return fallback;
++    }
++    const int candidate = type == GGML_TYPE_Q4_K ? 4 : type == GGML_TYPE_Q5_K ? 2 : fallback;
++    return output % (candidate * nsg) == 0 ? candidate : fallback;
++}
++
++} // namespace ggml_metal_routed_tuning
+diff --git a/ggml/src/ggml-metal/kernels/mul_mv.metal b/ggml/src/ggml-metal/kernels/mul_mv.metal
+index 5d012e484..3ddffe6f5 100644
+--- a/ggml/src/ggml-metal/kernels/mul_mv.metal
++++ b/ggml/src/ggml-metal/kernels/mul_mv.metal
+@@ -3417,6 +3417,8 @@ template [[host_name("kernel_mul_mv_id_q2_K_f32")]]    kernel kernel_mul_mv_id_t
+ template [[host_name("kernel_mul_mv_id_q3_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q3_K_f32_impl   <N_R0_Q3_K>>>;
+ template [[host_name("kernel_mul_mv_id_q4_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q4_K_f32_impl   <N_R0_Q4_K>>>;
+ template [[host_name("kernel_mul_mv_id_q5_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q5_K_f32_impl   <N_R0_Q5_K>>>;
++template [[host_name("kernel_mul_mv_id_q4_K_f32_r4")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q4_K_f32_impl<4>>>;
++template [[host_name("kernel_mul_mv_id_q5_K_f32_r2")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q5_K_f32_impl<2>>>;
+ template [[host_name("kernel_mul_mv_id_q6_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q6_K_f32_impl   <N_R0_Q6_K>>>;
+ template [[host_name("kernel_mul_mv_id_iq1_s_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_s_f32_disp<ggml_metal_kargs_mul_mv>>>;
+ template [[host_name("kernel_mul_mv_id_iq1_m_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_m_f32_disp<ggml_metal_kargs_mul_mv>>>;
+diff --git a/tests/test-metal-graph-optimize.cpp b/tests/test-metal-graph-optimize.cpp
+index e9ebdb8df..f1d269404 100644
+--- a/tests/test-metal-graph-optimize.cpp
++++ b/tests/test-metal-graph-optimize.cpp
+@@ -8,6 +8,7 @@
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-routed-tuning.h"
+ 
+ #include <cstdio>
+ #include <vector>
+@@ -344,6 +345,21 @@ static int run_unary_mul_cases() {
+ 
+ int main() {
+     int preference_failures = 0;
++    using ggml_metal_routed_tuning::rows;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, false, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 1, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q5_K, 512, 2048, 2, 2, 1) != 1;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 3, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q5_K, 512, 2048, 8, 2, 1) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 768, 24, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M4_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_PRO, true, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 256, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 514, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 32, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q6_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 4096, 512, 31, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 4352, 512, 8, 2, 2) != 2;
+     for (auto device : { GGML_METAL_DEVICE_M5_MAX, GGML_METAL_DEVICE_M5_PRO,
+                          GGML_METAL_DEVICE_M4_MAX, GGML_METAL_DEVICE_GENERIC }) {
+         for (bool shared : { false, true }) {
+-- 
+2.54.0 (Apple Git-157)
+

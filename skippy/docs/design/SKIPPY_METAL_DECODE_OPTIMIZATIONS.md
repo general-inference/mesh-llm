@@ -456,6 +456,82 @@ quality evaluation, raw requests and benchmark audit are retained under
 only a small additional single-request gain and does not close the BaseRT
 speed gap. Further work must measure execution cost as well as stored bytes.
 
+## Multi-row routed vector activation reuse
+
+A separate native capability reuses activation registers across four Q4_K
+output rows or two Q5_K output rows inside the existing routed vector kernels.
+The baseline handles two and one rows respectively. The arithmetic for each
+output row and stored weights are unchanged. This is a new core patch because
+it owns a distinct routed-vector specialization, rather than extending the
+shared-verification or graph-fusion capabilities.
+
+Dispatch is restricted to M5 Max with shared buffers, 3–31 routed token rows,
+inner dimensions 512–4096, and at least 512 output rows. Output rows must divide
+exactly into complete unrolled SIMDgroup tiles: the kernel bodies load every
+unrolled row, so a write-boundary check alone cannot make partial tiles safe.
+One- and two-row operations retain the baseline dispatch, as do other devices,
+private buffers, types, and unqualified shapes. Selection uses device and tensor
+metadata, without model-family checks or a new operator setting. There is no
+public native ABI change.
+
+The initial policy also selected the specializations for one and two rows.
+Repeated-ID operator microbenchmarks improved, but the full-model plain
+benchmark slowed by 0.79% at concurrency one and 0.57% at concurrency two.
+That policy was rejected. These microbenchmarks repeatedly reuse a small set
+of expert IDs; their printed byte-throughput estimates do not represent real
+model bandwidth and are not used as a speedup claim.
+
+The restricted policy was compared with original native source `9403301c7`
+using the same CLI, original target weights, original DFlash draft, and default
+shared execution. Four fresh processes ran in ABBA order. Each process ran
+one warmup and three measured fixed-prompt batches per concurrency, with
+128 output tokens per request. Rates below divide aggregate output tokens by
+the slowest HTTP request time and include prefill.
+
+| Concurrency | Baseline median tok/s | Restricted reuse median tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 171.409 | 175.803 | +2.56% |
+| 2 | 216.403 | 223.957 | +3.49% |
+
+All 48 requests completed with 128 tokens and length termination. Outputs
+matched exactly across processes and arms for both prompts. Every measured
+two-request candidate batch exceeded every control batch. Single-request
+batches overlap, with adaptation still visible after the first warmup; this
+is evidence for this workload, not a universal steady-state gain or BaseRT
+parity. Raw operator tests, commands, responses and audits are retained under
+`target/routed-vector-evidence/`, with the restricted full-model comparison
+in `fixed-spec-multirow-summary.json`.
+
+The restricted policy's variable-prompt plain benchmark was +0.19% at
+concurrency one and −2.07% at concurrency two. One candidate request ended
+at 210 tokens; the other 35 measured requests produced 256. The two candidate
+processes also differed noticeably at concurrency two. This result is not
+counted as a plain-decode improvement or dismissed as a passing regression
+check. A subsequent fixed-prompt, fixed-128-token ABBA comparison on the final
+release build measured:
+
+| Plain concurrency | Baseline median tok/s | Restricted reuse median tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 110.841 | 111.194 | +0.32% |
+| 2 | 166.751 | 167.054 | +0.18% |
+
+All 48 requests completed at the expected length, and measured outputs
+matched exactly across both arms. Batches overlap: these figures support
+preserving ordinary decode performance on this fixed workload, not a plain
+speedup. Raw evidence is in `plain-multirow-summary.json` and
+`fixed-plain-multirow-summary.json`.
+
+Validation includes 18 routed GPU-versus-CPU operator cases: Q4_K 2048×512,
+Q5_K 512×2048, and Q4_K 2048×768, each at 1, 2, 3, 8, 24, and 32 token rows.
+The graph optimizer test also passed with 14 routed selection/fallback
+assertions, including complete-tile alignment, device and buffer exclusions,
+and dimension/token boundaries. A fresh queue replay reproduced the intended
+source hashes. The complete `just with-lld just release-build` passed for
+Skippy and Mesh. The final native source differs from the measured speculative
+candidate only in stronger test assertions; production source is identical.
+This selected validation does not make the previously failing broad native
+build gate green: its inherited missing ASR/diffusion targets remain unresolved.
+
 ## Rejected flat-Q4 dense/head format
 
 The next format diagnostic uses Q4_0 for the same 251 dense/head matrices as

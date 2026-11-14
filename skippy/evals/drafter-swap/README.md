@@ -5,13 +5,68 @@ agent turns) make Max faster than one general draft? Measured on dan-lab DGX Spa
 Qwen3.6-35B-A3B UD-Q4_K_M and its shipped DFlash2 draft: greedy, thinking off, 512-token
 replies, 40 held-out prompts per workload, one request at a time.
 
-## Results
+## Round 2: overfitting, complete replies, breadth (2026-11-14)
+
+Round 1's drafts were trained for 3 epochs on replies cut at 1024 tokens, with no held-out
+data, and the HTML draft saw one prompt style. Round 2 fixes each of those.
+
+**Complete replies.** HTML pages run a median ~4.2K tokens (max ~10K); at 4096 tokens half
+still stopped early, so capped replies were continued to completion through
+`/v1/completions` (`continue_replies.py`, checked against finished replies first): 998 of
+999 HTML v2 replies and 599 of 600 code reviews end on their own.
+
+**Overfitting.** A 10% held-out split now reports validation accuracy and loss:
+
+| Data | 1 epoch val acc | 2 epochs | 3 epochs | Verdict |
+|---|---:|---:|---:|---|
+| rust_gen (470 rows) | 0.849 | 0.857 (train 0.925) | – | memorises from 2 epochs |
+| code_review v2 (600) | 0.536 | 0.544 | 0.543, loss up | 3 epochs overfits |
+| html_v2 (999 long pages) | 0.833 | 0.851 | 0.860 | still improving |
+
+Round 1's 3-epoch drafts were partly memorised; with enough data, 2 epochs is the served
+optimum (3 is no faster).
+
+**Breadth.** v1 (Tailwind pages only) against v2 (four formats, complete pages, 2 epochs),
+served decode change against the shipped draft (`results/round2/html-v2-by-format.md`):
+
+| Format | v1 | v2 |
+|---|---:|---:|
+| Tailwind page | +57% | +48% |
+| Plain-CSS page | +2% | +11% |
+| Page edit | +1% | +14% |
+| React + Tailwind component | −2% | +7% |
+| Real GitHub HTML/JSX/Vue edits (`html_ood`, no training source) | 0% | +6% |
+| Prose, code review | ~0 | ~0 |
+
+Token traces (`trace.sh`, `trace_table.py`) show v1's gain is almost all Tailwind class
+strings (class/style tokens from the draft 57% → 83%; other kinds +0–7 points).
+
+**Q4 capture.** Features from the served Q4_K_M target (`llama-spec-bench --dump-features`)
+match bf16 at cosine 0.987–0.9997 by layer; a draft trained on them performs the same as the
+bf16-trained one, so bf16 capture stays.
+
+**Code review does not specialise.** Acceptance stayed 0.39–0.41 for every variant; 2–3
+epochs cost 6–9% elsewhere.
+
+Next: one coding draft trained on every coding set (`build_coding.py`), measured against the
+shipped draft and the HTML v2 draft.
+
+### Bugs found (not filed: the hand-off server was unreachable)
+
+- Served `ngram-suffix` never drafts on local `mesh-llm serve` for this target (`draft_n` 0,
+  decode equal to off), with the documented config and with `SKIPPY_SPECULATION_GATE=0`.
+  Offline, the same replies would accept ~2.9 tokens per step on code edits.
+- Four lanes with DFlash and ~5K-token prompts killed `mesh-llm serve` without a log line, as
+  decoding started (`continue_replies.py` at parallel 4); one lane works.
+
+## Round 1 results
 
 **A specialist draft pays where the general draft is weak and the output is regular.** The
 HTML draft lifts HTML decode by 54%; code review, Rust and code edit gain 3–7%. Swapping costs
 about 1 µs with drafts kept open, and replaying the last 2048 feature rows into the new draft
 (~130 ms) removes the cost of starting it cold. Routed by task kind over a mixed workload,
-decode is 5.6–8.7% faster than one general draft.
+decode is 5.6–8.7% faster than one general draft. (Round 2 shows the HTML number came from one
+prompt style and the 3-epoch drafts were partly memorised.)
 
 ### 1. Headroom with the shipped draft
 

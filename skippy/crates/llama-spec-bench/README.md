@@ -129,3 +129,12 @@ matching the serving plan's draft-plus-anchor depth. The JSON report records
 `target_recurrent_rollback_tokens`. Use `--recurrent-rollback-tokens 0` only
 when deliberately measuring checkpoint fallback; undersized snapshots can
 make rollback replay dominate decode time.
+
+`--verify-reference` diagnoses target batching independently of a drafter.
+It replays the serial continuation as forced inputs, compares single-token
+sampling against `window + 1` row verification, and records the first
+divergence with the top five raw log probabilities in each path. A trace
+stops at its first mismatch because sampled verification intentionally does
+not sample a rejected suffix. It fails on a difference unless
+`--allow-mismatch` explicitly requests a diagnostic report. No throughput
+claim should use that diagnostic mode.

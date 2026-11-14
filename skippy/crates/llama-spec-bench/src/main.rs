@@ -14,6 +14,7 @@ use skippy_runtime::{
 };
 
 mod dflash;
+mod verify_reference;
 
 const DEFAULT_CORPUS: &str = "skippy/evals/corpora/kv_mixed_prompts.jsonl";
 
@@ -52,6 +53,9 @@ struct Args {
     /// Target rollback snapshots; DFlash defaults to window + anchor.
     #[arg(long)]
     recurrent_rollback_tokens: Option<u32>,
+    /// Diagnose batched verification on the serial baseline's exact inputs.
+    #[arg(long)]
+    verify_reference: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +231,9 @@ fn main() -> Result<()> {
     for (index, prompt) in prompts.iter().enumerate() {
         eprintln!("baseline {}/{} {}", index + 1, prompts.len(), prompt.id);
         baselines.push(run_baseline(&args, &target, prompt)?);
+    }
+    if args.verify_reference {
+        return verify_reference::run(&args, &target, &baselines);
     }
     let draft = load_draft(&args, &mut target, &target_config)?;
 

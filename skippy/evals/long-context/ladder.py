@@ -16,6 +16,7 @@ largest may be "max"), MAX_TOKENS, REPO (corpus root).
 
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -114,8 +115,8 @@ def main():
     ask("Say hello.", 8)
     for depth in depths:
         depth = min(depth, budget)
+        chars = int(depth * ratio)
         for attempt in range(3):
-            chars = int(depth * ratio * (0.97 ** attempt))
             if chars > len(text):
                 print(f"{ARM}: corpus too short for {depth} tokens", flush=True)
                 return
@@ -125,7 +126,10 @@ def main():
             except urllib.error.HTTPError as error:
                 detail = error.read().decode(errors="replace")[:400]
                 print(f"{ARM} depth {depth}: HTTP {error.code} {detail}", flush=True)
-                if error.code in (400, 413) and attempt < 2:
+                # The router estimates a prompt's tokens before admitting it; shrink to fit.
+                estimate = re.search(r"approximately (\d+) tokens", detail)
+                if error.code in (400, 413, 503) and attempt < 2:
+                    chars = int(chars * (budget / int(estimate.group(1)) if estimate else 1) * 0.97)
                     continue
                 result = {"error": f"HTTP {error.code}: {detail}"}
             except Exception as error:

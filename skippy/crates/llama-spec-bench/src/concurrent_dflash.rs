@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use skippy_runtime::dflash::proposal_batch::DFlashBatchRequest;
 use skippy_runtime::{StageModel, StageSession, verification_batch::VerifyBatchRequest};
 
 use crate::{Args, Baseline, PromptCase, elapsed_ms, first_mismatch, tokens_per_second};
@@ -19,6 +20,8 @@ struct Lane {
 struct Report {
     mode: &'static str,
     shared_verify: bool,
+    shared_draft: bool,
+    shared_draft_lane_proposals: u64,
     lane_count: usize,
     ctx_size: u32,
     window: usize,
@@ -41,6 +44,7 @@ struct LaneReport {
     baseline_output_tokens: Vec<i32>,
     verify_windows_in_place: u64,
     verify_windows_checkpointed: u64,
+    shared_draft_proposals: u64,
 }
 
 pub(super) fn run(
@@ -90,6 +94,10 @@ pub(super) fn run(
             baseline_output_tokens: baseline.generation.tokens.clone(),
             verify_windows_in_place: rollback.in_place,
             verify_windows_checkpointed: rollback.checkpointed,
+            shared_draft_proposals: lane
+                .session
+                .dflash_draft_stats()
+                .map_or(0, |stats| stats.shared_proposals),
         });
     }
     let output_tokens = reports
@@ -99,6 +107,8 @@ pub(super) fn run(
     let report = Report {
         mode: "concurrent DFlash diagnostic; complete post-prefill loop",
         shared_verify: args.shared_verify,
+        shared_draft: args.shared_draft,
+        shared_draft_lane_proposals: reports.iter().map(|lane| lane.shared_draft_proposals).sum(),
         lane_count: args.dflash_lanes,
         ctx_size: args.ctx_size,
         window: args.speculative_window,
@@ -127,6 +137,36 @@ pub(super) fn run(
 }
 
 fn propose(args: &Args, lanes: &mut [Lane]) -> Result<Vec<Vec<i32>>> {
+    if args.shared_draft {
+        let mut requests: Vec<_> = lanes
+            .iter_mut()
+            .filter(|lane| !lane.finished)
+            .map(|lane| DFlashBatchRequest {
+                session: &mut lane.session,
+                anchor: lane.current,
+                max_tokens: args
+                    .speculative_window
+                    .min((args.max_new_tokens - lane.tokens.len()).saturating_sub(1)),
+            })
+            .collect();
+        let outputs = StageSession::dflash_propose_batch(&mut requests)?;
+        let mut outputs = outputs.into_iter();
+        return lanes
+            .iter()
+            .map(|lane| {
+                if lane.finished {
+                    return Ok(Vec::new());
+                }
+                let proposal = outputs
+                    .next()
+                    .flatten()
+                    .context("concurrent target has no DFlash draft")?;
+                let mut input = vec![lane.current];
+                input.extend(proposal.tokens);
+                Ok(input)
+            })
+            .collect();
+    }
     lanes
         .iter_mut()
         .map(|lane| {

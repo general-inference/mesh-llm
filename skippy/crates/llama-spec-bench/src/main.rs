@@ -63,6 +63,9 @@ struct Args {
     /// Combine equal-length concurrent verify windows in one target forward.
     #[arg(long)]
     shared_verify: bool,
+    /// Combine concurrent noise blocks in one draft forward.
+    #[arg(long)]
+    shared_draft: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -212,14 +215,18 @@ fn main() -> Result<()> {
     }
     if args.dflash_lanes == 0
         || (args.dflash_lanes > 1
-            && (!args.dflash || prompts.len() != args.dflash_lanes || args.verify_reference))
+            && ((!args.dflash && !args.verify_reference) || prompts.len() != args.dflash_lanes))
     {
-        bail!(
-            "concurrent DFlash requires --dflash, one prompt per lane, and no --verify-reference"
-        );
+        bail!("multiple lanes require --dflash or --verify-reference, and one prompt per lane");
     }
     if args.shared_verify && args.dflash_lanes < 2 {
         bail!("--shared-verify requires multiple DFlash lanes");
+    }
+    if args.shared_draft && args.dflash_lanes < 2 {
+        bail!("--shared-draft requires multiple DFlash lanes");
+    }
+    if args.shared_draft && args.verify_reference {
+        bail!("--verify-reference does not run a draft model");
     }
 
     eprintln!(
@@ -253,6 +260,11 @@ fn main() -> Result<()> {
         baselines.push(run_baseline(&args, &target, prompt)?);
     }
     if args.verify_reference {
+        // Capture can change target graph fusion. Exercise that graph when
+        // requested, while still never proposing or rolling back draft tokens.
+        if args.dflash {
+            load_draft(&args, &mut target, &target_config)?;
+        }
         return verify_reference::run(&args, &target, &baselines);
     }
     let draft = load_draft(&args, &mut target, &target_config)?;

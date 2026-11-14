@@ -70,6 +70,9 @@ pub(in crate::frontend) struct AdaptiveBlocks {
     serial_started: Option<Instant>,
     /// Measured costs chose serial decoding and the next probe is not due.
     paused: bool,
+    /// Shared submissions optimize aggregate execution cost. Queue residence
+    /// belongs to peer work and must not distort the fit against row count.
+    service_cost: bool,
 }
 
 impl AdaptiveBlocks {
@@ -85,7 +88,19 @@ impl AdaptiveBlocks {
             probes: 0,
             serial_started: None,
             paused: false,
+            service_cost: false,
         }
+    }
+
+    fn for_local(draft_model_path: PathBuf) -> Self {
+        if !crate::frontend::iteration_scheduler::shared_drafts::enabled() {
+            return Self::new(draft_model_path);
+        }
+        let mut key = draft_model_path.into_os_string();
+        key.push("#shared-draft-service");
+        let mut blocks = Self::new(PathBuf::from(key));
+        blocks.service_cost = true;
+        blocks
     }
 
     /// Discard timings that straddle a load transition. Keep this request's
@@ -113,12 +128,29 @@ impl AdaptiveBlocks {
 
     /// Times the serial step that ran since the previous call, if one did.
     pub(in crate::frontend) fn finish_serial_step(&mut self) {
+        if self.service_cost {
+            return;
+        }
         let Some(started) = self.serial_started.take() else {
             return;
         };
         let micros = started.elapsed().as_secs_f64() * 1_000_000.0;
         self.cost.observe_serial(micros);
         record_shared_serial(&self.draft_model_path, self.load.0, micros);
+    }
+
+    pub(super) fn finish_serial_compute(&mut self, load: (usize, u64), micros: f64) {
+        if !self.service_cost {
+            return;
+        }
+        if self.load != load {
+            self.update_load(load);
+            return;
+        }
+        if self.serial_started.take().is_some() {
+            self.cost.observe_serial(micros);
+            record_shared_serial(&self.draft_model_path, self.load.0, micros);
+        }
     }
 
     /// Drafts for the next window, or 0 to decode this token serially.
@@ -234,6 +266,12 @@ impl DFlashBackoff {
 }
 
 impl DFlashDecodeState {
+    pub(super) fn finish_serial_compute(&mut self, load: (usize, u64), micros: f64) {
+        if let Some(adaptive) = &mut self.adaptive {
+            adaptive.finish_serial_compute(load, micros);
+        }
+    }
+
     /// DFlash commits by token equality against rows the native verifier
     /// samples in causal order, stopping at the first mismatch, which keeps
     /// greedy and stochastic sampling exact. `speculation_admitted` excludes
@@ -249,7 +287,7 @@ impl DFlashDecodeState {
             max_draft_tokens: dflash.max_draft_tokens.unwrap_or(usize::MAX),
             backoff: DFlashBackoff::default(),
             adaptive: adaptive_enabled()
-                .then(|| AdaptiveBlocks::new(dflash.draft_model_path.clone())),
+                .then(|| AdaptiveBlocks::for_local(dflash.draft_model_path.clone())),
             stats: InferenceSpeculativeStats::default(),
         })
     }
@@ -355,16 +393,37 @@ impl StageOpenAiBackend {
         if limit == 0 {
             return Ok(DFlashSpanProgress::NotUsed);
         }
+        // Prefill leaves the final prompt token undecoded.
+        let base_position = request
+            .prompt_token_ids
+            .len()
+            .saturating_sub(1)
+            .checked_add(state.decoded_tokens)
+            .and_then(|position| u64::try_from(position).ok())
+            .ok_or_else(|| InferenceError::backend("DFlash base position overflow"))?;
         let propose_started = Instant::now();
         let owned_session_id = session_id.to_string();
         let anchor = state.current;
-        let proposal =
+        let proposal = if crate::frontend::iteration_scheduler::shared_drafts::enabled() {
+            self.iteration_scheduler
+                .execute_draft_timed(
+                    crate::runtime_state::draft_batch::RuntimeDraftRequest {
+                        session_id: owned_session_id,
+                        anchor,
+                        max_tokens: limit,
+                        base_position,
+                    },
+                    request.cancellation,
+                )?
+                .value
+        } else {
             self.iteration_scheduler
                 .execute_runtime("dflash-propose", move |runtime| {
                     runtime
                         .dflash_propose(&owned_session_id, anchor, limit)
                         .map_err(openai_backend_error)
-                })?;
+                })?
+        };
         let draft_micros = propose_started.elapsed().as_secs_f64() * 1_000_000.0;
         if let Some(dflash) = state.dflash.as_mut() {
             dflash.stats.draft_propose_ms += draft_micros / 1_000.0;
@@ -373,15 +432,6 @@ impl StageOpenAiBackend {
             return Ok(DFlashSpanProgress::NotUsed);
         };
 
-        // Prefill leaves the final prompt token undecoded; see the linear
-        // proposal path for the shared position contract.
-        let base_position = request
-            .prompt_token_ids
-            .len()
-            .saturating_sub(1)
-            .checked_add(state.decoded_tokens)
-            .and_then(|position| u64::try_from(position).ok())
-            .ok_or_else(|| InferenceError::backend("DFlash base position overflow"))?;
         let mut verify_inputs = Vec::with_capacity(proposal.tokens.len() + 1);
         verify_inputs.push(state.current);
         verify_inputs.extend_from_slice(&proposal.tokens);
@@ -417,10 +467,22 @@ impl StageOpenAiBackend {
             if let Some(adaptive) = dflash.adaptive.as_mut() {
                 let load = self.generation_limit.generation_load();
                 if adaptive.load == load {
+                    let (verify_cost, draft_cost) = if adaptive.service_cost {
+                        (
+                            execution.compute_share_us as f64,
+                            proposal.proposal_compute_us as f64,
+                        )
+                    } else {
+                        (
+                            (execution.verification_elapsed_us + execution.repair_elapsed_us)
+                                as f64,
+                            draft_micros,
+                        )
+                    };
                     adaptive.record(
                         verify_inputs.len(),
-                        (execution.verification_elapsed_us + execution.repair_elapsed_us) as f64,
-                        draft_micros,
+                        verify_cost,
+                        draft_cost,
                         proposal.tokens.len(),
                         accepted,
                     );
@@ -468,6 +530,31 @@ fn apply_committed_tokens(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_service_costs_use_measured_compute_and_discard_load_transitions() {
+        let mut blocks = super::AdaptiveBlocks::new("/test/shared-service-costs.gguf".into());
+        blocks.service_cost = true;
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_step();
+        assert!(
+            blocks.serial_started.is_some(),
+            "wall time must not consume a service sample"
+        );
+        blocks.finish_serial_compute((1, 0), 100.0);
+        assert!(blocks.serial_started.is_none());
+        assert!(!blocks.cost.serial_measured());
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_compute((1, 0), 100.0);
+        assert!(blocks.cost.serial_measured());
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_compute((2, 1), 5000.0);
+        assert!(blocks.serial_started.is_none());
+        assert!(
+            !blocks.cost.serial_measured(),
+            "a sample spanning a load change must not enter the new bucket"
+        );
+    }
+
     #[test]
     fn changing_load_discards_pending_serial_timing_and_reloads_costs() {
         let path = std::path::PathBuf::from("/test/dflash-load-transition.gguf");
@@ -600,6 +687,7 @@ mod tests {
             repair_elapsed_us: 0,
             runtime_lock_wait_us: 0,
             runtime_lock_hold_us: 0,
+            compute_share_us: 0,
             runtime_lock_acquires: 1,
         }
     }

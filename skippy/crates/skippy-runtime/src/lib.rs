@@ -10,7 +10,7 @@ pub mod clef;
 mod config;
 pub mod decision;
 mod devices;
-mod dflash;
+pub mod dflash;
 mod error;
 mod gguf_writer;
 mod kv_pages;

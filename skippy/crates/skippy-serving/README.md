@@ -45,6 +45,18 @@ barriers. Cancellation and stale-position checks run before target execution.
 batch size. Mesh embeds this same scheduler. The switch remains opt-in while
 serving workloads are validated.
 
+`SKIPPY_SHARED_DRAFT=1` also collects ready DFlash proposals for one draft
+forward. It accepts different block lengths, checks cancellation and target
+positions before submission, and uses the same 300-microsecond idle waiting
+budget. `stage.shared_draft` records the number of lanes actually sharing a
+forward; unsupported draft heads or excess capacity run independently. The
+draft and verification switches can be measured separately or enabled together.
+With shared drafting, adaptive sizing learns each lane's share of execution
+cost for drafting, verification, repair and measured serial steps. Queue time
+remains in request latency telemetry; it is excluded from the cost fit, so a
+peer's work cannot be mistaken for a more expensive draft width. These
+estimates are stored separately from the existing local and split estimates.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh

@@ -17,6 +17,7 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+pub(crate) mod draft_batch;
 mod expert_placement;
 mod frame_operations;
 pub(crate) use frame_operations::slice_activation_frame;

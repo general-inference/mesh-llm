@@ -3,9 +3,13 @@ use super::*;
 use crate::runtime_state::RuntimeVerificationRequest;
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
-type Verified = InferenceResult<Option<Vec<i32>>>;
+struct VerifiedWindow {
+    predictions: Vec<i32>,
+    batch_size: usize,
+}
+type Verified = InferenceResult<Option<VerifiedWindow>>;
 type Completion = Box<dyn FnOnce(&mut RuntimeState, Verified, Instant, Instant) + Send>;
 
 pub(super) struct VerificationOperation {
@@ -23,7 +27,7 @@ impl IterationScheduler {
         &self,
         request: RuntimeVerificationRequest,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
-        finish: impl FnOnce(&mut RuntimeState, Vec<i32>) -> InferenceResult<T> + Send + 'static,
+        finish: impl FnOnce(&mut RuntimeState, Vec<i32>, usize) -> InferenceResult<T> + Send + 'static,
     ) -> InferenceResult<SchedulerRuntimeOutcome<Option<T>>> {
         let (reply, result) = std_mpsc::sync_channel(1);
         let enqueued_at = Instant::now();
@@ -33,7 +37,7 @@ impl IterationScheduler {
             complete: Box::new(move |runtime, predictions, lock_started, hold_started| {
                 let value = predictions.and_then(|predictions| {
                     predictions
-                        .map(|predictions| finish(runtime, predictions))
+                        .map(|window| finish(runtime, window.predictions, window.batch_size))
                         .transpose()
                 });
                 let outcome = value.map(|value| SchedulerRuntimeOutcome {
@@ -106,7 +110,12 @@ impl SchedulerWorker {
                     self.fail_all(InferenceError::backend("iteration scheduler stopped"));
                     return false;
                 }
-                Ok(command) => self.handle_command(command),
+                Ok(command) => {
+                    self.handle_command(command);
+                    // A peer waiting on its draft cannot enqueue verification
+                    // until the draft completes. Let it join this verify wave.
+                    self.run_draft_batch();
+                }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => break,
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => return false,
             }
@@ -154,7 +163,10 @@ impl SchedulerWorker {
                     for (operation, output) in valid.into_iter().zip(outputs) {
                         (operation.complete)(
                             &mut runtime,
-                            Ok(Some(output)),
+                            Ok(Some(VerifiedWindow {
+                                predictions: output,
+                                batch_size,
+                            })),
                             lock_started,
                             hold_started,
                         );
@@ -181,7 +193,12 @@ impl SchedulerWorker {
                         &request.token_ids,
                         request.sampling.as_ref(),
                     )
-                    .map(Some)
+                    .map(|predictions| {
+                        Some(VerifiedWindow {
+                            predictions,
+                            batch_size: 1,
+                        })
+                    })
                     .map_err(openai_backend_error);
                 (operation.complete)(&mut runtime, output, lock_started, hold_started);
             }

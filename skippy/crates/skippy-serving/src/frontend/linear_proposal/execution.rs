@@ -22,6 +22,7 @@ pub(crate) struct LinearProposalExecution {
     pub(crate) repair_elapsed_us: u64,
     pub(crate) runtime_lock_wait_us: u64,
     pub(crate) runtime_lock_hold_us: u64,
+    pub(crate) compute_share_us: u64,
     pub(crate) runtime_lock_acquires: usize,
 }
 
@@ -170,7 +171,8 @@ impl StageOpenAiBackend {
         let max_new_tokens = params.max_new_tokens;
         let finish_session_id = session_id.clone();
         let finish = move |runtime: &mut crate::runtime_state::RuntimeState,
-                           predictions: Vec<i32>| {
+                           predictions: Vec<i32>,
+                           batch_size: usize| {
             let decision = classify_native_mtp_verify_window(
                 &owned_proposal_tokens,
                 &predictions,
@@ -186,7 +188,7 @@ impl StageOpenAiBackend {
             let position = runtime
                 .session_token_count(&finish_session_id)
                 .ok_or_else(|| InferenceError::backend("linear proposal session disappeared"))?;
-            Ok((predictions, decision, position))
+            Ok((predictions, decision, position, batch_size))
         };
         let verification = if crate::frontend::iteration_scheduler::shared_verification::enabled() {
             self.iteration_scheduler.execute_verification_timed(
@@ -213,14 +215,15 @@ impl StageOpenAiBackend {
                     let predictions = runtime
                         .verify_tokens_sampled(&session_id, &owned_verify_inputs, sampling.as_ref())
                         .map_err(openai_backend_error)?;
-                    finish(runtime, predictions).map(Some)
+                    finish(runtime, predictions, 1).map(Some)
                 },
             )?
         };
         let verification_lock_wait_us = millis_to_micros(verification.runtime_lock_wait_ms);
         let verification_lock_hold_us = millis_to_micros(verification.runtime_lock_hold_ms);
         let execution = verification.value;
-        let Some((predictions, decision, position_after_verification)) = execution else {
+        let Some((predictions, decision, position_after_verification, batch_size)) = execution
+        else {
             return Ok(None);
         };
         let expected_position_after_verification = params
@@ -301,6 +304,8 @@ impl StageOpenAiBackend {
             runtime_lock_wait_us: verification_lock_wait_us
                 .saturating_add(repair.runtime_lock_wait_us),
             runtime_lock_hold_us: verification_lock_hold_us
+                .saturating_add(repair.runtime_lock_hold_us),
+            compute_share_us: (verification_lock_hold_us / batch_size.max(1) as u64)
                 .saturating_add(repair.runtime_lock_hold_us),
             runtime_lock_acquires: 1usize.saturating_add(repair.runtime_lock_acquires),
         }))

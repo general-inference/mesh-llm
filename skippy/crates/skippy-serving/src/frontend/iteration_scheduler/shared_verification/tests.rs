@@ -13,7 +13,7 @@ fn operation(id: &str, width: usize) -> VerificationOperation {
     }
 }
 
-fn worker() -> SchedulerWorker {
+pub(in crate::frontend::iteration_scheduler) fn worker() -> SchedulerWorker {
     let (_commands, receiver) = std_mpsc::channel();
     SchedulerWorker {
         runtime: Arc::new(Mutex::new(RuntimeState::new_modelless_for_test(2))),
@@ -22,6 +22,7 @@ fn worker() -> SchedulerWorker {
         requests: BTreeMap::new(),
         direct_iterations: VecDeque::new(),
         verifications: VecDeque::new(),
+        drafts: VecDeque::new(),
         max_verify_iteration_tokens: 512,
         cache_runtime_queue: CacheRuntimeQueue::new(CACHE_AGING_COST_PER_TURN, true),
         commands: receiver,

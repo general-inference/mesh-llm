@@ -36,6 +36,15 @@ trim or retirement. This API is initially exercised by the concurrent DFlash
 diagnostic. Serving can opt into scheduler coalescing with
 `SKIPPY_SHARED_VERIFY=1`; see the serving crate's README.
 
+`StageSession::dflash_propose_batch` accepts
+`dflash::proposal_batch::DFlashBatchRequest` values. Compatible lanes share
+one noise-block forward, including different requested block lengths. Each
+lane keeps its own feature context, and every scratch block is removed after
+readout. Native capacity limits, separate draft models, and selector or
+convolution heads retain independent submissions. Draft failure clears the
+affected draft contexts and returns empty proposals without changing target
+state. `DFlashDraftStats::shared_proposals` counts observed shared submissions.
+
 The default remains host readout until matched parity and performance trials
 qualify the backend path. `StageModel::dflash_backend_readout_rows` distinguishes
 observed token rows from host fallbacks; attachment alone is not evidence of

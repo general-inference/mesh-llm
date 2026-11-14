@@ -18,6 +18,8 @@ mod context;
 mod device_features;
 mod draft_batch;
 mod feature_wire;
+mod noise_blocks;
+pub mod proposal_batch;
 mod readout;
 mod split;
 
@@ -39,6 +41,7 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
+use noise_blocks::NoiseBlock;
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
@@ -110,6 +113,7 @@ pub struct DFlashProposal {
     pub tokens: Vec<i32>,
     /// Draft time for this block: the block decode, plus the feature rows of
     /// the last decode when their injection was deferred to it.
+    /// A shared forward charges each active block an equal share of its time.
     pub proposal_compute_us: u64,
 }
 
@@ -120,6 +124,8 @@ pub struct DFlashProposal {
 pub struct DFlashDraftStats {
     /// Block drafts, including empty ones from a draft without context.
     pub proposals: u64,
+    /// Proposals whose noise block shared a forward with another lane.
+    pub shared_proposals: u64,
     /// Time in block decodes.
     pub propose_us: u64,
     /// Feature injections of decode rows, and the time they took.
@@ -585,83 +591,6 @@ impl DFlashDraft {
             let memory = (self.api.get_memory)(self.ctx);
             (self.api.memory_seq_rm)(memory, seq_id, -1, -1);
         }
-    }
-
-    /// Drafts up to `max_tokens` tokens that follow `anchor`, the token the
-    /// target will consume next at `anchor_position`.
-    pub(crate) fn propose(
-        &mut self,
-        seq_id: i32,
-        anchor_position: i32,
-        anchor: i32,
-        max_tokens: usize,
-    ) -> Result<Vec<i32>> {
-        let draft_tokens = max_tokens.min(self.info.max_draft_tokens);
-        if draft_tokens == 0 {
-            return Ok(Vec::new());
-        }
-        let dflash2 = self.info.variant == DFlashVariant::DFlash2;
-        // Rows a split final stage verified past the anchor are still cached.
-        self.truncate(seq_id, anchor_position);
-        // Every block row is an output, as upstream requests: marking only the
-        // mask rows returns logits shifted by one row. DFlash2 reads its
-        // lattice from the nextn output instead and needs no logits. A DSpark
-        // block is never longer than its trained block, past which the draft
-        // graph leaves out the Markov head.
-        self.batch.clear();
-        for index in 0..self.layout.block_tokens(draft_tokens) {
-            let token = if index == 0 { anchor } else { self.mask_token };
-            let position = anchor_position
-                .checked_add(i32::try_from(index).context("draft index exceeds i32")?)
-                .context("draft position overflow")?;
-            self.batch.push_token(token, position, seq_id, !dflash2);
-        }
-        let rc = unsafe { (self.api.decode)(self.ctx, self.batch.as_raw(self.mrope)) };
-        let tokens = if rc == 0 {
-            self.read_block(draft_tokens)
-        } else {
-            Err(anyhow!("draft block decode failed with status {rc}"))
-        };
-        // The noise block is scratch; only target features persist.
-        self.truncate(seq_id, anchor_position);
-        tokens
-    }
-
-    fn read_block(&self, draft_tokens: usize) -> Result<Vec<i32>> {
-        if self.info.variant == DFlashVariant::DFlash2 {
-            let lattice = unsafe { (self.api.get_embeddings_nextn)(self.ctx) };
-            if lattice.is_null() {
-                bail!("DFlash2 selector produced no lattice");
-            }
-            let rows = draft_tokens + 1;
-            let lattice = unsafe {
-                std::slice::from_raw_parts(lattice.cast_const(), rows * self.n_embd_draft)
-            };
-            let draft_rows = lattice.chunks_exact(self.n_embd_draft).skip(1);
-            return Ok(walk_dflash2_lattice(
-                draft_rows,
-                self.info.selector_top_k,
-                self.n_vocab,
-            ));
-        }
-        let mut tokens = Vec::with_capacity(draft_tokens);
-        let first = self.layout.first_draft_row();
-        for row in first..first + draft_tokens {
-            let row = i32::try_from(row).context("draft row exceeds i32")?;
-            if let Some(readout) = &self.backend_readout
-                && let Some(token) = readout.token(row, self.n_vocab)?
-            {
-                tokens.push(token);
-                continue;
-            }
-            let logits = unsafe { (self.api.get_logits_ith)(self.ctx, row) };
-            if logits.is_null() {
-                bail!("draft produced no logits for block row {row}");
-            }
-            let logits = unsafe { std::slice::from_raw_parts(logits.cast_const(), self.n_vocab) };
-            tokens.push(argmax_token(logits).context("draft logits row is empty")?);
-        }
-        Ok(tokens)
     }
 }
 

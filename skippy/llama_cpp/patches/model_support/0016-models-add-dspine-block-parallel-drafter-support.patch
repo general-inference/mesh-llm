@@ -1,7 +1,7 @@
-From a071d1256173acfeff6fcd4181f123a4af4f9ea7 Mon Sep 17 00:00:00 2001
+From cf33899a4dc90768cbff0d3df855354d6e98aea6 Mon Sep 17 00:00:00 2001
 From: AjHomelab <31621065+Ajay9o9@users.noreply.github.com>
 Date: Mon, 9 Nov 2026 07:03:22 +1100
-Subject: [PATCH] dflash : add DSpine draft model support
+Subject: [PATCH 16/16] dflash : add DSpine draft model support
 
 Imported from Ajay9o9/llama.cpp@dspine (d493f841b) into the mesh-llm patch
 queue, with a zero-lattice fallback for probe/chunked (non-block-shaped)
@@ -19,17 +19,6 @@ Review hardening on top of the import:
   LoRA, matching the adapter-inclusive logits the walker selects from;
 - the docs section records the local-download conversion flow and the
   --spec-draft-n-ubatch >= block size requirement.
----
- conversion/qwen.py             |  80 +++++++++++++
- docs/speculative.md            |  40 +++++++
- gguf-py/gguf/constants.py      |  18 +++
- gguf-py/gguf/tensor_mapping.py |  24 ++++
- src/llama-arch.cpp             |  12 ++
- src/llama-arch.h               |   6 +
- src/llama-model.h              |  10 ++
- src/llama-quant.cpp            |   5 +
- src/models/dflash.cpp          | 209 +++++++++++++++++++++++++++++++++
- 9 files changed, 404 insertions(+)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
 index e678bd042..6682de472 100644
@@ -188,7 +177,7 @@ index d8f3bcb39..28a03957d 100644
  
  An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
 diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-index b563b6236..8cb07fcaa 100644
+index f39c71e18..bb3d8b161 100644
 --- a/gguf-py/gguf/constants.py
 +++ b/gguf-py/gguf/constants.py
 @@ -1442,6 +1442,12 @@ class MODEL_TENSOR(IntEnum):
@@ -604,6 +593,3 @@ index 52d146ae5..0913a99c3 100644
      } else if (model.lilicorr_pass_hidden_proj && ubatch.embd_state && n_tokens == (int64_t) hparams.dflash_block_size * ubatch.n_seqs_unq) {
          build_lilicorr_scores(*this, model, tok_embd, inp_anchor);
      }
--- 
-2.56.0
-

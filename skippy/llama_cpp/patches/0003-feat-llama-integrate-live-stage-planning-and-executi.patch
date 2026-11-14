@@ -1,37 +1,9 @@
-From 0fa42cb683e2aa44d9748698a1c668d2263eff10 Mon Sep 17 00:00:00 2001
+From 1f42c119163156ff05fda641013958a0106b1c5f Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 03/16] feat(llama): integrate live stage planning and
+Subject: [PATCH 03/35] feat(llama): integrate live stage planning and
  execution
 
----
- include/llama.h                |    7 +
- src/llama-arch.cpp             |   22 +
- src/llama-arch.h               |    2 +
- src/llama-context.cpp          |  591 +++++++++--
- src/llama-context.h            |  102 +-
- src/llama-ext.h                |    6 +
- src/llama-graph.h              |    6 +
- src/llama-hparams.cpp          |   15 +
- src/llama-hparams.h            |   20 +-
- src/llama-kv-cache-dsv4.cpp    |    6 +-
- src/llama-kv-cache-msa.cpp     |    6 +-
- src/llama-kv-cache.cpp         | 1708 +++++++++++++++++++++++++++++---
- src/llama-kv-cache.h           |   80 +-
- src/llama-kv-cells.h           |   67 +-
- src/llama-memory-recurrent.cpp |   47 +-
- src/llama-memory-recurrent.h   |    9 +
- src/llama-mmap.cpp             |   46 +-
- src/llama-mmap.h               |   10 +
- src/llama-model-loader.cpp     |  270 ++++-
- src/llama-model-loader.h       |   55 +-
- src/llama-model.cpp            |  171 +++-
- src/llama-model.h              |   17 +-
- src/llama-quant.cpp            |   12 +-
- src/llama.cpp                  |   91 +-
- src/skippy-verify-checkpoint.h |   24 +
- 25 files changed, 3050 insertions(+), 340 deletions(-)
- create mode 100644 src/skippy-verify-checkpoint.h
 
 diff --git a/include/llama.h b/include/llama.h
 index 428f51f8d..8e39fdf48 100644
@@ -5328,6 +5300,3 @@ index 000000000..8793000c1
 +    checkpoints.erase(it);
 +    return true;
 +}
--- 
-2.54.0 (Apple Git-157)
-

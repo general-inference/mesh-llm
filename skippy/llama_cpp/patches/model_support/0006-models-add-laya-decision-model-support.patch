@@ -1,7 +1,7 @@
-From 4720e07dc8f478e9b08ddf0e60a748fd6b6282a5 Mon Sep 17 00:00:00 2001
+From 9ba4dff6522feb14419933e34660611b5c867877 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH 06/15] models: add Laya decision model support
+Subject: [PATCH 06/16] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -34,34 +34,12 @@ Changes from the upstream draft:
   top-2, and gave every question after the first another question's ranking.
 
 Co-authored-by: ZhangYu <zhangyub@uniontech.com>
----
- include/skippy.h          |    1 +
- include/skippy/common.h   |    4 +-
- include/skippy/laya.h     |  167 ++++++
- src/CMakeLists.txt        |    4 +-
- src/llama-arch.cpp        |   33 ++
- src/llama-arch.h          |   20 +
- src/llama-model.cpp       |    7 +
- src/skippy/abi.cpp        |    3 +-
- src/skippy/laya.cpp       |  372 ++++++++++++
- tools/CMakeLists.txt      |    1 +
- tools/laya/CMakeLists.txt |   23 +
- tools/laya/laya-cli.cpp   |  670 ++++++++++++++++++++++
- tools/laya/laya.cpp       | 1132 +++++++++++++++++++++++++++++++++++++
- tools/laya/laya.h         |  119 ++++
- 14 files changed, 2553 insertions(+), 3 deletions(-)
- create mode 100644 include/skippy/laya.h
- create mode 100644 src/skippy/laya.cpp
- create mode 100644 tools/laya/CMakeLists.txt
- create mode 100644 tools/laya/laya-cli.cpp
- create mode 100644 tools/laya/laya.cpp
- create mode 100644 tools/laya/laya.h
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 571841a60..ac091dd24 100644
+index cd65095a5..a1d73ac5a 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -26,5 +26,6 @@
+@@ -27,5 +27,6 @@
  #include "skippy/signals.h"
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
@@ -69,19 +47,19 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index d04825da4..54c87b6f2 100644
+index 108d50c48..2c9342d91 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 71
-+#define SKIPPY_ABI_VERSION_PATCH 73
+-#define SKIPPY_ABI_VERSION_PATCH 74
++#define SKIPPY_ABI_VERSION_PATCH 76
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -108,6 +108,8 @@ enum skippy_feature {
+@@ -110,6 +110,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_SYSTEM_ONE             ((uint64_t)1 << 38)
  
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
@@ -264,10 +242,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d3c86694f..db01bc2f5 100644
+index 34c14bb17..d30267846 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,8 @@ add_library(llama
+@@ -101,6 +101,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -276,7 +254,7 @@ index d3c86694f..db01bc2f5 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,7 +125,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -129,7 +131,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -403,10 +381,10 @@ index 89856dd5c..f35716bfe 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 2153d6cfe..c77de22ee 100644
+index 653055a54..dddce342b 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -389,6 +389,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -390,6 +390,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_kolibri1(params);
          case LLM_ARCH_INKLING:
              return new llama_model_inkling(params);
@@ -418,7 +396,7 @@ index 2153d6cfe..c77de22ee 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -3058,6 +3063,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -3061,6 +3066,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_EUROBERT:
          case LLM_ARCH_WAVTOKENIZER_DEC:
          case LLM_ARCH_MODERN_BERT:
@@ -426,7 +404,7 @@ index 2153d6cfe..c77de22ee 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_GEMMA_EMBEDDING2:
          case LLM_ARCH_DREAM:
-@@ -3897,6 +3903,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3900,6 +3906,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:
@@ -435,10 +413,10 @@ index 2153d6cfe..c77de22ee 100644
          case LLM_ARCH_NOMIC_BERT_MOE:
          case LLM_ARCH_EUROBERT:
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 1e1d2d7c8..f806cdbdc 100644
+index 95a845de0..bce625118 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
+@@ -48,7 +48,8 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_UNLOAD_EVENTS |
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
@@ -2806,6 +2784,3 @@ index 000000000..8a713d563
 +
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
--- 
-2.54.0 (Apple Git-157)
-

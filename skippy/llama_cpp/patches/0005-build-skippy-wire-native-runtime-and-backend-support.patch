@@ -1,44 +1,8 @@
-From ce6ec56ac8b9791f5fee939cb94ee64bc8a54dcb Mon Sep 17 00:00:00 2001
+From d2002bee13d8f283206927e1dcb7c2348241bfd3 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 05/16] build(skippy): wire native runtime and backend support
+Subject: [PATCH 05/35] build(skippy): wire native runtime and backend support
 
----
- CMakeLists.txt                             |  17 +
- common/CMakeLists.txt                      |  40 +-
- common/chat-auto-parser-generator.cpp      |  51 +-
- common/chat-diff-analyzer.cpp              |  10 +-
- common/chat-peg-parser.cpp                 |  15 +-
- common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            |  36 +-
- common/chat.h                              |   6 +-
- common/ngram-cache.cpp                     | 158 ++++-
- common/peg-parser.cpp                      | 337 ++++++++++
- common/peg-parser.h                        |   8 +
- common/reasoning-budget.cpp                | 138 +++--
- common/reasoning-budget.h                  |  16 +-
- common/stage-chat.cpp                      | 363 +++++++++++
- ggml/cmake/common.cmake                    |   9 +-
- ggml/include/ggml-backend.h                |  27 +
- ggml/src/ggml-backend.cpp                  |  25 +-
- ggml/src/ggml-cuda/cachegen.cu             | 223 +++++++
- ggml/src/ggml-cuda/cachegen.cuh            |  27 +
- ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
- ggml/src/ggml-cuda/vendors/hip.h           |   1 +
- ggml/src/ggml-metal/CMakeLists.txt         |   1 +
- ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
- ggml/src/ggml-metal/ggml-metal-device.m    | 482 ++++++++++++++-
- ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
- ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
- src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
- tools/mtmd/mtmd-audio.h                    |   1 +
- tools/mtmd/mtmd-helper.cpp                 |  47 +-
- tools/mtmd/mtmd-helper.h                   |  29 +
- 30 files changed, 3146 insertions(+), 152 deletions(-)
- create mode 100644 common/stage-chat.cpp
- create mode 100644 ggml/src/ggml-cuda/cachegen.cu
- create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
- create mode 100644 ggml/src/ggml-metal/kernels/cachegen.metal
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index b8b40e75f..f99407170 100644
@@ -2583,7 +2547,7 @@ index 5e6099ce1..8c21125d5 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -4259,9 +4223,10 @@ index 8a1d3aae1..80e8ac893 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+index 7f30d3949..54f6bad1f 100644
 --- a/tools/mtmd/mtmd-subcontext.cpp
 +++ b/tools/mtmd/mtmd-subcontext.cpp
-@@ -362,6 +362,10 @@
+@@ -362,6 +362,10 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
          cur = ggml_add(ctx0,
                  ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
                  ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
@@ -4272,7 +4237,3 @@ diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
          if (config.use_magnitude) {
              cur = ggml_sqrt(ctx0, cur);
          }
-
--- 
-2.54.0 (Apple Git-157)
-

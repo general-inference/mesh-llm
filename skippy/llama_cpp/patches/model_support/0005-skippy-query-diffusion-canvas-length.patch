@@ -1,17 +1,13 @@
-From 41dca18a629134bc0c57b14c7523144dde8b8e4d Mon Sep 17 00:00:00 2001
+From 09f4a456760ab4aebafbea1ea42d5079afe1fc71 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:38:59 +1000
-Subject: [PATCH 05/15] skippy: query diffusion canvas length
+Subject: [PATCH 05/16] skippy: query diffusion canvas length
 
 Expose the loaded GGUF canvas length so System One callers can size their fixed answer canvas without assuming the model was converted with OpenJEV vLLM defaults.
 
 Co-authored-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
 
 Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
----
- include/skippy/system_one.h | 11 +++++++++++
- src/skippy/system_one.cpp   | 21 +++++++++++++++++++++
- 2 files changed, 32 insertions(+)
 
 diff --git a/include/skippy/system_one.h b/include/skippy/system_one.h
 index 4faf057ba..6046c77ec 100644
@@ -67,6 +63,3 @@ index d0c51d87a..9cbe792ae 100644
  extern "C" enum skippy_status skippy_system_one_read(
          struct skippy_model * model,
          const llama_token * prompt_tokens,
--- 
-2.54.0 (Apple Git-157)
-

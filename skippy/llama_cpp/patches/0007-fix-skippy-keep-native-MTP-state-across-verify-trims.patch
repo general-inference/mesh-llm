@@ -1,7 +1,7 @@
-From 42e2234c2059141ca45450f71153eaadd10764b5 Mon Sep 17 00:00:00 2001
+From e92aed6d394e9d6de1264018a2c4b0384d3e0911 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
-Subject: [PATCH 07/16] fix(skippy): keep native MTP state across verify trims
+Subject: [PATCH 07/35] fix(skippy): keep native MTP state across verify trims
 
 A rejected verify window used to cost the MTP sidecar its whole prefix:
 trimming the session cleared the sidecar's cache and seed, so the next
@@ -19,14 +19,6 @@ instead of the last row, whose input was a rejected token. A caller that
 commits the accepted prefix plus the correction can use that draft
 directly, so a rejection no longer costs an extra decode before speculation
 resumes. Callers that discard drafts from rejected windows are unaffected.
----
- src/skippy/runtime_support.h        |   1 +
- src/skippy/runtime_types.h          |   5 ++
- src/skippy/speculative_decoding.cpp | 107 ++++++++++++++++++++++++++++
- src/skippy/speculative_internal.h   |  12 ++++
- src/skippy/state.cpp                |   2 +-
- src/skippy/verification.cpp         |  25 +++++--
- 6 files changed, 144 insertions(+), 8 deletions(-)
 
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 index d7e991307..8ba595623 100644
@@ -268,6 +260,3 @@ index 0812485d7..bb3c0e621 100644
              if (status != SKIPPY_STATUS_OK) {
                  return status;
              }
--- 
-2.54.0 (Apple Git-157)
-

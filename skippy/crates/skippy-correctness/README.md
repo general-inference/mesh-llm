@@ -30,6 +30,13 @@ against recompute.
 
 ## Commands
 
+`open-ai-cache-reuse` targets a fresh endpoint and verifies deterministic cold,
+repeat and growing-chat reuse. It requires an uncached nonempty seed, actual
+cache hits and byte-identical generated content on both repeats, using
+temperature 0 and seed 42. Its JSON retains generated content separately from
+the cache-token accounting. The manual four-model owner is documented in
+[KV validation](../../evals/kv-validation/README.md).
+
 ```bash
 skippy-correctness single-step \
   --model model.gguf \
@@ -93,11 +100,11 @@ skippy-correctness native-mtp-open-ai-ab \
   --report-out reports/native-mtp-openai-ab.json
 
 skippy-correctness native-mtp-open-ai-ab \
-  --model /Volumes/External/models/huggingface/.../model.gguf \
+  --model /path/to/model.gguf \
   --model-id org/repo:Q4_K_M \
-  --stage1-model /Volumes/models/huggingface/.../model.gguf \
-  --stage1-ssh-host micstudio \
-  --stage1-remote-workdir /Users/micn/src/mesh-llm-codex \
+  --stage1-model /path/to/stage1-model.gguf \
+  --stage1-ssh-host stage-runner \
+  --stage1-remote-workdir /path/to/mesh-llm \
   --stage1-remote-stage-server-bin target/debug/skippy \
   --bind-addr 192.168.0.5:19170 \
   --stage0-bind-addr 192.168.0.5:19171 \
@@ -108,8 +115,8 @@ skippy-correctness native-mtp-open-ai-ab \
   --split-layer 24
 
 skippy-correctness glm-dsa-stage0-trace \
-  --model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
-  --stage-model /Volumes/External/models/huggingface/.../GLM-5.2-Q2_K-MTP-Q8-layers/snapshots/main \
+  --model /path/to/GLM-5.2-Q2_K-MTP-Q8-layers \
+  --stage-model /path/to/GLM-5.2-Q2_K-MTP-Q8-layers \
   --model-id meshllm/GLM-5.2-Q2_K-MTP-Q8-layers \
   --stage-load-mode layer-package \
   --ctx-size 1024 \

@@ -1,5 +1,19 @@
 # MeshLLM CI inventory
 
+Manual KV validation lives in `automation kv-validation` and the thin
+`skippy-kv-*` Just recipes. It prepares one external native test harness against
+an exact packaged runtime, then reuses producer artifacts for the four pinned
+AgentX models. Its explicit Linux JY CPU/CUDA specs use the accepted lab/custom
+schema; Metal runs natively through the same local owner. This foundation is
+not selected by ordinary CI and does not qualify deferred long-c4/L3/performance
+checks. See `skippy/evals/kv-validation/README.md`.
+
+The optional AgentX comparison owner consumes the pinned external client and
+locked environment in `skippy/evals/agentx/`. The November 6 maintainer decision
+admits this bounded dependency through `ci/python-tooling-policy.json`.
+`agentx-setup` uses installed Python 3.12 without interpreter downloads;
+campaign workers use prepared inputs offline. This adds no required CI lane.
+
 Every workflow disables Rust debug information for the dev, test, release and
 bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
 Reusable workflows set their own environment, and the Linux test, client and
@@ -11,6 +25,7 @@ Local development defaults, complete package tests, assertions and overflow
 checks are preserved. Cache epoch `v5` invalidates the previous namespace.
 Batch jobs report filesystem space before each package and target/compiler-cache
 sizes after the test step, including failures.
+
 
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
@@ -140,15 +155,15 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
-| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
+| `agentic-replay-nightly.yml` (`Agentic Replay Nightly (persistent runner)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
 
 Agentic replay is manual-only while the full-session, long-context workload is
 qualified. Restore the former `14:23 UTC` schedule only after reviewed live
-calibration. It can queue while the llama canary occupies micstudio. Runner labels retain the
+calibration. It can queue while the llama canary occupies the persistent macOS runner. Runner labels retain the
 registered `X64` label, but a pre-checkout guard requires native arm64 execution
 and working Git/xcrun. The toolchain uses the canonical shared HF cache at
-`/Users/lab/models/huggingface`, checks that it is writable, and explicitly sets
+the managed shared Hugging Face cache root, checks that it is writable, and explicitly sets
 `HF_HUB_OFFLINE=0` so missing pinned models and trajectories can be downloaded.
 Pinned input verification uses the installed `hf download --format quiet` CLI
 for path-only stdout; it does not require Hugging Face in system Python.

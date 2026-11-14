@@ -1705,6 +1705,33 @@ retrieved with SHA-256 verification, including the archived response directory;
 the independent audit is under `m1-artifacts/`. Reverse-order confirmation is
 running separately and must be assessed before promoting a recipe.
 
+The first reverse attempt was cancelled when an unrelated GitHub Actions job
+appeared on the same host. Cancellation reached the process approximately
+50 seconds after the control-plane state changed; final log upload and the
+return to idle GPU memory verified cleanup. That CI job began at 22:10:27Z,
+after the original completed run ended at 22:08:03Z, so it does not overlap
+the first run above. No other participant's job was interrupted.
+
+A guarded BAAB repeat (`job_yd1aj0vfcphvv6m`, run
+`run_jj79pb3jk5q1x1g`) completed all requests but is invalid for pooled speed
+qualification. Its later parent process fell from 106.101 to 48.931 tok/s at
+one request. Time-aligned telemetry, using sample timestamps rather than
+observation timestamps, found heavy thermal pressure and explicit throttling
+during measured requests: three of six samples at parent concurrency one and
+both samples at concurrency two. The later candidate also had throttled
+samples. Its pooled +84.69% / +17.66% figures must not be claimed as causal
+gains. `pmset`'s lack of a recorded warning is insufficient to exclude this.
+
+The initial unthrottled candidate/control pair again measured approximately
+125 versus 106 tok/s at one request, with the same ordering advantage seen
+in the earlier run. That subset is diagnostic, not a replacement for the
+planned full comparison. The earlier +27.53% / +25.01% figures also remain
+provisional because of control drift and incomplete thermal coverage.
+Confirmation now requires cooling between fresh processes, no overlapping
+jobs, and rejection of any active-process thermal-throttling observation.
+The rejected repeat's raw artifacts and thermal invalidation metadata are
+retained under `m1-reverse-artifacts/`.
+
 ## Dense affine format screening on M4
 
 Jianyang job `job_nbtr6z2fftgpd91` succeeded on the Dan-lab M4 mini with

@@ -69,6 +69,9 @@ echo "target: $TARGET"
 
 model_fit() {
   printf '[defaults.model_fit]\ncache_type_k = "%s"\ncache_type_v = "%s"\n' "$CACHE" "$CACHE"
+  # BENCH_PROMPT_CACHE=false keeps finished prompts out of the host prompt cache.
+  [ -n "${BENCH_PROMPT_CACHE:-}" ] && printf 'prompt_cache = %s\n' "$BENCH_PROMPT_CACHE"
+  true
 }
 model_fit > "$ART/off.toml"
 { model_fit; printf '[defaults.speculative]\nstrategy = "dflash"\ndraft_model_path = "%s"\ndraft_max_tokens = %s\ndraft_cache_type_k = "%s"\ndraft_cache_type_v = "%s"\n' \

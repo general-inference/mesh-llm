@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--ctx", type=int)
     parser.add_argument("--cache")
     parser.add_argument("--yarn", help="YaRN factor; 0 serves the published GGUF")
+    parser.add_argument("--prompt-cache", choices=["true", "false"])
     parser.add_argument("--priority", type=int, default=20)
     parser.add_argument("--tag", default="")
     parser.add_argument("--dry-run", action="store_true")
@@ -72,6 +73,7 @@ def main():
             **({"BENCH_ARMS": args.arms} if args.arms else {}),
             **({"BENCH_CTX": str(args.ctx)} if args.ctx else {}),
             **({"BENCH_YARN_FACTOR": args.yarn} if args.yarn else {}),
+            **({"BENCH_PROMPT_CACHE": args.prompt_cache} if args.prompt_cache else {}),
         }
         spec = {"spec": {
             "name": f"Long context 1M{' ' + args.tag if args.tag else ''} · {name} · {args.node} @ {rev[:9]}",

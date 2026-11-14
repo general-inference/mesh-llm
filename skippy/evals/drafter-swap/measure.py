@@ -30,6 +30,9 @@ URL = f"http://127.0.0.1:{PORT}/v1/chat/completions"
 items = [json.loads(line) for line in open(os.environ["PROMPTS"]) if line.strip()]
 items = [item for item in items if SPLIT == "all" or item["split"] == SPLIT]
 items = [item for item in items if not DOMAINS or item.get("domain", item.get("category")) in DOMAINS]
+# FORMATS keeps only rows of these formats (html_v2), e.g. "react,edit".
+FORMATS = set(filter(None, os.environ.get("FORMATS", "").split(",")))
+items = [item for item in items if not FORMATS or item.get("format") in FORMATS]
 
 
 def group(item):

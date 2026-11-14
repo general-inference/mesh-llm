@@ -287,6 +287,55 @@ position audit, engine/header/model hashes, per-position scores and complete
 logs are retained under `target/basert-quality-evidence/`. This diagnostic
 makes no speed claim.
 
+## Output-head precision follow-up
+
+After the public-API quality comparison, a separate model diagnostic changes
+the output head from Q6_K to Q4_K in addition to the previous 250 dense-Q4
+projections. The native quantizer refuses routing-matrix quantization even
+when explicitly requested; the tensor audit caught this, and no router-Q8
+result is claimed. The actual artifact retains every routing matrix in F32.
+All 502 tensors outside the 251 planned changes are byte-identical to the
+original source. Experts, embeddings and the unused MTP sidecar remain
+unchanged. The new file is 21,829,728,544 bytes, with SHA256
+`f3563b1a68af6efab240ce31d3cc213d80f5ea8dd596cf8d06862853ab72fab1`.
+The original model files are unchanged.
+
+On the same 32,640 WikiText-2 predictions, the new artifact has perplexity
+6.732749, versus 6.698454 for dense-Q4 alone and 6.6468 for the original direct
+evaluation. Against the compressed original reference, its perplexity ratio
+is 1.013233 ± 0.001954, mean KL is 0.044716 ± 0.000581, and top-token
+agreement is 90.098 ± 0.165%. It remains below the BaseRT artifact's 6.916309
+perplexity on this corpus, while worsening quality relative to the original
+Skippy weights. This is an optional format experiment, not a default change.
+
+A fresh plain-decode ABBA comparison uses the same final CLI and frozen
+ABI 0.1.85 native bundle for both arms. Control is dense-Q4 alone; candidate
+adds the Q4 output head. The pinned PP512/TG256 benchmark uses two warmups,
+three measured batches per concurrency per process, greedy sampling, f16 KV,
+and disabled prefix/disk caches. Across six measured single-request batches
+per arm, medians are 133.518 versus 136.780 tok/s (+2.44%); all six candidate
+values exceed all six controls. The two-request medians are 170.126 versus
+180.398 aggregate tok/s, but control process rates differ substantially
+(183–186 versus 154–157 tok/s), so their pooled +6.04% is not a qualified
+two-request gain. All 36 measured requests succeed; two candidate requests
+stop at 212 and 253 tokens and the rest reach 256. Output text differs across
+weight formats, as expected from the quality measurements.
+
+A separate fixed two-prompt ABBA comparison removes the early-EOS and varying
+text confounders. Each process warms one batch and measures three, with 128
+tokens per request. All 32 requests reach 128 tokens, and each arm reproduces
+its own output text exactly across measured repeats. The text differs between
+weight formats. Median end-to-end aggregate throughput, including prefill
+and HTTP overhead, is 191.781 versus 195.596 tok/s (+1.99%); all six candidate
+batch rates exceed all six controls. This qualifies a small gain on these
+fixed prompts, rather than the pooled long benchmark's apparent 6% gain.
+
+Recipes, the rejected routing request, actual tensor audit, model hash,
+quality evaluation, raw requests and benchmark audit are retained under
+`target/head-router-precision-evidence/`. Reducing output precision supplies
+only a small additional single-request gain and does not close the BaseRT
+speed gap. Further work must measure execution cost as well as stored bytes.
+
 ## Gated activations
 
 Core patch `0020-metal-fuse-contiguous-float32-gated-activations.patch` adds

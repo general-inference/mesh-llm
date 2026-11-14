@@ -1615,7 +1615,7 @@ capture closes the BaseRT speculative gap. Device features remain opt-in;
 this study does not change the default. Commands, primitive offload counters,
 responses, timings and audit are in `target/dflash-device-feature-evidence/`.
 
-## Experimental code-preserving affine expert layout
+## Opt-in code-preserving affine expert layout
 
 Core patch 0044 adds a separate quantizer capability: Q4_K to Q4_1 conversion
 that preserves each 32-value group's integer codes and rounds its decoded
@@ -1665,9 +1665,9 @@ This is a correctness check, not a performance result; its budget was $0.
 The full Skippy and Mesh release build (`just with-lld just release-build`)
 also passes with this converter and the packaged Metal runtime. This does not
 resolve the inherited native gate's missing ASR/diffusion targets or substitute
-for a whole-workspace test run. The converter remains experimental pending
-confirmation of isolated serving gains. No affine serving recipe or default is
-promoted. Evidence is in `target/affine-code-layout-evidence/`.
+for a whole-workspace test run. The cooled confirmation below qualifies an
+opt-in affine recipe for the tested workload; it does not change the default.
+Evidence is in `target/affine-code-layout-evidence/`.
 
 An isolated M1 Ultra ABBA run subsequently succeeded through Jianyang
 (`job_np7hvq415syy8sv`, run `run_psk6a3jnyt46smn`). It resumed the exact
@@ -1702,8 +1702,8 @@ window counts as the first control, with lower measured verification time
 (736/739 versus 905 ms per request; the later control was 1,070 ms).
 These host telemetry intervals are not additive GPU time. Raw artifacts were
 retrieved with SHA-256 verification, including the archived response directory;
-the independent audit is under `m1-artifacts/`. Reverse-order confirmation is
-running separately and must be assessed before promoting a recipe.
+the independent audit is under `m1-artifacts/`. The cooled reverse-order
+confirmation below supersedes these provisional percentages.
 
 The first reverse attempt was cancelled when an unrelated GitHub Actions job
 appeared on the same host. Cancellation reached the process approximately
@@ -1727,10 +1727,42 @@ The initial unthrottled candidate/control pair again measured approximately
 in the earlier run. That subset is diagnostic, not a replacement for the
 planned full comparison. The earlier +27.53% / +25.01% figures also remain
 provisional because of control drift and incomplete thermal coverage.
-Confirmation now requires cooling between fresh processes, no overlapping
+Confirmation required cooling between fresh processes, no overlapping
 jobs, and rejection of any active-process thermal-throttling observation.
 The rejected repeat's raw artifacts and thermal invalidation metadata are
 retained under `m1-reverse-artifacts/`.
+
+A fresh cooled BAAB comparison (`job_s68vr3cqryksg8k`, run
+`run_hfr9ag2mkka1apz`) passed on the M1 Ultra. Each fresh process was preceded
+by 180 seconds idle and ran three eight-prompt warmup cycles followed by three
+measured cycles at each concurrency. Both arms used the same CLI, native
+`748825b4eab791f3dc768608f37c9ffee96d02d8`, DFlash 2 cap7, f16 KV,
+8192-token context, two lanes and disabled caches. This native version includes
+the converter but neither experimental routed NR8 nor routed GLU fusion.
+
+| Concurrency | Parent HTTP tok/s | Affine HTTP tok/s | Pooled change |
+| --- | --- | --- | --- |
+| 1 | 106.229 | 125.198 | +17.86% |
+| 2 aggregate | 120.383 | 146.719 | +21.88% |
+
+Every candidate process beat both controls; process spreads were below 0.22%.
+All sampled Jianyang thermal states were nominal, with no throttling or
+overlapping jobs. Independent raw-response auditing checked all 384 requests,
+including 192 measured requests: matching input token counts, 128 output
+tokens, zero cache hits, and stable per-prompt text within each format across
+processes and concurrency levels. Text differs across formats. Source and
+regenerated model checksums match the pins above. Checksummed artifacts and
+the independent audit are retained under `m1-cooled-artifacts/`; the separate
+watcher's telemetry uses sample timestamps to establish measured-window
+coverage.
+
+The explicit 753-tensor recipe is
+`skippy/scripts/recipes/quantization/qwen3.6-35b-a3b-ud-q4-k-m-affine-experts.tensor-types.txt`.
+Its README specifies the required expert-down parent, converter and output
+pins. These are additional target-format gains over our existing improved
+baseline, including PR #33; they are not an engine-only comparison against
+PR #33, a general quality guarantee, an M5 serving qualification, or evidence
+of BaseRT parity. Component percentages must not be added or multiplied.
 
 ## Dense affine format screening on M4
 
@@ -1761,10 +1793,22 @@ speculative verification widths. Q4_1 is a more promising eight-row candidate
 for the larger projections; sixteen-row gains are small or absent. A next
 experimental plan targets only 110 main-decoder Q8 large dense tensors and
 preserves 643 tensors, including smaller shared-expert matrices, routers, MTP
-and the output head. This plan has no model quality or serving qualification
-yet and is not promoted to a product recipe. Raw correctness/performance
+and the output head. This plan is not promoted to a product recipe. Raw correctness/performance
 logs, the exact cases and source pins, checksummed artifacts, and analysis
 are in `target/dense-affine-format-evidence/`.
+
+The follow-up M1 Ultra quality job `job_pt9s6jz177e53r5` (run
+`run_6f4y4z247xpem9n`) succeeded at $0. A full payload audit verified exactly
+110 changed tensors and 643 byte-identical preserved tensors. The candidate
+is 22,834,305,312 bytes versus the affine parent's 23,384,807,712. On the
+same SHA-pinned WikiText corpus and 128 chunks, the quantized-logit comparison
+reported PPL 6.781923 versus reference-logit PPL 6.652538, ratio 1.019449
+plus/minus 0.001739, mean KL 0.035864 plus/minus 0.000502 and top-token
+agreement 92.053%. The parent's direct PPL run was 6.6546; its packed reference
+logits introduce a small separate measurement difference. This is a measurable
+quality tradeoff, not an equivalent-weight improvement. No serving throughput
+qualification has been run. Raw checksummed logs and payload audit are in
+`target/dense-affine-format-evidence/m1-quality-artifacts/`.
 
 ## DFlash 2 selector precision diagnostic
 

@@ -1424,3 +1424,106 @@ timings, public metrics, and audit are retained in
 `basert-draft*` files. The next performance investigation must target the
 cost of speculative verification rather than claim closure from a plain
 BaseRT baseline.
+
+## Warmed DFlash 2 GPU attribution
+
+A new Instruments launch profiles the expert-down Q4 target with DFlash 2
+cap7, the retained B600 native bundle, two lanes, and the same eight raw
+prompts at concurrency one. Two complete warmup cycles precede one measured
+profile cycle. All 24 requests complete 128 tokens. The 5.450454-second
+steady interval begins after the last recorded Skippy shader compilation
+(20.803932 seconds versus scope start 23.578249 seconds).
+
+Submission ownership maps 24,942 submissions with zero PID collisions;
+23,456 belong to Skippy. Within the steady scope, 339,780 shader intervals
+are attributed to Skippy kernels and 1,303 Skippy intervals remain unmapped.
+The attribution uses the latest preceding compiled PC range for that PID,
+which remains a code-lifetime heuristic. Per-kernel interval unions overlap
+and are not additive wall-time fractions or exclusive GPU durations.
+
+| Shader category | Union active ms within profile scope |
+| --- | --- |
+| Routed Q4_K vector, four output rows | 1,588.552 |
+| Dense Q8_0 few-row MMA, nt4 | 593.185 |
+| Q6_K few-row MMA, nt4 | 380.395 |
+| Dense Q8_0 few-row MMA, nt2 | 375.672 |
+| Gated delta net | 308.990 |
+| Dense Q8_0 few-row MMA, nt1 | 236.353 |
+| RMS norm/multiply | 88.713 |
+| State/data copy F32 | 45.631 |
+| Batched convolution | 46.310 |
+
+This changes the next investigation from the earlier plain-decode ranking:
+short-batch routed expert work is now the largest individual category. The
+existing grouped expert matrix path starts at 32 token rows; the profiled
+verification windows are generally shorter. A short-batch crossover probe
+can test existing kernel reuse before introducing a new routed kernel.
+These invasive profiling timings do not establish a throughput gain.
+Trace, scope timestamps, submission ownership, exports, and attribution are
+retained in `target/speculative-gpu-evidence/`.
+
+### Rejected blanket short-batch matrix crossover
+
+Lowering the existing grouped Q4_K expert-matrix crossover from 32 to eight
+rows (inner/output at least 512) passed 72 CPU-reference Metal cases, covering
+Q4/Q5/Q6/Q8, broadcast/per-expert activations, rows 1/7/8/9/16/31/32,
+expert-down geometry, and dimension boundaries. A fresh-process ABBA serving
+test used the expert-down target, DFlash 2 cap7, eight prompts, one warmup
+cycle and three measured cycles/process. All 128 requests completed 128
+tokens. Aggregate measured throughput fell from 197.192 to 188.276 tok/s
+(-4.52%). Seven of eight prompt medians regressed. The candidate also showed
+two measured text variants on three prompts, whereas each control prompt
+had one. The blanket crossover is rejected; its patch and runtime are
+archived in `target/routed-short-matrix-evidence/`.
+
+A separate repeated-weight ABBA microbenchmark explains why a blanket
+crossover is unsuitable: at eight rows, K2048/M512 grouped matrix latency
+increased by 19–23%, whereas K512/M2048 fell about 60%. At sixteen rows,
+latencies fell by 32–35% and about 78%, respectively. Broadcast and per-expert
+activation cases agree in direction. These synthetic repeated-weight numbers
+are not DRAM bandwidth or end-to-end speedup claims. They motivate a narrower
+geometry-sensitive probe that preserves the tall-projection vector path
+below sixteen rows and admits the short/wide projection from eight.
+
+### Rejected geometry-sensitive matrix crossover
+
+A follow-up admits Q4_K grouped matrix execution from eight rows for short,
+wide weights (inner 512–1024, output at least1024), and from sixteen rows
+for the other tested projection regime (inner/output at least 512). The
+candidate passed 48 CPU-reference Metal cases at rows 7/8/15/16, with
+broadcast/per-expert inputs, both actual expert geometries, and boundaries
+around inner 512 and output 1024.
+
+The serving comparison used fresh-process ABBA, the same expert-down target
+and DFlash 2 cap7 in both arms, all eight raw prompts at concurrency one,
+then paired prompts at concurrency two. Each process ran one full warmup
+cycle and three measured cycles per concurrency. All 256 requests completed
+128 tokens without cache hits; 192 were measured.
+
+| Concurrency | Retained tok/s | Probe tok/s | Pooled change |
+| --- | --- | --- | --- |
+| 1 | 193.499 | 198.194 | +2.43% |
+| 2 aggregate | 226.304 | 223.197 | -1.37% |
+
+The single-request control processes differ materially (199.694 versus
+187.677 tok/s), while candidates are 199.368 and 197.034. Thus the pooled
+single-request increase is not an established causal gain. Two-request
+controls are 232.186 and 220.713, versus candidates 219.793 and 226.709.
+Each single-request prompt has stable text within an arm, but text differs
+between arms. The two-request candidate has multiple measured output
+variants on four prompts, versus one variant per control prompt.
+
+This probe is also rejected. The original owning 0042 patch is restored;
+neither rejected crossover changes the retained policy. Patch, candidate
+runtime, numerical cases, logs, raw responses and audit are archived under
+`target/routed-geometry-matrix-evidence/`. The existing grouped matrix path's
+mapping, tile padding and numerical behavior need a more specialized
+short-batch solution; the repeated-weight microbenchmark gains alone do not
+justify a crossover change.
+
+After both crossover probes, native B600 was rebuilt through Just. The
+restored `libllama.dylib` and `libggml-metal.dylib` SHA-256 digests match the
+frozen control byte-for-byte, and the rebuilt backend-test executable is also
+byte-identical to its pre-probe control. Restoration audit and build logs are
+under `target/routed-geometry-matrix-evidence/`. No rejected dispatch change
+remains in the native patch queue.

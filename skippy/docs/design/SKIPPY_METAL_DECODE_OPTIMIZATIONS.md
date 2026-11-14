@@ -235,6 +235,58 @@ reducing dense precision alone does not reach the prior BaseRT rates. Raw
 recipes, commands, source/candidate tensor audits, hashes, logits, quality
 reports and both ABBA comparisons are in `target/mixed-precision-evidence/`.
 
+## Public-API quality comparison with BaseRT
+
+A subsequent diagnostic scores the installed BaseRT 0.5.0 engine through its
+published C API against the same WikiText-2 inputs as the precision study.
+It loads the existing `basecompute/Qwen3.6-35B-A3B` default-Q4 artifact, SHA256
+`7171b37ffccdf16dfd920f55be766e6faffa31f64e04ca9cd0064943bf72881b`.
+The engine reports ABI 1, host-logit and sequence capabilities, and effective
+f16 KV. Its tokenizer matches all 65,536 input token IDs in the existing
+reference file exactly, and its add-BOS policy is false.
+
+Each of 128 fresh sequences prefills the first 256 tokens of a 512-token
+context. Serial teacher forcing then feeds positions 256 through 510 and
+scores the supplied next tokens at positions 257 through 511: 255 predictions
+per context, 32,640 total. Logit readback uses the engine-reported row stride;
+the public selected-token log-probability helper supplies the score. No engine
+implementation or private weight format is examined. BaseRT's default
+acceleration policy is retained, including its reported Neural Engine prefill.
+
+| Artifact and execution | Perplexity, lower is better |
+| --- | ---: |
+| Skippy original mixed GGUF, direct native evaluation | 6.6468 |
+| Skippy dense-Q4 diagnostic, direct native evaluation | 6.698454 |
+| BaseRT default Q4, serial teacher forcing | 6.916309 |
+
+The paired comparison against the compressed original reference gives mean
+NLL difference 0.0400453, or a 1.040858 perplexity ratio for BaseRT/original.
+The standard error across 128 context means is 0.003081 NLL; this treats
+contexts as independent, which is not guaranteed for adjacent corpus text.
+The compressed reference has perplexity 6.644816 rather than the direct
+6.6468 because its uint16 affine encoding clips low tails; eight selected
+tokens hit its minimum quantized value. Both numbers are retained so the
+compression effect is visible.
+
+On the first context, repeating serial scoring produces exactly the same
+selected-token log probabilities. A separate 31-row public-API submission,
+with the documented plain-step commits between feeds, differs from serial
+by up to 0.46579 in selected-token log probability and changes two of 255
+top predictions. Consequently the table uses serial scoring throughout.
+It does not silently substitute multi-row verification math for decode.
+
+This result supports investigating lower-traffic Skippy formats: the existing
+dense-Q4 diagnostic still has lower perplexity than this BaseRT artifact on
+this corpus. It does not establish general quality equivalence, identify the
+cause of the difference, or establish performance parity. The original
+precision-loss measurements remain valid relative to Skippy's original
+weights. No format is selected as the default by this experiment.
+
+The standalone C++ public-API client, its Just build recipe, exact token and
+position audit, engine/header/model hashes, per-position scores and complete
+logs are retained under `target/basert-quality-evidence/`. This diagnostic
+makes no speed claim.
+
 ## Gated activations
 
 Core patch `0020-metal-fuse-contiguous-float32-gated-activations.patch` adds

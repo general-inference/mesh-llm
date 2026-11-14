@@ -101,3 +101,129 @@ The small gain despite confirmed fusion means removing these dispatches alone
 does not explain the gap. The next investigation is routed-expert matrix/vector
 execution and its memory throughput, using attributable kernel measurements.
 No proprietary engine implementation was inspected or copied for this change.
+
+## Active weight traffic audit
+
+The total file-size difference understates the quantization difference in the
+comparison. A tensor inventory of both artifacts gives the following storage
+estimate for one target token, using 40 layers, eight of 256 experts, and one
+output-head application. Values are decimal GB.
+
+| Weight category | Current GGUF | BaseRT Q4 artifact |
+| --- | ---: | ---: |
+| Dense weights and output head | 2.015 | 1.098 |
+| Active expert weights, estimated as total expert bytes × 8/256 | 0.612 | 0.566 |
+| Sum | 2.626 | 1.665 |
+
+The GGUF has approximately **58% more active stored weight bytes per token**,
+despite being only about 10% larger overall. Its dense projections include
+Q8_0 matrices, its routing gates include f32 matrices, and its output head is
+Q6_K. The BaseRT artifact uses its canonical Q4 representation for many of
+these weights. Large inactive expert stacks dominate total file size and hide
+the relative dense-weight difference.
+
+This is an inventory calculation, not a measurement of DRAM traffic. It omits
+embedding-row reads, KV/state traffic, padding, cache reuse, and implementation
+details. It neither establishes matched accuracy nor attributes all of the
+observed throughput gap to quantization. MTP layers are excluded. The GGUF
+inventory comes from the existing `skippy-package-builder inspect` command;
+the BaseRT inventory comes from its public SDK inspection surface.
+
+Artifacts and calculation assumptions are retained locally in
+`target/moe-kernel-evidence/weight-traffic.json` and the adjacent inventories.
+An equal-quantization comparison is needed before treating the practical
+same-model-family result as a kernel-efficiency ratio.
+
+## Follow-up probes
+
+The following local experiments were not retained as production changes:
+
+- Forcing the existing few-row matrix kernel for one-row Q8_0 input slowed a
+  4096×14336 projection from about 86 to 116 microseconds. The default threshold
+  was restored.
+- Changing routed Q4_K/Q6_K workgroups from two to four SIMD groups gave small,
+  mixed changes at existing MoE benchmark shapes.
+- One-SIMD-group Q8_0 variants, including a wider block mapping, helped some
+  projection shapes and hurt others. They did not justify a general dispatch
+  change. The short microbenchmarks also reuse weights more than a complete
+  model forward, so their timings are not end-to-end speedup estimates.
+- Making all GPU buffers private with `mmap=false` measured 56.7 tok/s for one
+  request, below the roughly 61.7 tok/s shared-buffer control.
+- A temporary backend preference for private **weights only**, leaving graph
+  buffers shared, measured 63.4 tok/s in one process. This small improvement is
+  unqualified; the two-request run also included a 118-token early EOS and
+  cannot be compared directly with all-256-token runs. The preference was
+  removed rather than changing defaults without stronger evidence.
+
+Launching Skippy under Instruments with the **Metal GPU Counters** instrument
+enabled shader-profiler data that was absent from the earlier attached trace.
+A warmup-forward PC-range attribution suggests Q8_0 dense kernels are a larger
+target than the routed expert kernels. Program-counter ranges can overlap or
+be reused, and concurrent shader intervals are not additive wall time; this
+ranking needs a carefully scoped steady-decode analysis before it supports
+an optimization claim. Only Skippy was launched for profiling, with a minimal
+environment; the proprietary engine was not profiled.
+
+## Host greedy placement on M5 Max
+
+Core patch `0021-metal-prefer-host-greedy-sampling-on-qualified-share.patch`
+prefers the existing host greedy sampler on M5 Max when graph buffers are
+shared with the host. A private GGML backend preference communicates that
+choice to Skippy's sampler attachment code. Other devices and private-buffer
+configurations retain their previous behavior. Explicit draft GPU readout uses
+a separate path and is unchanged. No public Skippy API or ABI changed.
+
+Earlier fixed-length requests disabled backend greedy sampling, while
+ordinary-EOS requests enabled it. A temperature-one/top-k-one probe, which
+still forces an argmax, suggested that placement caused part of the difference.
+The retained change was then tested with the **original temperature-zero
+requests**, unchanged weights and sampler settings.
+
+Baseline is `4f787f529`; candidate adds patch 0021. The same CLI explicitly
+selected the saved baseline and candidate native bundles. The workload and
+ABBA fresh-process method are the same as the plain comparison above: 512-token
+prompts, up to 256 generated tokens, two warmups and three measured batches per
+concurrency per process, ordinary EOS, greedy sampling, thinking disabled, and
+f16 KV. Medians below cover six measured batches per concurrency.
+
+| Greedy decode workload | Baseline tok/s | Candidate tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 61.524 | 66.512 | +8.11% |
+| Two requests, aggregate | 95.770 | 103.136 | +7.69% |
+| Eight requests, aggregate | 160.051 | 213.713 | +33.53% |
+
+The eight-request probe used 32,768 total context slots, one warmup and two
+measured batches per process, again in ABBA order. Its medians cover four
+batches per arm. Both arms used the same rebuilt CLI; its hash is recorded
+separately from the earlier one/two-request comparison. All 64 measured
+requests succeeded. Three baseline requests stopped at 255, 221, and 135
+tokens; the remaining baseline requests and all candidate requests produced
+256 tokens. Actual token counts determine throughput. The sole entirely
+full-length baseline batch measured 161.035 tok/s, which also shows a large
+improvement against the candidate median, but is only one batch.
+
+All 36 measured requests succeeded. Thirty-five produced 256 tokens; one
+candidate request in a two-request batch stopped at 193 tokens. The benchmark
+uses actual token counts. The five full-length candidate two-request batches
+have median throughput 103.263 tok/s, so the early EOS does not create the
+reported improvement.
+
+All eight fixed 64-token plain outputs matched. All twelve fixed 128-token
+speculative outputs also matched across three fresh processes per arm. The
+eight-request configuration additionally produced sixteen fixed 64-token
+outputs in eight baseline/candidate comparisons; every pair matched exactly.
+Across these checks, all 36 generated outputs matched their counterparts. The
+short speculative measurements remain noisy; this patch's speedup claim is
+for plain greedy decode. A separate graph log recorded 7,490 Metal node lines
+and zero `temp_max_idx`, `greedy_argmax`, or `greedy_sampled_token` node lines,
+confirming that an actual temperature-zero completion used the host path.
+
+Validation includes the complete native patch replay and runtime package
+build, eight device/storage preference checks in `test-metal-graph-optimize`,
+the retained gated-activation checks, and 15 native sampling/history/suppression
+tests. The composed Skippy and Mesh release build also passed.
+
+Commands, raw responses, timings, request audits, native manifests, graph logs,
+and validation output are retained under `target/host-greedy-evidence/`.
+These measurements qualify the tested M5 Max workloads; they do not establish
+BaseRT parity or performance on other hardware.

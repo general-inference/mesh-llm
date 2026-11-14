@@ -19,7 +19,12 @@ pub(super) struct VerificationOperation {
 }
 
 pub(crate) fn enabled() -> bool {
-    env::var("SKIPPY_SHARED_VERIFY").as_deref() == Ok("1")
+    enabled_by(env::var("SKIPPY_SHARED_VERIFY").ok().as_deref())
+}
+
+/// Complete causal targets share compatible windows unless explicitly disabled.
+fn enabled_by(setting: Option<&str>) -> bool {
+    setting != Some("0")
 }
 
 impl IterationScheduler {

@@ -33,7 +33,12 @@ impl DraftOperation {
 }
 
 pub(crate) fn enabled() -> bool {
-    env::var("SKIPPY_SHARED_DRAFT").as_deref() == Ok("1")
+    enabled_by(env::var("SKIPPY_SHARED_DRAFT").ok().as_deref())
+}
+
+/// Sharing is capability checked at submission; zero retains independent work.
+fn enabled_by(setting: Option<&str>) -> bool {
+    setting != Some("0")
 }
 
 impl IterationScheduler {

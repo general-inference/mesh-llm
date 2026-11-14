@@ -34,8 +34,9 @@ remain opt-in pending repeatable end-to-end gains.
 equal-length speculative windows. Each lane retains its own sampling history,
 checkpoint and rejection boundary. Callers must resolve every window through
 trim or retirement. This API is initially exercised by the concurrent DFlash
-diagnostic. Serving can opt into scheduler coalescing with
-`SKIPPY_SHARED_VERIFY=1`; see the serving crate's README.
+diagnostic. Serving coalesces compatible windows by default;
+`SKIPPY_SHARED_VERIFY=0` retains independent submissions for diagnostics.
+See the serving crate's README.
 
 `StageSession::dflash_propose_batch` accepts
 `dflash::proposal_batch::DFlashBatchRequest` values. Compatible lanes share

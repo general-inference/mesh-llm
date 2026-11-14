@@ -153,6 +153,126 @@ qualify batching this particular draft; replacing DFlash1 with DFlash2 alone
 was slower in the initial diagnostic. They do not establish BaseRT parity or
 justify choosing DFlash2 for every workload.
 
+## Compatible speculative sharing by default
+
+Serving coalesces compatible drafts and verification windows by default.
+No model weights, sampling parameters,
+native ABI or graph admission rules change. Complete causal targets, distinct
+sessions, equal verification widths and actual native capacity are still
+required; unsupported target layouts retain independent verification. Draft
+head contracts continue to decide which noise blocks may share. Single-lane
+waves do not wait to collect peers. Explicit `SKIPPY_SHARED_DRAFT=0` and
+`SKIPPY_SHARED_VERIFY=0` retain the independent paths for diagnostics.
+
+The control is the saved release CLI at `5770b20c8`; candidate changes only
+the sharing defaults and their tests/documentation. Both select the same
+frozen ABI 0.1.85 native bundle, original target weights, original DFlash1
+draft, six maximum draft tokens, f16 KV, and disabled prefix/disk caches.
+The sharing, adaptive, GPU-readout and device-feature environment variables
+are explicitly removed in both arms. Thus this comparison measures ordinary
+sharing defaults rather than an explicitly enabled benchmark configuration.
+
+The pinned PP512/TG256 benchmark uses four fresh processes in ABBA order,
+two warmup batches and three measured batches per concurrency per process.
+Medians cover six measured batches per arm.
+
+| Workload | Previous defaults tok/s | New defaults tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 132.169 | 138.602 | +4.87% |
+| Two requests, aggregate | 107.839 | 175.682 | +62.91% |
+
+Single-request values overlap substantially, so their median is not an
+established speedup. All six two-request candidate batches exceed all six
+controls. All 36 measured requests succeed; one control request stops at 222
+tokens and one candidate at 190, with the other 34 reaching 256. Excluding
+those batches leaves five full-length batches per arm, with medians 106.662
+and 176.805 aggregate tok/s, so early EOS does not create the gain. All eight
+separate fixed 64-token outputs match exactly across arms.
+
+A separate fixed coding comparison at eight requests uses one warmup and
+three measured batches per fresh process, 128 completion tokens per request,
+and 32,768 context slots. End-to-end aggregate throughput (total completion
+tokens divided by the slowest HTTP request's elapsed time, including prefill)
+improves from 222.803 to 261.038 tok/s (+17.16%). Control batches vary widely
+(145–241 tok/s), but every candidate batch (245–265 tok/s) exceeds every
+control. All 128 completions reach 128 tokens. Seven prompts match exactly
+throughout; one prompt exhibits the target numerical variation below.
+
+The subsequent eight-request check exposes a target numerical difference on
+one of eight prompts, including variation within a candidate process. The
+same difference reproduces at prediction 74 in teacher-forced target
+verification without draft proposals or rollback. Serial evaluation and
+independent seven-row windows agree through all 128 predictions on every
+prompt. Shared batches of 16 and 24 packed rows agree through 80 predictions
+per lane; 32 and 56 packed rows flip the same top token. At 32 rows the Metal
+routed-expert operation switches from matrix/vector to matrix/matrix dispatch.
+
+A rejected dispatch experiment requires eight expected rows per expert
+before choosing routed matrix tiles. That restores all 1,024 teacher-forced
+predictions at 56 packed rows, but slows a fresh eight-request ABBA comparison
+from 266.878 to 208.829 end-to-end aggregate tok/s (-21.75%). Both arms use
+the same candidate CLI with default sharing and unchanged original weights;
+only the native dispatch differs. All 128 completions reach 128 tokens.
+The dispatch experiment is removed from the active queue. Its patch, native
+bundle, commands and raw results remain under `target/routed-density-evidence/`.
+A second experiment retains float operands in Q4_K/Q5_K routed matrix tiles.
+It still flips the same prediction with both the tensor and SIMD paths, and
+is also removed from the active queue. Its patch, bundle and reports remain
+under `target/routed-matrix-precision-evidence/`. No speed claim is made for
+that experiment. The restored original kernels pass 24 targeted CPU-reference
+checks across Q4_K, Q5_K and Q8_0, broadcast and per-expert inputs, and 32–256
+rows. Eight existing sparse-routing cases with 512/1,024 experts also pass.
+
+The retained configuration uses the original native kernels. A separate
+public-API quality diagnostic teacher-forces the same 32,640 corpus targets
+in four execution shapes. All modes use the same eight sequence slots,
+identical independent 256-token prefills, 128 reset contexts, unchanged
+original weights and f16 KV. It reads raw causal logits without draft capture,
+proposals, rollback or sampling RNG; it measures target arithmetic rather
+than complete speculative serving.
+
+| Execution shape | Perplexity | Top-token agreement with serial |
+| --- | ---: | ---: |
+| Independent one-row steps | 6.651468 | 100% |
+| Eight lanes, one row each | 6.651067 | 99.942% |
+| Eight lanes, four rows each | 6.648762 | 98.447% |
+| Eight lanes, seven rows each | 6.649120 | 98.456% |
+
+Mean NLL differences versus serial are -0.000407 and -0.000353 for the two
+large shapes, with standard errors across context means of 0.000390 and
+0.000397. There is no measurable perplexity loss on this corpus, and no
+established improvement either. Contexts are not guaranteed statistically
+independent. This supports retaining normal native batching, while explicitly
+not promising identical greedy text across batch geometries or general task
+quality equivalence. The standalone scorer, exact position/token audit and
+per-position scores are retained with the default-sharing evidence.
+
+Real HTTP cancellation checks close four streams after first content for
+each of DFlash1 and DFlash2. In every round the peer completes unchanged and
+both reused lanes match their pre-cancellation outputs. Explicit zero switches
+produce no shared forwards and reproduce all eight previous-default outputs.
+A valid 16-row microbatch test with eight lanes completes all 16 control and
+candidate requests at 128 tokens, with exact paired outputs; native capacity
+limits its shared verification waves to two lanes in this workload.
+
+Probes with one- and two-row microbatches expose an inherited recurrent-tail
+assertion during control startup, before either shared path runs. Those failed
+logs are preserved separately; this change does not repair tiny-microbatch
+startup validation.
+
+The full Skippy/Mesh release build passes, as do all 1,354 serving library
+tests (including the complete crate/doc-test command), Cargo checks and warning-denying all-target Clippy for serving and
+Mesh, formatting and the console-output contract. The two new policy tests
+exercise unset/empty/enabled values and explicit zero without mutating the
+process environment. Historical sections above describe the opt-in policy
+at the time of those measurements. The inherited native test-target gate
+failure remains separately recorded; this change does not repair that gate.
+
+Commands, saved CLI hashes, raw responses, throughput audits and validation
+logs remain under `target/default-batching-evidence/`. These numbers qualify
+the tested original-weight workload, not parity with BaseRT or a universal
+speedup for every model and backend.
+
 ## Post-PR #33 dense-weight precision diagnostic
 
 This is a model-format experiment, not an equivalent-output engine change.

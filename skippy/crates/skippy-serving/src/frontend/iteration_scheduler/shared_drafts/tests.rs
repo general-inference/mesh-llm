@@ -1,6 +1,14 @@
 use super::super::shared_verification::tests::worker;
 use super::*;
 
+#[test]
+fn sharing_is_default_and_explicit_zero_retains_independent_drafts() {
+    for setting in [None, Some(""), Some("1")] {
+        assert!(enabled_by(setting));
+    }
+    assert!(!enabled_by(Some("0")));
+}
+
 fn operation(id: &str, width: usize) -> (DraftOperation, std_mpsc::Receiver<DraftResult>) {
     let (reply, result) = std_mpsc::sync_channel(1);
     (

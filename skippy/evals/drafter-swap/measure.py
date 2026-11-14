@@ -100,6 +100,10 @@ if int(os.environ.get("LIMIT") or 0):
     by_group = {}
     for item in items:
         by_group.setdefault(group(item), []).append(item)
+    # A fixed shuffle, so a capped group spreads over its formats instead of taking the first rows.
+    import random
+    for rows in by_group.values():
+        random.Random(0).shuffle(rows)
     picked = []
     while len(picked) < int(os.environ["LIMIT"]) and any(by_group.values()):
         for rows in by_group.values():

@@ -1,0 +1,84 @@
+## job_1dj2g779mkt00bz
+off                T=0.0 eval   prose n= 20 decode   63.3 tok/s  accept 0.00
+off                T=0.0 eval   html  n= 20 decode   63.0 tok/s  accept 0.00
+off                T=0.0 eval   code_review n= 20 decode   62.6 tok/s  accept 0.00
+off                T=0.0 eval   html_v2 n= 20 decode   62.7 tok/s  accept 0.00
+off                T=0.0 eval   html_ood n= 20 decode   59.4 tok/s  accept 0.00
+off                T=0.0 eval   all   n=100 decode   62.5 tok/s  accept 0.00
+dflash             T=0.0 eval   prose n= 20 decode   77.4 tok/s  accept 0.40
+dflash             T=0.0 eval   html  n= 20 decode   90.2 tok/s  accept 0.45
+dflash             T=0.0 eval   code_review n= 20 decode   78.1 tok/s  accept 0.40
+dflash             T=0.0 eval   html_v2 n= 20 decode  105.6 tok/s  accept 0.56
+dflash             T=0.0 eval   html_ood n= 20 decode  124.6 tok/s  accept 0.87
+dflash             T=0.0 eval   all   n=100 decode   89.8 tok/s  accept 0.48
+spec_h1            T=0.0 eval   prose n= 20 decode   81.8 tok/s  accept 0.42
+spec_h1            T=0.0 eval   html  n= 20 decode  124.8 tok/s  accept 0.64
+spec_h1            T=0.0 eval   code_review n= 20 decode   80.2 tok/s  accept 0.37
+spec_h1            T=0.0 eval   html_v2 n= 20 decode  129.9 tok/s  accept 0.69
+spec_h1            T=0.0 eval   html_ood n= 20 decode  134.2 tok/s  accept 0.86
+spec_h1            T=0.0 eval   all   n=100 decode  103.9 tok/s  accept 0.54
+spec_v1            T=0.0 eval   prose n= 20 decode   80.6 tok/s  accept 0.42
+spec_v1            T=0.0 eval   html  n= 20 decode  144.0 tok/s  accept 0.78
+spec_v1            T=0.0 eval   code_review n= 20 decode   78.4 tok/s  accept 0.35
+spec_v1            T=0.0 eval   html_v2 n= 20 decode  135.0 tok/s  accept 0.73
+spec_v1            T=0.0 eval   html_ood n= 20 decode  138.2 tok/s  accept 0.85
+spec_v1            T=0.0 eval   all   n=100 decode  106.9 tok/s  accept 0.56
+## job_rnd5heaqatvve0r
+off                T=0.0 eval   prose n= 20 decode   64.4 tok/s  accept 0.00
+off                T=0.0 eval   html  n= 20 decode   64.2 tok/s  accept 0.00
+off                T=0.0 eval   code_review n= 20 decode   63.9 tok/s  accept 0.00
+off                T=0.0 eval   html_v2 n= 20 decode   64.0 tok/s  accept 0.00
+off                T=0.0 eval   html_ood n= 20 decode   60.0 tok/s  accept 0.00
+off                T=0.0 eval   all   n=100 decode   63.8 tok/s  accept 0.00
+dflash             T=0.0 eval   prose n= 20 decode   78.5 tok/s  accept 0.42
+dflash             T=0.0 eval   html  n= 20 decode   92.0 tok/s  accept 0.45
+dflash             T=0.0 eval   code_review n= 20 decode   77.9 tok/s  accept 0.37
+dflash             T=0.0 eval   html_v2 n= 20 decode  104.8 tok/s  accept 0.56
+dflash             T=0.0 eval   html_ood n= 20 decode  123.9 tok/s  accept 0.87
+dflash             T=0.0 eval   all   n=100 decode   90.2 tok/s  accept 0.47
+spec_h2            T=0.0 eval   prose n= 20 decode   80.9 tok/s  accept 0.41
+spec_h2            T=0.0 eval   html  n= 20 decode  132.6 tok/s  accept 0.69
+spec_h2            T=0.0 eval   code_review n= 20 decode   80.8 tok/s  accept 0.36
+spec_h2            T=0.0 eval   html_v2 n= 20 decode  136.3 tok/s  accept 0.73
+spec_h2            T=0.0 eval   html_ood n= 20 decode  130.8 tok/s  accept 0.85
+spec_h2            T=0.0 eval   all   n=100 decode  106.2 tok/s  accept 0.55
+## job_qvdtsvzyebpt54p
+off                T=0.0 eval   prose n= 20 decode   64.2 tok/s  accept 0.00
+off                T=0.0 eval   html  n= 20 decode   63.7 tok/s  accept 0.00
+off                T=0.0 eval   code_review n= 20 decode   63.2 tok/s  accept 0.00
+off                T=0.0 eval   html_v2 n= 20 decode   63.6 tok/s  accept 0.00
+off                T=0.0 eval   html_ood n= 20 decode   59.6 tok/s  accept 0.00
+off                T=0.0 eval   all   n=100 decode   63.3 tok/s  accept 0.00
+dflash             T=0.0 eval   prose n= 20 decode   80.2 tok/s  accept 0.45
+dflash             T=0.0 eval   html  n= 20 decode   93.0 tok/s  accept 0.45
+dflash             T=0.0 eval   code_review n= 20 decode   79.9 tok/s  accept 0.39
+dflash             T=0.0 eval   html_v2 n= 20 decode  106.2 tok/s  accept 0.56
+dflash             T=0.0 eval   html_ood n= 20 decode  131.7 tok/s  accept 0.87
+dflash             T=0.0 eval   all   n=100 decode   92.0 tok/s  accept 0.48
+spec_hq            T=0.0 eval   prose n= 20 decode   79.8 tok/s  accept 0.41
+spec_hq            T=0.0 eval   html  n= 20 decode  131.5 tok/s  accept 0.70
+spec_hq            T=0.0 eval   code_review n= 20 decode   79.4 tok/s  accept 0.36
+spec_hq            T=0.0 eval   html_v2 n= 20 decode  134.7 tok/s  accept 0.73
+spec_hq            T=0.0 eval   html_ood n= 20 decode  132.5 tok/s  accept 0.85
+spec_hq            T=0.0 eval   all   n=100 decode  105.0 tok/s  accept 0.55
+## job_w8fpa6n1b3erha6
+off                T=0.0 eval   prose n= 20 decode   63.9 tok/s  accept 0.00
+off                T=0.0 eval   code_review n= 20 decode   63.3 tok/s  accept 0.00
+off                T=0.0 eval   html_v2 n= 20 decode   63.8 tok/s  accept 0.00
+off                T=0.0 eval   all   n= 60 decode   63.6 tok/s  accept 0.00
+dflash             T=0.0 eval   prose n= 20 decode   80.6 tok/s  accept 0.44
+dflash             T=0.0 eval   code_review n= 20 decode   79.4 tok/s  accept 0.41
+dflash             T=0.0 eval   html_v2 n= 20 decode  108.0 tok/s  accept 0.57
+dflash             T=0.0 eval   all   n= 60 decode   89.1 tok/s  accept 0.48
+spec_r1            T=0.0 eval   prose n= 20 decode   82.4 tok/s  accept 0.44
+spec_r1            T=0.0 eval   code_review n= 20 decode   83.5 tok/s  accept 0.39
+spec_r1            T=0.0 eval   html_v2 n= 20 decode  109.1 tok/s  accept 0.56
+spec_r1            T=0.0 eval   all   n= 60 decode   91.9 tok/s  accept 0.46
+spec_r2            T=0.0 eval   prose n= 20 decode   75.2 tok/s  accept 0.43
+spec_r2            T=0.0 eval   code_review n= 20 decode   79.8 tok/s  accept 0.40
+spec_r2            T=0.0 eval   html_v2 n= 20 decode   98.1 tok/s  accept 0.58
+spec_r2            T=0.0 eval   all   n= 60 decode   85.1 tok/s  accept 0.47
+spec_r3            T=0.0 eval   prose n= 20 decode   75.8 tok/s  accept 0.39
+spec_r3            T=0.0 eval   code_review n= 20 decode   81.1 tok/s  accept 0.39
+spec_r3            T=0.0 eval   html_v2 n= 20 decode  101.4 tok/s  accept 0.55
+spec_r3            T=0.0 eval   all   n= 60 decode   86.7 tok/s  accept 0.45

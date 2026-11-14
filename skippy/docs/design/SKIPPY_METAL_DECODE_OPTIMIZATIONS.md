@@ -1666,8 +1666,44 @@ The full Skippy and Mesh release build (`just with-lld just release-build`)
 also passes with this converter and the packaged Metal runtime. This does not
 resolve the inherited native gate's missing ASR/diffusion targets or substitute
 for a whole-workspace test run. The converter remains experimental pending
-isolated serving qualification. No affine serving recipe or default is
+confirmation of isolated serving gains. No affine serving recipe or default is
 promoted. Evidence is in `target/affine-code-layout-evidence/`.
+
+An isolated M1 Ultra ABBA run subsequently succeeded through Jianyang
+(`job_np7hvq415syy8sv`, run `run_psk6a3jnyt46smn`). It resumed the exact
+verified source snapshot after an initial job stopped on an incorrect Just
+recipe name, before any conversion or timing. The release build and corrected
+`just skippy-quantize-build` both passed. Host-native regeneration reproduced
+the parent and affine GGUF SHA-256 pins above exactly.
+
+Each fresh process ran three warmup and three measured cycles per concurrency,
+using the same eight coding prompts, DFlash 2 cap7, f16 KV and disabled caches.
+Independent auditing of all 384 raw responses verified 128-token length
+completions, no cache hits, matching input token counts, and 192 measured
+requests. All four power snapshots report AC power; `pmset` reported no
+thermal/performance warning. Late Jianyang telemetry reported moderate
+thermal status, so temperature-independent performance is not established.
+
+| Concurrency | Parent HTTP tok/s | Affine HTTP tok/s | Pooled change |
+| --- | --- | --- | --- |
+| 1 | 98.172 | 125.204 | +27.53% |
+| 2 aggregate | 117.515 | 146.901 | +25.01% |
+
+Candidate processes were consistent (125.459/124.950 at one request and
+146.566/147.238 at two), and each beat both corresponding controls.
+Controls drifted: 106.230/91.251 and 121.564/113.728 respectively. The
+single-request spread is 16.42%, so the pooled percentages require a reversed
+order confirmation. Each prompt was stable within each process except one
+two-request candidate prompt with two variants. Text differs between formats;
+this is not an identical-weight speedup or a BaseRT comparison.
+
+Single-request candidate telemetry had approximately the same acceptance and
+window counts as the first control, with lower measured verification time
+(736/739 versus 905 ms per request; the later control was 1,070 ms).
+These host telemetry intervals are not additive GPU time. Raw artifacts were
+retrieved with SHA-256 verification, including the archived response directory;
+the independent audit is under `m1-artifacts/`. Reverse-order confirmation is
+running separately and must be assessed before promoting a recipe.
 
 ## Dense affine format screening on M4
 

@@ -1,7 +1,7 @@
-From 0263ab968fc5703cbadc79f48c411f073bd50893 Mon Sep 17 00:00:00 2001
+From 99e26678e2c7ee65e608454f60d7073c6f13da1f Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
-Subject: [PATCH 10/15] skippy: record per-token logprobs while sampling
+Subject: [PATCH 10/16] skippy: record per-token logprobs while sampling
 
 A sampling config with SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every
 token skippy_sample_token_ith samples, the token's log-probability under the
@@ -13,28 +13,12 @@ sampling, which skips copying the raw logits row; a token drawn while the
 lane still carried a backend sampler from an earlier request is recorded
 as unreadable instead of being read from a stale row. As the last patch
 to touch common.h it carries the queue's ABI version, 0.1.77.
----
- include/skippy.h               |  1 +
- include/skippy/common.h        |  2 +-
- include/skippy/logprobs.h      | 60 ++++++++++++++++++++++
- include/skippy/sampling.h      |  4 ++
- src/CMakeLists.txt             |  1 +
- src/skippy/logprobs.cpp        | 94 ++++++++++++++++++++++++++++++++++
- src/skippy/runtime_types.h     |  2 +
- src/skippy/sampling.cpp        | 21 +++++++-
- src/skippy/sampling_internal.h |  7 +++
- src/skippy/session.cpp         |  1 +
- src/skippy/state.cpp           |  1 +
- src/skippy/workloads.cpp       |  1 +
- 12 files changed, 193 insertions(+), 2 deletions(-)
- create mode 100644 include/skippy/logprobs.h
- create mode 100644 src/skippy/logprobs.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 4e33847d9..9497734b7 100644
+index fb2e80806..37a15eea3 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -24,6 +24,7 @@
+@@ -25,6 +25,7 @@
  #include "skippy/tokenization.h"
  #include "skippy/model_package.h"
  #include "skippy/signals.h"
@@ -43,15 +27,15 @@ index 4e33847d9..9497734b7 100644
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 80710eb3b..93232a2b8 100644
+index cc08d3899..d014c10da 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 75
-+#define SKIPPY_ABI_VERSION_PATCH 78
+-#define SKIPPY_ABI_VERSION_PATCH 78
++#define SKIPPY_ABI_VERSION_PATCH 81
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -144,10 +128,10 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index ea0cdd178..beded64e4 100644
+index 7c4f5b81f..2e1ee1468 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -84,6 +84,7 @@ add_library(llama
+@@ -89,6 +89,7 @@ add_library(llama
              skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
@@ -255,12 +239,24 @@ index 000000000..43260dfc2
 +    *out_count = taken;
 +    return skippy_success(out_error);
 +}
+diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
+index 317c96b46..bbd592fe8 100644
+--- a/src/skippy/resident_prefix.cpp
++++ b/src/skippy/resident_prefix.cpp
+@@ -168,6 +168,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
+     session->n_past = static_cast<int32_t>(count);
+     session->token_history = std::move(history);
+     session->signal_history.clear();
++    session->token_logprobs.clear();
+     skippy_mtp_clear_session_state(session);
+     skippy_clear_verify_windows(session);
+     return skippy_success(error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index ec9fb94b1..cd8a82f7a 100644
+index 3a2e3147e..e610e8205 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -146,6 +146,8 @@ struct skippy_session {
-     int32_t preserve_prefix_tokens = 0;
+@@ -153,6 +153,8 @@ struct skippy_session {
+     int32_t borrowed_prefix_tokens = 0;
      std::vector<llama_token> token_history;
      std::vector<skippy_token_signal> signal_history;
 +    // Recorded by sampling with SKIPPY_SAMPLING_FLAG_LOGPROBS until the caller takes them.
@@ -269,10 +265,10 @@ index ec9fb94b1..cd8a82f7a 100644
      std::vector<int32_t> prefill_n_seq_ids;
      std::vector<llama_seq_id> prefill_seq_ids;
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index b688fce73..f26e2194f 100644
+index d9f980c39..256eb2182 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -429,6 +429,9 @@ static bool skippy_sampling_chain_is_reusable_for(
+@@ -430,6 +430,9 @@ static bool skippy_sampling_chain_is_reusable_for(
              session->sampling_backend_retired) {
          return false;
      }
@@ -282,7 +278,7 @@ index b688fce73..f26e2194f 100644
      if (sampling != nullptr &&
              skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
          return true;
-@@ -565,13 +568,14 @@ void skippy_refresh_backend_sampling(
+@@ -600,13 +603,14 @@ void skippy_refresh_backend_sampling(
              session->sampling_chain != nullptr &&
              !session->sampling_has_grammar &&
              !session->sampling_has_reasoning_budget &&
@@ -298,7 +294,7 @@ index b688fce73..f26e2194f 100644
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
-@@ -601,6 +605,21 @@ llama_token skippy_sample_token_ith(
+@@ -633,6 +637,21 @@ llama_token skippy_sample_token_ith(
      return LLAMA_TOKEN_NULL;
  }
  
@@ -321,7 +317,7 @@ index b688fce73..f26e2194f 100644
          skippy_session * session,
          const skippy_sampling_config * sampling) {
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
-index 7bbf16016..81bc26ff5 100644
+index 38621b6e9..9847f95f0 100644
 --- a/src/skippy/sampling_internal.h
 +++ b/src/skippy/sampling_internal.h
 @@ -18,6 +18,13 @@ struct skippy_session;
@@ -339,10 +335,10 @@ index 7bbf16016..81bc26ff5 100644
          skippy_session * session,
          const llama_token * token_ids,
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 9d0ba6ee5..ce5a349e7 100644
+index d5ac795e9..a08cd599f 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -384,6 +384,7 @@ enum skippy_status skippy_session_reset(
+@@ -381,6 +381,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();
@@ -350,18 +346,6 @@ index 9d0ba6ee5..ce5a349e7 100644
      // Keep a reusable backend sampler attached across reset. Detaching it
      // makes the next sampled decode reattach the chain and mark the scheduler
      // for reserve, which rebuilds compute buffers at every request boundary.
-diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 44b924b0b..b5a8ad002 100644
---- a/src/skippy/state.cpp
-+++ b/src/skippy/state.cpp
-@@ -1042,6 +1042,7 @@ enum skippy_status skippy_session_restore_prefix(
-         session->token_history.assign(token_ids, token_ids + token_count);
-     }
-     session->signal_history.clear();
-+    session->token_logprobs.clear();
-     skippy_mtp_clear_session_state(session);
-     skippy_clear_verify_windows(session);
-     return skippy_success(out_error);
 diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
 index d3de66cbe..3ca967bf3 100644
 --- a/src/skippy/workloads.cpp
@@ -374,6 +358,3 @@ index d3de66cbe..3ca967bf3 100644
  }
  
  namespace {
--- 
-2.54.0 (Apple Git-157)
-

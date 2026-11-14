@@ -1,5 +1,85 @@
 # Metal decode optimization evidence
 
+The measurements below were collected on the branch based at `c8bdb738f`,
+before general-inference/mesh-llm PR #33. They remain historical measurements,
+not performance claims for the combined implementation. Integration with
+merged commit `74c7d5bd2` is in progress; the fresh comparison below qualifies
+only its stated workloads. In the
+combined queue, the original core patches 0017–0022 are numbered 0036–0041,
+following PR #33's core patches; the combined native ABI is 0.1.85.
+
+## Combined implementation against PR #33
+
+The control is the clean merged PR #33 commit `74c7d5bd2`, built in a
+separate worktree with its own ABI 0.1.84 native runtime. The candidate is
+`perf/skippy-decode-pr33` with the combined ABI 0.1.85 runtime. Both are full
+release product builds. The packaged candidate native source is
+`c568f66885340c801cb5ae14989aaff42d8a2c2b`; subsequent queue repairs change
+only tests, with no differences in production `src`, `ggml`, or headers.
+
+Both arms use the same target/draft revisions listed below, DFlash with a
+maximum of six draft tokens, adaptive sizing, host draft readout, f16 KV,
+8192 context cells, batch 2048, microbatch 512, two generation lanes, and no
+prefix or disk cache. Shared draft and shared verification are explicitly
+enabled on the candidate; the control does not implement those switches.
+These remain opt-in capabilities, so the results do not describe every
+unconfigured installation.
+
+On the same M5 Max, the pinned llama-benchy revision listed below ran PP512 /
+TG256 at concurrency one and two. Each fresh process warmed two batches and
+measured three per concurrency, in control/candidate/candidate/control order.
+The table gives medians of six measured batches per arm.
+
+| Decode workload | PR #33 tok/s | Combined tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 124.762 | 135.368 | +8.50% |
+| Two requests, aggregate | 124.453 | 180.830 | +45.30% |
+
+All 36 measured requests completed without reported errors. Ordinary EOS was
+enabled: one control request ended at 159 tokens; the other 35 produced 256.
+Prompt strings differ between benchmark batches. The single-request candidate
+rates range from 121.4 to 165.8 tok/s, so its median is not a stable prediction
+for arbitrary text. Eight separate fixed-prompt outputs (two prompts in each
+process) all produced 64 tokens and matched byte for byte across both arms.
+This establishes a gain for the tested workload, not parity with BaseRT.
+
+An additional candidate-only eight-lane check used 32768 context cells and
+fixed 128-token prompts: one warmup batch plus three measured batches. All
+32 requests reached the length limit without errors. The three measured
+batch rates were 270.36, 268.90, and 266.13 aggregate tok/s, calculated as
+1024 completion tokens divided by the slowest request's HTTP elapsed time.
+There is no fresh eight-lane PR #33 control in this check; it is a correctness
+smoke and cannot establish an eight-lane speedup or exact output parity.
+
+A separate instrumented run on the combined implementation captured normal
+Metal command timings for two single requests. GPU execution occupied
+1365.65 of 1584.00 ms for the 256-token prompt and 280.47 of 314.19 ms for
+the 64-token prompt (unions of GPU execution intervals inside each decode
+span). CPU Metal encoding occupied 104.52 and 17.37 ms respectively; these
+intervals overlap GPU work. This small sample points toward GPU work as the
+larger remaining cost; removing all encoding cannot recover the whole gap.
+A further class-split diagnostic identified matrix multiplication as the
+largest GPU class, but splitting produced hundreds of command buffers per
+forward and slowed execution. Its timings are invasive diagnostics, not
+production fractions or an additional speedup claim. Both profiles and the
+interval audit are retained beside the benchmark evidence.
+
+Validation of the combined implementation includes the full Skippy and Mesh
+release product build, 517 runtime lib tests, 1352 serving lib tests, 12 FFI
+tests, and all-target Clippy with warnings denied. The native roster selected
+336 cases: the initial run had three failures and one explicit real-model
+skip. The three failures subsequently passed focused reruns after building
+the missing activation-validation binary and repairing outdated capability
+and empty-command timing assertions. The standard native full-replay command
+still stops on inherited references to two nonexistent targets; that command
+is not a passing gate. No push or PR was made.
+
+Raw ABBA commands, CLI hashes, runtime manifests, request outputs, per-request
+progress, and the audit are retained locally in
+`target/pr33-performance-evidence/`. Integration build and test logs are under
+`target/pr33-integration-evidence/`. The following sections retain their
+original pre-PR #33 measurements and patch numbers for provenance.
+
 ## Gated activations
 
 Core patch `0020-metal-fuse-contiguous-float32-gated-activations.patch` adds

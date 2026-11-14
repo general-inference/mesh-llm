@@ -1,7 +1,7 @@
-From 859965bdf316eb22c3ffd8ab4362947c85e05b0f Mon Sep 17 00:00:00 2001
+From 64f40e9768270045b0e5aec3512875bdfe59a701 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
-Subject: [PATCH 14/16] skippy: size recurrent rollback for speculative verify
+Subject: [PATCH 14/35] skippy: size recurrent rollback for speculative verify
 
 Recurrent and hybrid targets verify a speculative window in place only when
 the context keeps a rollback snapshot per window token (n_rs_seq); otherwise
@@ -14,13 +14,6 @@ and SKIPPY_RS_SEQ still overrides it.
 Sampled verify also gets cheaper: a sampling chain retired by sampled verify
 stays retired until the session resets, and upstream's per-sequence
 backend-sampling output limit is restored.
----
- include/skippy/runtime.h     | 4 ++++
- src/llama-context.cpp        | 7 ++++---
- src/skippy/model_loading.cpp | 8 +++++++-
- src/skippy/sampling.cpp      | 4 +++-
- src/skippy/session.cpp       | 1 +
- 5 files changed, 19 insertions(+), 5 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index bc4da9a07..b570682ef 100644
@@ -101,6 +94,3 @@ index 36c972d92..4741f55cb 100644
      }
      skippy_mtp_clear_session_state(session);
      session->sampling_backend_verifying = false;
--- 
-2.54.0 (Apple Git-157)
-

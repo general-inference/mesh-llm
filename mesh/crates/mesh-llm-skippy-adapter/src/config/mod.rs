@@ -30,6 +30,9 @@ mod dflash_tests;
 mod dflash_drafts_tests;
 
 #[cfg(test)]
+mod recurrent_rollback_tests;
+
+#[cfg(test)]
 mod exact_head_tests;
 
 #[cfg(test)]
@@ -41,9 +44,10 @@ mod hardware_translation_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub use dflash::with_default_dflash_drafts;
 pub use dflash_catalog::{
-    DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex, DFlashPairingSource,
-    DFlashTarget, DefaultDFlash, check_split_dflash_draft, dflash_draft_cache_path,
-    dflash_pairing_index_installed, install_dflash_pairing_index,
+    DFLASH_PAIRING_INDEX_FILE, DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex,
+    DFlashPairingSource, DFlashTarget, DefaultDFlash, check_split_dflash_draft,
+    dflash_draft_cache_path, dflash_pairing_index_installed, install_dflash_pairing_index,
+    load_dflash_pairing_index,
 };
 pub use dflash_index::{
     DFLASH_PAIRING_INDEX_REPO, DFLASH_PAIRING_INDEX_SHA256, DFlashPairingIndexPin,

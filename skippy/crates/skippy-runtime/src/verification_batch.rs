@@ -4,6 +4,7 @@ use std::ptr;
 use anyhow::{Context, Result, ensure};
 use skippy_ffi::bindings::skippy::skippy_verify_request;
 
+use crate::native_timing::native_call;
 use crate::{SamplingConfig, StageSession, dflash::DecodedRows, error::ensure_ok};
 
 /// One equal-length window on a distinct session of a complete terminal model.
@@ -81,8 +82,13 @@ impl StageSession {
             )
             .collect();
         let mut error = ptr::null_mut();
-        let status =
-            unsafe { skippy_ffi::skippy_verify_batch_sampled(raw.as_ptr(), raw.len(), &mut error) };
+        let status = unsafe {
+            native_call!(skippy_verify_batch_sampled(
+                raw.as_ptr(),
+                raw.len(),
+                &mut error
+            ))
+        };
         ensure_ok(status, error)?;
         for (index, request) in requests.iter_mut().enumerate() {
             ensure!(

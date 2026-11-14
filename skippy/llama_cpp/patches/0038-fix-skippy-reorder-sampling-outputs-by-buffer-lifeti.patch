@@ -1,4 +1,4 @@
-From d855172f5c8f7009edd0cc1e37f3b49fa8be14b4 Mon Sep 17 00:00:00 2001
+From e7f586227fdec5679376cbc2db01da78b472547c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 14 Nov 2026 16:40:17 +1100
 Subject: [PATCH] fix(skippy): reorder sampling outputs by buffer lifetime
@@ -13,23 +13,23 @@ Subject: [PATCH] fix(skippy): reorder sampling outputs by buffer lifetime
  create mode 100644 src/skippy/tests/output_reorder_fixture.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d8e31aa55..1538fb8b4 100644
+index 3aa224023..752ef6cbf 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -522,6 +522,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
-     target_include_directories(skippy-sampling-history PRIVATE .)
-     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+@@ -475,6 +475,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
      target_link_libraries(skippy-sampling-history PRIVATE llama)
+     add_test(NAME skippy_resident_checkpoint_gpu_long COMMAND skippy-sampling-history resident-gpu-long)
+     set_tests_properties(skippy_resident_checkpoint_gpu_long PROPERTIES SKIP_RETURN_CODE 77)
 +    target_compile_definitions(skippy-sampling-history PRIVATE LLAMA_STAGE_BUILD_TESTS)
 +    target_sources(llama PRIVATE skippy/tests/output_reorder_fixture.cpp)
      function(add_skippy_sampling_history_tests family fixture state)
-         foreach(mode grammar penalty argmax)
+         foreach(mode grammar penalty resident argmax)
              add_test(NAME skippy_sampling_history_${family}_${mode}
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index ba345d3d2..721379da6 100644
+index c3d7949d4..e691f9b4a 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1072,6 +1072,8 @@ void llama_context::set_fused_gdn_for_test(bool fused_ar, bool fused_chunk) {
+@@ -1096,6 +1096,8 @@ void llama_context::set_fused_gdn_for_test(bool fused_ar, bool fused_chunk) {
      ++computation_generation;
      sched_need_reserve = true;
  }
@@ -38,7 +38,7 @@ index ba345d3d2..721379da6 100644
  #endif
  
  
-@@ -3028,7 +3030,9 @@ void llama_context::output_reorder() {
+@@ -3089,7 +3091,9 @@ void llama_context::output_reorder() {
              }
          }
  
@@ -50,10 +50,10 @@ index ba345d3d2..721379da6 100644
              assert(sampling.probs.size > 0);
              assert(sampling.candidates.size > 0);
 diff --git a/src/llama-context.h b/src/llama-context.h
-index 50e39c829..ebd4609a8 100644
+index d22719599..ef278dee7 100644
 --- a/src/llama-context.h
 +++ b/src/llama-context.h
-@@ -92,6 +92,7 @@ struct llama_context {
+@@ -125,6 +125,7 @@ struct llama_context {
      uint64_t get_sched_reserve_count() const;
  #ifdef LLAMA_STAGE_BUILD_TESTS
      void set_fused_gdn_for_test(bool fused_ar, bool fused_chunk);
@@ -130,17 +130,17 @@ index 000000000..4dd53a83d
 +}
 \ No newline at end of file
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index 5dbc73ce9..d13ba8be3 100644
+index 8ce722206..99f3ad3e2 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -685,6 +685,7 @@ int main(int argc, char ** argv) {
+@@ -962,6 +962,7 @@ int main(int argc, char ** argv) {
      skippy_error * error = nullptr;
      const auto status = skippy_model_open(argv[1], &config, &model, &error);
      ok(status, error);
 +    CHECK(model->ctx->output_reorder_sampler_lifecycle_for_test());
-     if (state) {
-         // A dense stage's page already carries its whole checkpoint, so the
-         // partial side payload is intentionally empty there.
+     if (automatic) {
+         const auto capabilities = skippy_model_memory_cache_capabilities(model);
+         CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
 -- 
 2.54.0 (Apple Git-157)
 

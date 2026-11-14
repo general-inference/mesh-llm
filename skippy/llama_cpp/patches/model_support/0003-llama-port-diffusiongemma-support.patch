@@ -1,42 +1,8 @@
-From ca1285f2942d792a909733ca31cf3718a39f35e5 Mon Sep 17 00:00:00 2001
+From fb8f5a8d9d750d108e487152c0c9bde0263fe405 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Fri, 6 Nov 2026 10:33:32 -0800
-Subject: [PATCH 03/15] llama: port DiffusionGemma support
+Subject: [PATCH 03/16] llama: port DiffusionGemma support
 
----
- common/arg.cpp                                |  90 +-
- common/common.h                               |  15 +
- examples/CMakeLists.txt                       |   2 +
- examples/diffusion-gemma-eval/CMakeLists.txt  |   5 +
- .../diffusion-gemma-eval.cpp                  | 196 ++++
- .../diffusion-gemma-server/CMakeLists.txt     |  13 +
- .../diffusion-gemma-server.cpp                | 189 ++++
- .../diffusion-gemma-visual-server.cpp         | 388 ++++++++
- examples/diffusion/diffusion-cli.cpp          | 548 +++++++++--
- examples/diffusion/diffusion.cpp              | 289 ++++++
- examples/diffusion/diffusion.h                |  38 +
- ggml/src/ggml-cuda/diffusion-sampling.cu      | 178 ++++
- ggml/src/ggml-cuda/diffusion-sampling.cuh     |  19 +
- ggml/src/ggml-cuda/ggml-cuda.cu               |   4 +
- include/llama.h                               |  49 +
- src/llama-arch.cpp                            |  16 +
- src/llama-arch.h                              |   7 +
- src/llama-model.cpp                           |   4 +
- src/llama-model.h                             |   8 +
- src/models/diffusion-gemma.cpp                | 850 ++++++++++++++++++
- src/models/gemma4-common.h                    | 126 +++
- src/models/models.h                           |  60 ++
- tests/test-llama-archs.cpp                    |  22 +-
- 23 files changed, 3028 insertions(+), 88 deletions(-)
- create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
- create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
- create mode 100644 examples/diffusion-gemma-server/CMakeLists.txt
- create mode 100644 examples/diffusion-gemma-server/diffusion-gemma-server.cpp
- create mode 100644 examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
- create mode 100644 ggml/src/ggml-cuda/diffusion-sampling.cu
- create mode 100644 ggml/src/ggml-cuda/diffusion-sampling.cuh
- create mode 100644 src/models/diffusion-gemma.cpp
- create mode 100644 src/models/gemma4-common.h
 
 diff --git a/common/arg.cpp b/common/arg.cpp
 index 69be4a61e..66cdb9919 100644
@@ -2463,10 +2429,10 @@ index 4ee49d708..89856dd5c 100644
      LLM_TENSOR_POST_ATTN_NORM,
      LLM_TENSOR_POST_MLP_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 4c811362e..2153d6cfe 100644
+index e6f5e87be..653055a54 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -161,6 +161,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -162,6 +162,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_gemma4(params);
          case LLM_ARCH_GEMMA4_ASSISTANT:
              return new llama_model_gemma4_assistant(params);
@@ -2475,7 +2441,7 @@ index 4c811362e..2153d6cfe 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_GEMMA_EMBEDDING2:
-@@ -3063,6 +3065,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -3066,6 +3068,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
          case LLM_ARCH_CLEF:
@@ -2483,7 +2449,7 @@ index 4c811362e..2153d6cfe 100644
              {
                  res = nullptr;
              } break;
-@@ -3925,6 +3928,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3928,6 +3931,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_MAION_CODER:
          case LLM_ARCH_GEMMA4_ASSISTANT:
@@ -3577,10 +3543,10 @@ index 8f6c3160d..00538e6b0 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index f4c89ba66..ab0585747 100644
+index 0b3812728..db3a90b3d 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -538,7 +538,11 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -545,7 +545,11 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
      } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
              arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
@@ -3593,7 +3559,7 @@ index f4c89ba66..ab0585747 100644
          std::vector<uint32_t> pattern;
          pattern.reserve(n_layer);
          for (uint32_t il = 0; il < n_layer; il++) {
-@@ -863,6 +867,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -870,6 +874,16 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   clamp_exp);
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, clamp_shexp);
      }
@@ -3610,7 +3576,7 @@ index f4c89ba66..ab0585747 100644
      ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
      ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
      ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-@@ -1169,6 +1183,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -1176,6 +1190,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_DEEPSEEK2:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DOTS3NOTE:
@@ -3618,7 +3584,7 @@ index f4c89ba66..ab0585747 100644
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_DEEPSEEK41:
          case LLM_ARCH_XING4_0:
-@@ -1504,7 +1519,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1511,7 +1526,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
              continue;
          }
  
@@ -3630,6 +3596,3 @@ index f4c89ba66..ab0585747 100644
          for (bool moe : {false, true}) {
              if (moe && !moe_implemented(arch)) {
                  continue;
--- 
-2.54.0 (Apple Git-157)
-

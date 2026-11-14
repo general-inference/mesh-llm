@@ -1,7 +1,7 @@
-From 58cdd19cdb8f1941e8a019511fa5b3a5c132916c Mon Sep 17 00:00:00 2001
+From 7f9855ee5c4fd1b5c265a5c3f6606a409f394f69 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
-Subject: [PATCH 09/15] skippy: add Whisper speech recognition
+Subject: [PATCH 09/16] skippy: add Whisper speech recognition
 
 Build pinned whisper.cpp on this tree's ggml targets and fold it into
 libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime
@@ -15,22 +15,12 @@ whisper.cpp export the same symbols, leave
 SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
 
 Bumps the Skippy ABI to 0.1.72.
----
- include/skippy.h        |   1 +
- include/skippy/asr.h    | 172 +++++++++++++++
- include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  37 ++++
- src/skippy/abi.cpp      |   6 +-
- src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 683 insertions(+), 2 deletions(-)
- create mode 100644 include/skippy/asr.h
- create mode 100644 src/skippy/asr.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index ac091dd24..4e33847d9 100644
+index a1d73ac5a..fb2e80806 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -27,5 +27,6 @@
+@@ -28,5 +28,6 @@
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
@@ -216,19 +206,19 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..80710eb3b 100644
+index 2c9342d91..cc08d3899 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 75
+-#define SKIPPY_ABI_VERSION_PATCH 76
++#define SKIPPY_ABI_VERSION_PATCH 78
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -110,6 +110,8 @@ enum skippy_feature {
+@@ -112,6 +112,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
  /** @brief Full-model Laya decision reads (`skippy/laya.h`). */
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
@@ -238,10 +228,10 @@ index 54c87b6f2..80710eb3b 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index eab1c3a46..ea0cdd178 100644
+index 91df78fc9..7c4f5b81f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -97,6 +97,7 @@ add_library(llama
+@@ -103,6 +103,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +239,7 @@ index eab1c3a46..ea0cdd178 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,6 +124,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -129,6 +130,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -260,7 +250,7 @@ index eab1c3a46..ea0cdd178 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -170,6 +175,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -176,6 +181,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -300,10 +290,10 @@ index eab1c3a46..ea0cdd178 100644
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f806cdbdc..ed9825df3 100644
+index bce625118..ec369088b 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
+@@ -49,7 +49,11 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
@@ -787,6 +777,3 @@ index 000000000..680549066
 +extern "C" void skippy_asr_result_free(struct skippy_asr_result * result) {
 +    delete result;
 +}
--- 
-2.54.0 (Apple Git-157)
-

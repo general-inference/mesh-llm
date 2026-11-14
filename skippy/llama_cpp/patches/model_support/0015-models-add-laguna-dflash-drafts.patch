@@ -1,7 +1,7 @@
-From 0aa5d8250686c5f980d5136d5ff21214966b033a Mon Sep 17 00:00:00 2001
+From 87d8cf7c4bf814266af9f2c341b40e5d0b8f83b4 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Mon, 9 Nov 2026 15:52:17 +1100
-Subject: [PATCH 15/15] models: add Laguna DFlash drafts
+Subject: [PATCH 15/16] models: add Laguna DFlash drafts
 
 Laguna drafters (poolside/Laguna-XS-2.1-DFlash, Laguna-S-2.1-DFlash) read
 the target's layer inputs, including layer n_layer: the last layer's
@@ -32,18 +32,6 @@ every layer and the head input, and llama_layer_inp_published reports
 the head input as published on one- and two-sequence contexts; splits
 of the Laguna contract fixture keep the draft's target layers 2, 14,
 26, 34 and 40 on the stages that compute them.
----
- conversion/__init__.py                      |   1 +
- conversion/laguna.py                        |  74 ++++++++++++++
- gguf-py/gguf/constants.py                   |   5 +
- gguf-py/gguf/gguf_writer.py                 |   3 +
- src/llama-arch.cpp                          |   3 +
- src/llama-arch.h                            |   2 +
- src/models/dflash.cpp                       | 104 ++++++++++++++++++--
- src/models/laguna.cpp                       |  14 ++-
- src/models/models.h                         |   8 ++
- src/skippy/tests/graph_contract_cases.cmake |  23 +++++
- 10 files changed, 230 insertions(+), 7 deletions(-)
 
 diff --git a/conversion/__init__.py b/conversion/__init__.py
 index f9dabf4f2..a8b2d7a9c 100644
@@ -513,6 +501,3 @@ index fdcdc631f..725b75ad2 100644
 +    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-laguna/graph-contract.gguf" 2,14,26,34,40)
 +set_tests_properties(skippy_laguna_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-laguna TIMEOUT 900)
--- 
-2.54.0 (Apple Git-157)
-

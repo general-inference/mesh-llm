@@ -1,42 +1,8 @@
-From f1317c1a988d59c2fc90a52f3e6cae13c80b0bfe Mon Sep 17 00:00:00 2001
+From 4a314425b18cb1936b7af5021507670d90df420e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 01/16] feat(skippy): define graph-derived native ABI
+Subject: [PATCH 01/35] feat(skippy): define graph-derived native ABI
 
----
- include/skippy.h                      |  29 +++
- include/skippy/activation.h           |  66 ++++++
- include/skippy/common.h               | 146 ++++++++++++++
- include/skippy/devices.h              |  56 ++++++
- include/skippy/events.h               | 229 +++++++++++++++++++++
- include/skippy/execution.h            | 264 ++++++++++++++++++++++++
- include/skippy/model_package.h        |  93 +++++++++
- include/skippy/model_source.h         |  84 ++++++++
- include/skippy/runtime.h              | 277 ++++++++++++++++++++++++++
- include/skippy/sampling.h             |  76 +++++++
- include/skippy/signals.h              |  53 +++++
- include/skippy/speculative_decoding.h |  71 +++++++
- include/skippy/stage_plan.h           | 256 ++++++++++++++++++++++++
- include/skippy/state.h                | 236 ++++++++++++++++++++++
- include/skippy/tokenization.h         |  85 ++++++++
- include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2114 insertions(+)
- create mode 100644 include/skippy.h
- create mode 100644 include/skippy/activation.h
- create mode 100644 include/skippy/common.h
- create mode 100644 include/skippy/devices.h
- create mode 100644 include/skippy/events.h
- create mode 100644 include/skippy/execution.h
- create mode 100644 include/skippy/model_package.h
- create mode 100644 include/skippy/model_source.h
- create mode 100644 include/skippy/runtime.h
- create mode 100644 include/skippy/sampling.h
- create mode 100644 include/skippy/signals.h
- create mode 100644 include/skippy/speculative_decoding.h
- create mode 100644 include/skippy/stage_plan.h
- create mode 100644 include/skippy/state.h
- create mode 100644 include/skippy/tokenization.h
- create mode 100644 include/skippy/workloads.h
 
 diff --git a/include/skippy.h b/include/skippy.h
 new file mode 100644
@@ -2248,6 +2214,3 @@ index 000000000..6aff32414
 +#endif
 +
 +#endif  // SKIPPY_WORKLOADS_H
--- 
-2.54.0 (Apple Git-157)
-

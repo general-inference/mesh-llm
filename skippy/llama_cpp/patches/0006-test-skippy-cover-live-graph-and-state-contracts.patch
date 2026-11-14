@@ -1,79 +1,8 @@
-From ef2d1b306ec19009abb53f52f409917c9dc8a642 Mon Sep 17 00:00:00 2001
+From b2720f80132855d96119d8ed3d9106adfb84f0a8 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 06/16] test(skippy): cover live graph and state contracts
+Subject: [PATCH 06/35] test(skippy): cover live graph and state contracts
 
----
- .../tests/cast_destination_regression.h       |   27 +
- src/skippy/tests/embedding_input_regression.h |   91 +
- src/skippy/tests/graph_build_inputs.cpp       |  950 ++++++++++
- src/skippy/tests/graph_contract_cases.cmake   |  120 ++
- src/skippy/tests/graph_contract_checks.h      |  138 ++
- src/skippy/tests/graph_contract_models.cpp    |  223 +++
- .../tests/hardware_application_probe.cpp      |   78 +
- src/skippy/tests/input_capabilities.cpp       |   80 +
- .../tests/input_leaf_state_regression.h       |   49 +
- src/skippy/tests/live_graph_reference.h       |  194 ++
- src/skippy/tests/log_gate.h                   |  138 ++
- src/skippy/tests/noalloc_graph_planning.cpp   | 1139 +++++++++++
- src/skippy/tests/profile_residency.cpp        |  260 +++
- .../tests/renamed_multishard_planning.cpp     | 1667 +++++++++++++++++
- .../tests/residual_checkpoint_regression.h    |   52 +
- src/skippy/tests/runtime_events.cpp           |  697 +++++++
- src/skippy/tests/sampling_history.cpp         |  520 +++++
- src/skippy/tests/stage_plan_header.c          |   10 +
- src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1200 ++++++++++++
- tests/CMakeLists.txt                          |   31 +
- tests/test-chat-auto-parser.cpp               |   47 +
- tests/test-chat.cpp                           |  189 +-
- tests/test-deepseek4-mtp.h                    |   88 +
- tests/test-graph-contract-fixture.h           |  155 ++
- tests/test-llama-archs.cpp                    |  362 +++-
- tests/test-reasoning-budget.cpp               |   24 +
- tests/test-skippy-activation-validation.cpp   |   18 +
- tests/test-skippy-cachegen-import.cpp         |  347 ++++
- tests/test-skippy-cachegen-metal.cpp          |  399 ++++
- tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
- tests/test-skippy-kv-page-export.cpp          |  367 ++++
- tests/test-skippy-model-loader-accounting.cpp |  320 ++++
- .../test-skippy-recurrent-state-roundtrip.cpp |  160 ++
- tests/test-skippy-rerank-template.cpp         |   34 +
- tests/test-skippy-sampling-suppress.cpp       |   90 +
- ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 37 files changed, 10293 insertions(+), 30 deletions(-)
- create mode 100644 src/skippy/tests/cast_destination_regression.h
- create mode 100644 src/skippy/tests/embedding_input_regression.h
- create mode 100644 src/skippy/tests/graph_build_inputs.cpp
- create mode 100644 src/skippy/tests/graph_contract_cases.cmake
- create mode 100644 src/skippy/tests/graph_contract_checks.h
- create mode 100644 src/skippy/tests/graph_contract_models.cpp
- create mode 100644 src/skippy/tests/hardware_application_probe.cpp
- create mode 100644 src/skippy/tests/input_capabilities.cpp
- create mode 100644 src/skippy/tests/input_leaf_state_regression.h
- create mode 100644 src/skippy/tests/live_graph_reference.h
- create mode 100644 src/skippy/tests/log_gate.h
- create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
- create mode 100644 src/skippy/tests/profile_residency.cpp
- create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
- create mode 100644 src/skippy/tests/residual_checkpoint_regression.h
- create mode 100644 src/skippy/tests/runtime_events.cpp
- create mode 100644 src/skippy/tests/sampling_history.cpp
- create mode 100644 src/skippy/tests/stage_plan_header.c
- create mode 100644 src/skippy/tests/stage_plan_header.cpp
- create mode 100644 src/skippy/tests/stage_slice_plan.cpp
- create mode 100644 tests/test-deepseek4-mtp.h
- create mode 100644 tests/test-graph-contract-fixture.h
- create mode 100644 tests/test-skippy-activation-validation.cpp
- create mode 100644 tests/test-skippy-cachegen-import.cpp
- create mode 100644 tests/test-skippy-cachegen-metal.cpp
- create mode 100644 tests/test-skippy-kv-cells-contiguous.cpp
- create mode 100644 tests/test-skippy-kv-page-export.cpp
- create mode 100644 tests/test-skippy-model-loader-accounting.cpp
- create mode 100644 tests/test-skippy-recurrent-state-roundtrip.cpp
- create mode 100644 tests/test-skippy-rerank-template.cpp
- create mode 100644 tests/test-skippy-sampling-suppress.cpp
- create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
 diff --git a/src/skippy/tests/cast_destination_regression.h b/src/skippy/tests/cast_destination_regression.h
 new file mode 100644
@@ -10928,6 +10857,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-

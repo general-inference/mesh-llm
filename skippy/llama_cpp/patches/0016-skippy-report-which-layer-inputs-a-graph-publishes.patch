@@ -1,14 +1,9 @@
-From 4fd04579152e535aaabff9b0ed8c7cdb9a43c800 Mon Sep 17 00:00:00 2001
+From ee92fa4aec5fcc2c27a904973165fe9912a2d7dc Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Mon, 9 Nov 2026 09:18:19 +1100
-Subject: [PATCH 16/16] skippy: report published layer inputs including head
+Subject: [PATCH 16/35] skippy: report published layer inputs including head
  input
 
----
- src/llama-context.cpp | 46 ++++++++++++++++++++++++++++++++++++++++++-
- src/llama-context.h   |  7 +++++++
- src/llama-ext.h       |  5 +++++
- 3 files changed, 57 insertions(+), 1 deletion(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index 9ec707c2f..ed0f70470 100644
@@ -145,6 +140,3 @@ index 5fc6dbe5b..630a97f14 100644
  // mirrors:
  // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
  LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
--- 
-2.54.0 (Apple Git-157)
-

@@ -1,4 +1,4 @@
-From f1d6f2c078a3311ed3cb00b98081020a8cf3e1ee Mon Sep 17 00:00:00 2001
+From d51465fa9375660b369105b7387fc3f90e926f5e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 14 Nov 2026 22:15:39 +1100
 Subject: [PATCH] memory: preserve peer recurrent rollback history
@@ -15,7 +15,7 @@ Subject: [PATCH] memory: preserve peer recurrent rollback history
  create mode 100644 src/llama-memory-recurrent-copy.h
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 7dad5273d..6525c4824 100644
+index 752ef6cbf..7b05ab31d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -34,6 +34,7 @@ set(LLAMA_CORE_SOURCES
@@ -155,16 +155,17 @@ index 000000000..6577e206d
 +        const std::vector<std::vector<llama_recurrent_copy_row>> & groups,
 +        std::vector<uint8_t> & scratch);
 diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
-index b7570d445..ae65b44e0 100644
+index c488e921c..a670a7712 100644
 --- a/src/llama-memory-recurrent.cpp
 +++ b/src/llama-memory-recurrent.cpp
-@@ -1,4 +1,5 @@
+@@ -1,5 +1,6 @@
  #include "llama-memory-recurrent.h"
+ #include "skippy/trace_scope.h"
 +#include "llama-memory-recurrent-copy.h"
  
  #include "ggml-backend.h"
  #include "llama-impl.h"
-@@ -529,7 +530,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
+@@ -535,7 +536,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
      bool success = true;
  
      for (const auto & ubatch : ubatches) {
@@ -173,7 +174,7 @@ index b7570d445..ae65b44e0 100644
              success = false;
              break;
          }
-@@ -543,7 +544,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
+@@ -549,7 +550,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
      return success;
  }
  
@@ -182,7 +183,7 @@ index b7570d445..ae65b44e0 100644
      const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
      const uint32_t n_seqs       = ubatch.n_seqs;
  
-@@ -676,6 +677,7 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+@@ -682,6 +683,7 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
  
              std::swap(dst_cell.pos, src_cell.pos);
              std::swap(dst_cell.src, src_cell.src);
@@ -190,7 +191,7 @@ index b7570d445..ae65b44e0 100644
              std::swap(dst_cell.seq_id, src_cell.seq_id);
  
              // swap tails
-@@ -745,6 +747,10 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+@@ -751,6 +753,10 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
          }
      }
  

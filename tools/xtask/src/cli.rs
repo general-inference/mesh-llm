@@ -5,6 +5,8 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
 pub(crate) fn print_usage() {
+    println!("  cargo xtool automation kv-validation --help");
+    println!("  cargo xtool automation agentx --help");
     println!("  cargo xtool ci-ops pr-authority-audit --help");
     println!("  cargo xtool automation mtp-scheduler --help");
     println!(
@@ -64,6 +66,12 @@ pub(crate) fn print_usage() {
         "  cargo xtool models dflash-draft-convert --manifest FILE --draft NAME --source DIR [--target-model DIR] --output FILE"
     );
     println!(
+        "  cargo xtool models fetch <manifest> --cadence <cadence> --root <dir> [--artifact-id <id>] [--timeout-secs <1..86400>] [--dry-run]"
+    );
+    println!(
+        "  cargo xtool models pin [<repo>@<revision> <file> --id <id> --family <family> --selector <text> --suite <suite>... --tag <tag>... [--cadence <cadence>...] [--notes <text>] [--expect-sha256 <hex>]] [--registry <path>] [--timeout-secs <1..3600>] [--dry-run]"
+    );
+    println!(
         "{USAGE}\n  {HF_CONVERTED_ARTIFACT_USAGE}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  {}\n  cargo xtool ci family-plan ...",
         crate::automation::client_readiness::USAGE,
         crate::automation::stability::USAGE,
@@ -110,6 +118,8 @@ pub(crate) struct Cli<'a> {
 }
 
 pub(crate) enum CliCommand<'a> {
+    KvValidation(&'a [String]),
+    Agentx(&'a [String]),
     MtpScheduler(&'a [String]),
     MtpSchedulerWorker(&'a [String]),
     SuffixProposer(&'a [String]),
@@ -307,6 +317,12 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "cache-family-run" => {
                 CliCommand::CacheFamilyRun(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "kv-validation" => {
+                CliCommand::KvValidation(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "agentx" => {
+                CliCommand::Agentx(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "cache-family-cell" =>

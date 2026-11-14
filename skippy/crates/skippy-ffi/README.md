@@ -105,23 +105,20 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.82`. The patch header in
+The staged ABI is versioned as `0.1.85`. The patch header in
 `skippy/llama_cpp/patches/` and the Rust constants in
 `skippy/crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
 
-ABI `0.1.82` adds `skippy_verify_request` and
-`skippy_verify_batch_sampled` for independent speculative windows sharing one
-target forward. The function requires equal window lengths on a complete
-terminal model and bounds the combined input to one native microbatch.
-Existing public signatures and fields are unchanged; removed declarations:
-none.
+ABI `0.1.85` combines the placement, batching and tracing interfaces from
+`0.1.84` with `skippy_verify_request` and `skippy_verify_batch_sampled` for
+independent speculative windows sharing one target forward. The function
+requires equal window lengths on a complete terminal model and bounds the
+combined input to one native microbatch. It also admits auxiliary device
+capture outputs while retaining exact-graph write validation. Existing public
+signatures and fields are unchanged; removed declarations: none. The loader
+rejects earlier ABI versions before using these interfaces.
 
-ABI `0.1.81` explicitly admits auxiliary device capture outputs while retaining
-exact-graph write validation, required by direct device feature handoff.
-No public C functions, signatures, or fields changed; removed declarations:
-none. The version bump rejects older runtimes with incompatible graph-state
-admission semantics.
 ABI `0.1.80` adds `mtmd_helper_get_decode_budget`, the load-time probe a caller
 uses to cap a non-causal projector's vision token budget to its decode batch
 sizes. ABI `0.1.79` includes llama.cpp b12144's media layouts: `mtmd_gen_audio_info`

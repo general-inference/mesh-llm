@@ -1,22 +1,14 @@
-From 9a3e4522d4e02a2a96fd7d5bf1a081e9be656e72 Mon Sep 17 00:00:00 2001
+From 5d44e4ac64cb86ed25e92a03d0bf7adf25886cc8 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:37:22 -0800
-Subject: [PATCH 11/15] models: expose glm5-next stage graph semantics
+Subject: [PATCH 11/16] models: expose glm5-next stage graph semantics
 
----
- src/CMakeLists.txt                          |  12 ++
- src/models/glm5-next.cpp                    |  50 +++++--
- src/models/models.h                         |   2 +-
- src/skippy/tests/graph_build_inputs.cpp     | 136 ++++++++++++++++++++
- src/skippy/tests/graph_contract_cases.cmake |  17 +++
- tests/test-llama-archs.cpp                  |   9 +-
- 6 files changed, 214 insertions(+), 12 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index beded64e4..0e619d785 100644
+index 2e1ee1468..c95ba2b42 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -302,6 +302,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -308,6 +308,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
          "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
@@ -34,14 +26,14 @@ index beded64e4..0e619d785 100644
      set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
-@@ -483,6 +494,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -489,6 +500,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
      # lfm2's fixture slides its attention window, so it checkpoints every window.
      add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
 +    add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
-     target_include_directories(skippy-sampling-history PRIVATE .)
-     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+     add_executable(skippy-backend-sample-capacity skippy/tests/backend_sample_capacity.cpp)
+     target_include_directories(skippy-backend-sample-capacity PRIVATE .)
+     target_compile_features(skippy-backend-sample-capacity PRIVATE cxx_std_17)
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
 index 844a327b3..d55b52e1f 100644
 --- a/src/models/glm5-next.cpp
@@ -188,7 +180,7 @@ index f714f51d3..15aca9529 100644
          ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
                                           const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index cd2e4af3f..511e647f4 100644
+index c53c6b4b1..ccf49c342 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,4 +1,5 @@
@@ -197,7 +189,7 @@ index cd2e4af3f..511e647f4 100644
  #include "llama-graph.h"
  #include "llama-kv-cache-msa.h"
  #include "ggml-cpu.h"
-@@ -11,6 +12,7 @@
+@@ -13,6 +14,7 @@ static const skippy::log_gate::installer skippy_log_gate_installer{};
  #include "skippy/stage_realization.h"
  
  #include <atomic>
@@ -205,7 +197,7 @@ index cd2e4af3f..511e647f4 100644
  #include <cstdint>
  #include <cstdio>
  #include <cstring>
-@@ -899,6 +901,128 @@ static int check_execution_profile_residency() {
+@@ -901,6 +903,128 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
@@ -334,7 +326,7 @@ index cd2e4af3f..511e647f4 100644
  int main(int argc, char ** argv) {
      if (const int rc = check_embedding_scale_predicate()) return rc;
      if (const int rc = check_prepared_export_token_axis()) return rc;
-@@ -909,6 +1033,18 @@ int main(int argc, char ** argv) {
+@@ -911,6 +1035,18 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
@@ -379,10 +371,10 @@ index 4ee862411..0d1bbf6e7 100644
 +set_tests_properties(skippy_glm5_next_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index dea533e77..363d97704 100644
+index 6efc704fc..779763267 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -2147,7 +2147,7 @@ int main(int argc, char ** argv) {
+@@ -2154,7 +2154,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
@@ -391,7 +383,7 @@ index dea533e77..363d97704 100644
                      0,
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
-@@ -2178,6 +2178,13 @@ int main(int argc, char ** argv) {
+@@ -2185,6 +2185,13 @@ int main(int argc, char ** argv) {
              const std::array<bool, 3> recurrent = {model->hparams.is_recr(0), model->hparams.is_recr(1), false};
              gguf_set_arr_data(saver.gguf_ctx, saver.llm_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(),
                      GGUF_TYPE_BOOL, recurrent.data(), recurrent.size());
@@ -405,6 +397,3 @@ index dea533e77..363d97704 100644
              saver.add_tensors_from_model();
              saver.save(path);
              require_fixture_written(path);
--- 
-2.54.0 (Apple Git-157)
-

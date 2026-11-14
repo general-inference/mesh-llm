@@ -1,4 +1,4 @@
-From bb1dbdd0e98add2bb5a9046b163ea2f3f45bb387 Mon Sep 17 00:00:00 2001
+From ab8eb34e53720f2b50e33cfd56bcbeef1b8643e2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 14 Nov 2026 20:05:07 +1100
 Subject: [PATCH] metal: prefer host greedy sampling on qualified shared-memory
@@ -50,10 +50,10 @@ index d36a0b639..3d858b56f 100644
  // batch side refined into {2,3,4,5}: Q>1 reuses one K/V load across rows, so it only pays
  // off once ne01 aligns with Q. ne11 (KV length) is bucketed too, as the Q>1 crossover is
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 528853974..af98a872e 100644
+index 833fe8549..8dc54b26a 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -1012,7 +1012,15 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
+@@ -1013,7 +1013,15 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
      ggml_metal_fusion_info_set_enabled((struct ggml_metal_fusion_info *) finfo, enabled);
  }
  
@@ -70,19 +70,19 @@ index 528853974..af98a872e 100644
          return (void *)ggml_backend_metal_get_features;
      }
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index b688fce73..ee3f3699f 100644
+index d9f980c39..06f9a4735 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -9,6 +9,7 @@
- #include "skippy/speculative_internal.h"
+@@ -10,6 +10,7 @@
+ #include "skippy/trace_scope.h"
  
  #include "llama-impl.h"
 +#include "llama-model.h"
  #include "../vendor/nlohmann/json.hpp"
  
  #include <algorithm>
-@@ -544,6 +545,21 @@ static bool skippy_ensure_plain_sampling_chain(
-     return true;
+@@ -579,6 +580,21 @@ bool skippy_prepare_concurrent_sample(
+     return session->sampler != nullptr && !session->sampling_backend_enabled;
  }
  
 +static bool skippy_backend_prefers_host_greedy(const skippy_session * session) {
@@ -103,7 +103,7 @@ index b688fce73..ee3f3699f 100644
  void skippy_refresh_backend_sampling(
          skippy_session * session,
          const skippy_sampling_config * sampling) {
-@@ -557,6 +573,9 @@ void skippy_refresh_backend_sampling(
+@@ -592,6 +608,9 @@ void skippy_refresh_backend_sampling(
          // must likewise never be re-attached.
          return;
      }

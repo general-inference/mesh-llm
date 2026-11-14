@@ -6,14 +6,13 @@
 //! cache on first load and serves without speculation if it cannot.
 //!
 //! The default draft comes from, in order: the layer package's own `dflash`
-//! proposer, the pairing index this release pins by content hash, and, until
-//! that index is cached (or if it cannot be read or fails its hash), the
-//! bootstrap table compiled in here.
+//! proposer, the pairing index pinned by the SHA-256 in `dflash_index`, and,
+//! until that index is available, the bootstrap table compiled in here.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use hf_hub::RepoTypeModel;
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
@@ -25,8 +24,16 @@ pub use skippy_package_format::{
 };
 use skippy_runtime::package::PackageGenerationInfo;
 
-#[cfg(test)]
-use super::dflash_index::load_dflash_pairing_index;
+/// Legacy index filename retained for callers; the current pin uses a
+/// content-addressed filename in [`super::dflash_index`].
+pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
+
+/// Reads and validates a pairing index file.
+pub fn load_dflash_pairing_index(path: &Path) -> Result<DFlashPairingIndex> {
+    let json = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    DFlashPairingIndex::from_json(&json)
+        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
+}
 
 static INSTALLED_INDEX: RwLock<Option<Arc<Vec<DFlashPairing>>>> = RwLock::new(None);
 static BOOTSTRAP_PAIRINGS: LazyLock<Arc<Vec<DFlashPairing>>> =
@@ -100,12 +107,8 @@ pub struct DefaultDFlash {
     pub source: DFlashPairingSource,
 }
 
-/// The pairings this release falls back to until the pinned index is cached,
-/// or when it cannot be read or fails its hash.
-///
-/// TODO: delete once packages declare their drafts; the index
-/// (`data/dflash-pairings/index.json`) is the source of truth, and a test
-/// checks that it pairs every target here the same way.
+/// The pairings this release ships, used only until the content-pinned index
+/// in [`super::dflash_index`] is available.
 pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
     vec![
         // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
@@ -641,6 +644,37 @@ mod tests {
         pairing_in(&bootstrap_pairings(), meta, metal).map(|pairing| pairing.draft.repo.clone())
     }
 
+    const INDEX_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/dflash-pairings/index.json"
+    );
+
+    /// The bootstrap table as the index `meshllm/dflash-pairings` publishes.
+    fn generated_index_json() -> String {
+        let index = DFlashPairingIndex {
+            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
+            pairings: bootstrap_pairings(),
+        };
+        serde_json::to_string_pretty(&index).unwrap() + "\n"
+    }
+
+    /// `UPDATE_DFLASH_PAIRINGS_INDEX=1` rewrites the checked-in index from
+    /// the bootstrap table.
+    #[test]
+    fn the_checked_in_index_is_the_bootstrap_table() {
+        let generated = generated_index_json();
+        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_INDEX").is_some() {
+            std::fs::write(INDEX_PATH, &generated).unwrap();
+        }
+        let checked_in = std::fs::read_to_string(INDEX_PATH).unwrap();
+        assert_eq!(
+            checked_in, generated,
+            "regenerate with UPDATE_DFLASH_PAIRINGS_INDEX=1 cargo test -p mesh-llm-skippy-adapter the_checked_in_index"
+        );
+        let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
+        assert_eq!(index.pairings, bootstrap_pairings());
+    }
+
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
     /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B,
@@ -699,13 +733,11 @@ mod tests {
         ]
     }
 
-    /// The pinned index: the checked-in `index.json`, or the file
+    /// The published index: the checked-in copy of `index.json`, or the file
     /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
     fn published_index() -> DFlashPairingIndex {
-        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
-            || PathBuf::from(super::super::dflash_index::INDEX_PATH),
-            PathBuf::from,
-        );
+        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
+            .map_or_else(|| PathBuf::from(INDEX_PATH), PathBuf::from);
         load_dflash_pairing_index(&path).unwrap()
     }
 

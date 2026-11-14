@@ -1,4 +1,4 @@
-From b2e3c5514bdf464fe6225f5671b5fd08287fc833 Mon Sep 17 00:00:00 2001
+From af7ac35d2fa8f9487e6a8b67c0c850f596fd1b90 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 14 Nov 2026 15:16:21 +1100
 Subject: [PATCH] feat(skippy): declare auxiliary device capture outputs
@@ -8,14 +8,14 @@ Subject: [PATCH] feat(skippy): declare auxiliary device capture outputs
  src/skippy/state_effects.cpp         |  1 +
  src/skippy/state_effects.h           |  4 ++++
  src/skippy/state_memory.cpp          |  1 +
- tests/test-skippy-kv-page-export.cpp | 18 ++++++++++++++++--
- 5 files changed, 30 insertions(+), 3 deletions(-)
+ tests/test-skippy-kv-page-export.cpp | 25 ++++++++++++++++++++-----
+ 5 files changed, 34 insertions(+), 6 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 846cd0f82..9c0223968 100644
+index 17081e041..c4f22d0d3 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -5021,6 +5021,11 @@ void llm_graph_context::build_layer_inp_dev() const {
+@@ -5004,6 +5004,11 @@ void llm_graph_context::build_layer_inp_dev() const {
  
      // row layout: [layer_0 | layer_1 | ...] in ascending layer id order
      int64_t col = 0;
@@ -27,7 +27,7 @@ index 846cd0f82..9c0223968 100644
      for (size_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
          if (!cparams.embeddings_layer_inp[il]) {
              continue;
-@@ -5031,7 +5036,9 @@ void llm_graph_context::build_layer_inp_dev() const {
+@@ -5014,7 +5019,9 @@ void llm_graph_context::build_layer_inp_dev() const {
          GGML_ASSERT(src->ne[0] == n_embd);
  
          ggml_tensor * dst = ggml_view_2d(ctx0, layer_inp_dev, n_embd, layer_inp_dev->ne[1], layer_inp_dev->nb[1], col*n_embd*ggml_element_size(layer_inp_dev));
@@ -66,10 +66,10 @@ index 5bb6b779b..a051e5dbd 100644
  
  enum class skippy_state_access : int32_t {
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
-index e271852ff..8f9e9aa71 100644
+index c62b1e629..a83f1534c 100644
 --- a/src/skippy/state_memory.cpp
 +++ b/src/skippy/state_memory.cpp
-@@ -95,6 +95,7 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
+@@ -131,6 +131,7 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
          switch (effect.kind) {
              case skippy_state_kind::kv_key:
              case skippy_state_kind::kv_value:
@@ -78,10 +78,10 @@ index e271852ff..8f9e9aa71 100644
              case skippy_state_kind::recurrent_conv:
              case skippy_state_kind::recurrent_ssm:
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
-index 0fb9f036a..775864845 100644
+index 30c88b490..90b39ee11 100644
 --- a/tests/test-skippy-kv-page-export.cpp
 +++ b/tests/test-skippy-kv-page-export.cpp
-@@ -27,13 +27,18 @@ static bool graph_cache_capabilities_cover_complete_state() {
+@@ -23,13 +23,18 @@ static bool graph_cache_capabilities_cover_complete_state() {
      auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
      auto * state = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
      ggml_set_input(input);
@@ -102,13 +102,21 @@ index 0fb9f036a..775864845 100644
      };
      const auto capabilities = [&](skippy_state_kind kind) {
          result.replace_with_stage_graph(graph, {}, {}, {
-@@ -46,11 +51,20 @@ static bool graph_cache_capabilities_cover_complete_state() {
+@@ -38,15 +43,25 @@ static bool graph_cache_capabilities_cover_complete_state() {
+         });
+         return skippy_graph_cache_capabilities(result);
+     };
+-    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION |
++            SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
              SKIPPY_MEMORY_CACHE_FULL_STATE;
      if (capabilities(skippy_state_kind::kv_key) != dense ||
              capabilities(skippy_state_kind::kv_value) != dense ||
+-            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
+-            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
 +            capabilities(skippy_state_kind::auxiliary_output) != dense ||
-             capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
-             capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::recurrent_conv) != dense ||
++            capabilities(skippy_state_kind::recurrent_ssm) != dense ||
              capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
          return false;
      }

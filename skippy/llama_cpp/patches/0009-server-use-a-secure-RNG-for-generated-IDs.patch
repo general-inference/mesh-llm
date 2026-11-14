@@ -1,7 +1,7 @@
-From 185115afe54cbac461b6aea156f8e5371716f57f Mon Sep 17 00:00:00 2001
+From c56d93314a2a6066e8b83f1dbf6a8f21c0e0db89 Mon Sep 17 00:00:00 2001
 From: benthecarman <benthecarman@live.com>
 Date: Wed, 7 Oct 2026 14:42:10 -0500
-Subject: [PATCH 09/16] server: use a secure RNG for generated IDs
+Subject: [PATCH 09/35] server: use a secure RNG for generated IDs
 
 random_string() seeded a fresh mt19937 with a single 32-bit value from
 random_device on every call, so each 32-character ID could take at most
@@ -13,9 +13,6 @@ completion IDs are looked up across all clients by the
 Draw every character from random_device directly. This also removes
 the small modulo bias of reducing generator output by the alphabet
 size.
----
- tools/server/server-common.cpp | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
 index 05fd04c29..726c34079 100644
@@ -36,6 +33,3 @@ index 05fd04c29..726c34079 100644
      }
  
      return result;
--- 
-2.54.0 (Apple Git-157)
-

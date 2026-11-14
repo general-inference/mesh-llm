@@ -1,0 +1,146 @@
+From d855172f5c8f7009edd0cc1e37f3b49fa8be14b4 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 16:40:17 +1100
+Subject: [PATCH] fix(skippy): reorder sampling outputs by buffer lifetime
+
+---
+ src/CMakeLists.txt                          |  2 +
+ src/llama-context.cpp                       |  6 +-
+ src/llama-context.h                         |  1 +
+ src/skippy/tests/output_reorder_fixture.cpp | 61 +++++++++++++++++++++
+ src/skippy/tests/sampling_history.cpp       |  1 +
+ 5 files changed, 70 insertions(+), 1 deletion(-)
+ create mode 100644 src/skippy/tests/output_reorder_fixture.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d8e31aa55..1538fb8b4 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -522,6 +522,8 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_include_directories(skippy-sampling-history PRIVATE .)
+     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+     target_link_libraries(skippy-sampling-history PRIVATE llama)
++    target_compile_definitions(skippy-sampling-history PRIVATE LLAMA_STAGE_BUILD_TESTS)
++    target_sources(llama PRIVATE skippy/tests/output_reorder_fixture.cpp)
+     function(add_skippy_sampling_history_tests family fixture state)
+         foreach(mode grammar penalty argmax)
+             add_test(NAME skippy_sampling_history_${family}_${mode}
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index ba345d3d2..721379da6 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1072,6 +1072,8 @@ void llama_context::set_fused_gdn_for_test(bool fused_ar, bool fused_chunk) {
+     ++computation_generation;
+     sched_need_reserve = true;
+ }
++
++
+ #endif
+ 
+ 
+@@ -3028,7 +3030,9 @@ void llama_context::output_reorder() {
+             }
+         }
+ 
+-        if (!sampling.samplers.empty()) {
++        // Samplers may attach or detach after this forward. Permute the
++        // buffers it produced, independently of the current sampler map.
++        if (sampling.sampled.has_data()) {
+             assert(sampling.logits.size > 0);
+             assert(sampling.probs.size > 0);
+             assert(sampling.candidates.size > 0);
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 50e39c829..ebd4609a8 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -92,6 +92,7 @@ struct llama_context {
+     uint64_t get_sched_reserve_count() const;
+ #ifdef LLAMA_STAGE_BUILD_TESTS
+     void set_fused_gdn_for_test(bool fused_ar, bool fused_chunk);
++    bool output_reorder_sampler_lifecycle_for_test();
+ #endif
+ 
+     ggml_backend_sched_t get_sched() const;
+diff --git a/src/skippy/tests/output_reorder_fixture.cpp b/src/skippy/tests/output_reorder_fixture.cpp
+new file mode 100644
+index 000000000..4dd53a83d
+--- /dev/null
++++ b/src/skippy/tests/output_reorder_fixture.cpp
+@@ -0,0 +1,61 @@
++#include "llama-context.h"
++#include "llama-model.h"
++
++#include <utility>
++#include <vector>
++
++bool llama_context::output_reorder_sampler_lifecycle_for_test() {
++    synchronize();
++    auto previous_sampling = std::move(sampling);
++    auto previous_swaps = std::move(output_swaps);
++    auto previous_idxs = std::move(embd_batch_idxs);
++    const auto previous_logits = logits;
++    const auto previous_embd = embd;
++    const auto previous_nextn = embd_nextn;
++    logits = {nullptr, 0};
++    embd = {nullptr, 0};
++    embd_nextn = {nullptr, 0};
++    sampling = {};
++    output_swaps.clear();
++    embd_batch_idxs.clear();
++
++    // A sampler attached after a raw-output forward has no sampling views.
++    // Its presence must not make an already pending row permutation read null.
++    auto * sampler = llama_sampler_init_greedy();
++    sampling.samplers.emplace(0, sampler);
++    output_swaps.push_back({0, 1});
++    output_reorder();
++    bool valid = output_swaps.empty();
++    sampling.samplers.clear();
++    llama_sampler_free(sampler);
++
++    // Conversely, detaching the last sampler must not suppress permutation of
++    // the sampling views that the completed forward actually produced.
++    const size_t width = model.vocab.n_tokens();
++    std::vector<float> scores(2 * width, 0.0f), probs(2 * width, 0.0f);
++    std::vector<llama_token> candidates(2 * width, 0), sampled = {1, 2};
++    scores[0] = 3.0f; scores[width] = 4.0f;
++    probs[0] = 0.25f; probs[width] = 0.75f;
++    candidates[0] = 1; candidates[width] = 2;
++    sampling.logits = {scores.data(), scores.size()};
++    sampling.probs = {probs.data(), probs.size()};
++    sampling.candidates = {candidates.data(), candidates.size()};
++    sampling.sampled = {sampled.data(), sampled.size()};
++    sampling.logits_count = {1, 2};
++    sampling.probs_count = {3, 4};
++    sampling.candidates_count = {5, 6};
++    output_swaps.push_back({0, 1});
++    output_reorder();
++    valid = valid && sampled[0] == 2 && sampled[1] == 1 &&
++            scores[0] == 4.0f && probs[0] == 0.75f && candidates[0] == 2 &&
++            sampling.logits_count[0] == 2 && sampling.probs_count[0] == 4 &&
++            sampling.candidates_count[0] == 6;
++
++    sampling = std::move(previous_sampling);
++    output_swaps = std::move(previous_swaps);
++    embd_batch_idxs = std::move(previous_idxs);
++    logits = previous_logits;
++    embd = previous_embd;
++    embd_nextn = previous_nextn;
++    return valid;
++}
+\ No newline at end of file
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index 5dbc73ce9..d13ba8be3 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -685,6 +685,7 @@ int main(int argc, char ** argv) {
+     skippy_error * error = nullptr;
+     const auto status = skippy_model_open(argv[1], &config, &model, &error);
+     ok(status, error);
++    CHECK(model->ctx->output_reorder_sampler_lifecycle_for_test());
+     if (state) {
+         // A dense stage's page already carries its whole checkpoint, so the
+         // partial side payload is intentionally empty there.
+-- 
+2.54.0 (Apple Git-157)
+

@@ -465,12 +465,12 @@ output row and stored weights are unchanged. This is a new core patch because
 it owns a distinct routed-vector specialization, rather than extending the
 shared-verification or graph-fusion capabilities.
 
-Dispatch is restricted to M5 Max with shared buffers, 3–31 routed token rows,
+Dispatch is restricted to M5 Max in shared-buffer backend mode, 3–31 routed token rows,
 inner dimensions 512–4096, and at least 512 output rows. Output rows must divide
 exactly into complete unrolled SIMDgroup tiles: the kernel bodies load every
 unrolled row, so a write-boundary check alone cannot make partial tiles safe.
 One- and two-row operations retain the baseline dispatch, as do other devices,
-private buffers, types, and unqualified shapes. Selection uses device and tensor
+private-buffer backend mode, types, and unqualified shapes. Selection uses device and tensor
 metadata, without model-family checks or a new operator setting. There is no
 public native ABI change.
 
@@ -531,6 +531,59 @@ Skippy and Mesh. The final native source differs from the measured speculative
 candidate only in stronger test assertions; production source is identical.
 This selected validation does not make the previously failing broad native
 build gate green: its inherited missing ASR/diffusion targets remain unresolved.
+
+## Routed-down Q4_K performance recipe
+
+A further format experiment retains the earlier dense/head Q4_K changes and
+changes the 37 decoder expert-down Q5_K tensors to Q4_K. The three source
+Q6_K expert-down layers (34, 38, 39) and unused block 40 MTP sidecar retain their
+source representations. The audit confirms exactly 288 changed tensors and
+465 byte-identical preserved tensors. The resulting artifact is 20,588,214,560
+bytes, versus 21,829,728,544 for the dense/head-only variant. SHA-256 is
+`2becfbe82ceb5862f90145c69b8545dcf30982aec2b81ce52ddeaec32648ecf9`.
+
+At the same 128×512-token WikiText-2 contexts and 32,640 scored positions,
+perplexity is 6.733014, versus dense/head-only 6.732749 and original compressed
+reference 6.644816. The ratio against the original is 1.013273 ± 0.002024;
+mean KL is 0.047777 ± 0.000636 and top-token agreement 89.939 ± 0.167%.
+The small perplexity point-estimate change does not establish general quality
+equivalence. KL is slightly higher and top-token agreement slightly lower than
+the dense/head-only diagnostic.
+
+An initial variable-prompt plain ABBA comparison had substantial process
+variation: single-request controls ranged from about 117 to 137 tok/s, and five
+of 36 measured requests ended before 256 tokens. Its nominal +12.71%/+21.48%
+medians are not retained as qualified speed claims. A subsequent fixed-prompt,
+128-output-token plain comparison used the same final CLI and native runtime
+in both arms, changing only those 37 expert-down tensor representations:
+
+| Concurrency | Dense/head Q4_K median tok/s | With routed-down Q4_K median tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 132.742 | 140.391 | +5.76% |
+| 2 | 196.339 | 212.506 | +8.23% |
+
+Four fresh processes ran ABBA, with one warmup and three measured batches per
+concurrency. Rates divide total output tokens by the slowest HTTP duration and
+include prefill. All 48 requests produced 128 tokens. Every candidate measured
+batch exceeded every control at both concurrencies. Outputs repeat within each
+format but differ between formats. These results do not measure speculative
+decode or establish parity with BaseRT.
+
+A subsequent fixed-prompt DFlash comparison completed all 48 requests at 128
+tokens. Nominal medians were +8.01% at concurrency one and +5.23% at concurrency
+two, but controls varied substantially and one candidate single-request prompt
+had two generated variants as batch shapes changed. These are unqualified
+speculative results, not an additional established gain or an exact-output
+guarantee. Raw evidence is in `fixed-spec-summary.json`.
+
+The audited, source-specific recipe is retained at
+`skippy/scripts/recipes/quantization/qwen3.6-35b-a3b-ud-q4-k-m-decode.tensor-types.txt`.
+It is explicit and opt-in; it does not change loading defaults. Source pin,
+reproduction commands and quality limitations are in the adjacent recipe
+README. The product validator accepted all 753 entries, and a complete product
+quantization run produced the same full-file SHA-256 as the measured artifact.
+Raw plans, tensor audits, quality logs, commands, responses and timing
+audits remain under `target/routed-down-precision-evidence/`.
 
 ## Rejected flat-Q4 dense/head format
 

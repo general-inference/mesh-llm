@@ -80,6 +80,88 @@ progress, and the audit are retained locally in
 `target/pr33-integration-evidence/`. The following sections retain their
 original pre-PR #33 measurements and patch numbers for provenance.
 
+## Post-PR #33 dense-weight precision diagnostic
+
+This is a model-format experiment, not an equivalent-output engine change.
+The same `193d8a83b` release CLI and qualified ABI 0.1.85 runtime served both
+arms. The original target/draft revisions are unchanged. The trial requantizes
+250 main-target, two-dimensional Q8 tensors to Q4_K, without an importance
+matrix, using the existing native quantizer. It starts from the current GGUF,
+not FP16. Exact per-tensor type overrides preserve the other 503 tensor types;
+a SHA256 range audit additionally proved their payloads are byte-identical.
+Experts, routing gates, embeddings, output head and MTP sidecar are preserved.
+The original file is untouched. The trial SHA256 is
+`086f79da132cf18f91440bebd34c8c50e9a242ba5b2e0d540e7d655e5a752cfe`.
+
+Total file bytes fall from 22,663,387,424 to 21,960,841,504 (3.10%). The
+changed tensors are active dense projections, so the earlier stored-active-
+weight estimate falls from about 2.626 to 1.924 GB per decoded token, a much
+larger reduction than total file size suggests. This remains an inventory
+estimate, not measured DRAM traffic.
+
+Both plain and DFlash experiments used fresh control/candidate/candidate/
+control processes, PP512/TG256, two warmups and three measured batches at each
+concurrency. Each table value is the median of six measured batches. Sampling,
+context, cache and batch settings match the combined comparison above;
+plain decoding disables speculation on both arms. The speculative comparison
+uses the same six-token DFlash draft and enables shared draft/verification on
+both arms. Only the target precision changes.
+
+| Workload | Original GGUF tok/s | Dense-Q4 trial tok/s | Change |
+| --- | ---: | ---: | ---: |
+| Plain, one request | 113.612 | 132.829 | +16.91% |
+| Plain, two requests aggregate | 160.502 | 178.739 | +11.36% |
+| DFlash, one request | 125.400 | 133.353 | +6.34% |
+| DFlash, two requests aggregate | 175.272 | 200.572 | +14.43% |
+
+Each experiment completed all 36 measured requests without reported errors.
+Ordinary EOS remained enabled: one plain trial request produced 195 tokens;
+the other 35 produced 256. The speculative experiment had one control output
+of 181 tokens and trial outputs of 236, 172 and 231 tokens; the other 32
+produced 256. Prompt strings differ between benchmark batches. The speculative
+single-request distributions overlap substantially. These numbers do not
+establish an equal-quality comparison with BaseRT.
+
+Two additional fixed 64-token prompts ran in every process. For each weight
+variant separately, plain and speculative outputs matched byte for byte
+across both fresh processes. Outputs differ between the original and trial
+weights, so this is not exact-output parity across quantizations.
+
+The quality diagnostic follows the native
+[perplexity/KL method](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity)
+on [WikiText-2](https://huggingface.co/datasets/Salesforce/wikitext) test text,
+from the ggml-org CI archive at revision
+`927b3642933080f1b0e811e2f916e14c292992f9`. With 128 independent 512-token
+chunks it scores the final 255 predictions per chunk: 32,640 positions.
+The initial 16-chunk pilot scores 4,080 positions. All weights are on Metal;
+context, batches and microbatches are 512, with eight host threads.
+
+The larger trial reports PPL 6.698454 versus direct original PPL 6.6468.
+The paired comparison to stored original logits reports PPL ratio
+1.008072 +/- 0.001831, mean KL 0.038167 +/- 0.000567, and matching most-likely
+tokens at 91.624 +/- 0.153 percent. Thus the trial has a measurable roughly
+0.8% perplexity penalty and changes the most likely token at roughly 8.4%
+of positions. The stored-reference format compresses logits: an original-
+versus-itself 16-chunk check reports KL approximately zero and 100% most-
+likely-token agreement, with a small PPL roundoff offset. The reference model
+is the existing mixed GGUF, not an FP16 accuracy reference or BaseRT model.
+This test does not cover instruction following, coding accuracy or long context.
+
+The original-weight build additionally passed an eight-lane teacher-forced
+verification check: all 512 predictions matched the serial target, over ten
+shared forwards at width seven, with DFlash feature capture attached. This
+isolates shared-forward prediction correctness; it deliberately does not
+exercise draft proposals or rollback, and is not a full serving qualification.
+The command and report are retained as `shared-reference-commands.sh` and
+`shared-reference-8.json` in the same evidence directory.
+
+The trial remains a local experimental artifact. It is not selected by default,
+and no production quantization or serving setting changes in this experiment.
+The results show that precision accounts for part of the practical gap, but
+reducing dense precision alone does not reach the prior BaseRT rates. Raw
+recipes, commands, source/candidate tensor audits, hashes, logits, quality
+reports and both ABBA comparisons are in `target/mixed-precision-evidence/`.
+
 ## Gated activations
 
 Core patch `0020-metal-fuse-contiguous-float32-gated-activations.patch` adds

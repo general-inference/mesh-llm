@@ -33,7 +33,7 @@ This adds native startup, not model-reference resolution or clean-install proof.
 
 `SKIPPY_SHARED_VERIFY=1` lets the iteration scheduler combine equal-length
 verification windows from independent sessions on a complete causal target.
-It requires native ABI `0.1.82`. Each lane keeps its own sampler, checkpoint,
+The combined implementation requires native ABI `0.1.85`. Each lane keeps its own sampler, checkpoint,
 rejection boundary and repair. Unsupported models and batches exceeding the
 actual native microbatch capacity use independent verification.
 

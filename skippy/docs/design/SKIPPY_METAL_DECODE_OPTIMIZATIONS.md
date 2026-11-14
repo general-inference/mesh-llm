@@ -1373,3 +1373,54 @@ rebuilt through Just and all 396 retained convolution CPU-reference cases
 passed again on Metal. This removes the stale expanded test binary left by
 the rejected extension. The full native gate's inherited missing ASR and
 diffusion targets remain unresolved; this focused result does not replace it.
+
+## Fresh public-API engine configuration comparison
+
+A balanced ABCDDCBA comparison used the same eight raw coding prompts,
+128-token requests, greedy sampling, f16 KV, context8192, two resident lanes,
+and concurrency one. Each fresh process ran one eight-prompt warmup cycle and
+three measured cycles. All 256 requests completed 128 tokens with length
+finish reasons; all reported cached prompt tokens were zero. Prompt token
+counts matched across all four configurations. Measured rates divide total
+completion tokens by summed HTTP elapsed time, including prefill.
+
+| Configuration | HTTP tok/s | First / second process tok/s |
+| --- | --- | --- |
+| BaseRT 0.5.0, canonical Q4, speculation off | 197.402 | 199.747 / 195.111 |
+| BaseRT 0.5.0, canonical Q4, DFlash 2 cap7 | 320.994 | 322.182 / 319.814 |
+| Skippy original target, DFlash 2 cap7 | 186.912 | 186.721 / 187.102 |
+| Skippy expert-down Q4, DFlash 2 cap7 | 197.362 | 197.153 / 197.572 |
+
+The expert-down improvement reproduces across the wider prompt set, but
+matching BaseRT plain performance does not establish parity with BaseRT's
+speculative configuration. That configuration is approximately 62.6% faster
+than the tested Skippy expert-down configuration on this workload. Different
+target quantizations and token paths prevent an engine-only efficiency or
+equal-quality conclusion. The earlier plain-BaseRT comparison remains
+historical; this comparison includes an enabled DFlash 2 configuration.
+
+Only public CLI/API behavior was used. Superfluid's raw completions endpoint
+accepted the same prompt bytes. Its public metrics snapshot showed 4,465
+speculative tokens proposed and 3,010 accepted, with zero warm-prefix tokens,
+confirming speculation was active during the first DFlash process. Defaults
+for BaseRT's adaptive sizing and throughput gate were retained. Both engines
+used a seven-proposal ceiling; their controllers and kernels differ.
+
+The BaseRT drafter was converted with public `basert convert` 0.5.0 from
+`incoai/Qwen3.6-35B-A3B-DFlash2`, full revision
+`51ef7b6923ad6c14cb1bb41c37a9041446496ab6`, using `--target base-q8
+--quantize-drafter`. The converter retained 103 tensors and wrote a 636 MiB
+`.base` sidecar. Direct GGUF loading was rejected by the public loader; the
+public converter also rejected DFlash GGUF input, so conversion used the
+pinned upstream safetensors source. Skippy used the previously pinned Q8_0
+GGUF of that draft. These converter-specific Q8 representations are not
+byte-identical. The BaseRT target remains its canonical Q4 artifact from the
+public-API quality comparison above; no proprietary implementation was
+inspected or copied.
+
+Commands, conversion logs, pinned source metadata, model listings, responses,
+timings, public metrics, and audit are retained in
+`target/draft-choice-evidence/engine-comparison*` and adjacent
+`basert-draft*` files. The next performance investigation must target the
+cost of speculative verification rather than claim closure from a plain
+BaseRT baseline.

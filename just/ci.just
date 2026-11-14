@@ -212,7 +212,8 @@ test-all:
     esac
     just with-lld cargo run --quiet --manifest-path mesh/docs/plugins/exemplars/web-ui/Cargo.toml -- --print-package-manifest > target/web-ui-exemplar-manifest.json
     diff -u <(jq -S . mesh/docs/plugins/exemplars/web-ui/plugin.package.json) <(jq -S . target/web-ui-exemplar-manifest.json)
-    node --check mesh/docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
+    # The shipped bundle is an ES module; stdin avoids Node inferring CommonJS from its .js path.
+    node --input-type=module --check < mesh/docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.js
     (cd "{{ ui_dir }}" && pnpm exec tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM ../../docs/plugins/exemplars/web-ui/bundle/register-mesh-plugin-ui.ts)
     echo ""
     echo "=== 7-10/11 Parallel portable checks and builds ==="

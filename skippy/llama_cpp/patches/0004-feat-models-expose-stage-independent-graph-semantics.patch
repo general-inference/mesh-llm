@@ -1,50 +1,8 @@
-From 4bfc2133decf070953a6553afad091d0b4e950c3 Mon Sep 17 00:00:00 2001
+From 9073f69a681adfcc3dd727481218620fb6a265b7 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 04/16] feat(models): expose stage-independent graph semantics
+Subject: [PATCH 04/35] feat(models): expose stage-independent graph semantics
 
----
- src/llama-context.cpp            |  19 +-
- src/llama-context.h              |   3 +-
- src/llama-graph.cpp              | 782 +++++++++++++++++++++++++++----
- src/llama-graph.h                | 215 ++++++++-
- src/llama-kv-cache.cpp           |  18 -
- src/llama-kv-cache.h             |   5 +
- src/models/bailingmoe3.cpp       |  20 +-
- src/models/bitnet.cpp            |   4 +-
- src/models/chameleon.cpp         |  25 +-
- src/models/deepseek32.cpp        |  16 +-
- src/models/deepseek4.cpp         |  38 +-
- src/models/delta-net-base.cpp    |  21 +-
- src/models/gemma4.cpp            |   5 +-
- src/models/glm-dsa.cpp           |  70 ++-
- src/models/glm4-moe.cpp          |   9 +-
- src/models/glm4.cpp              |   9 +-
- src/models/granite-swa.cpp       |  36 +-
- src/models/granite-switch.cpp    |  53 ++-
- src/models/kimi-k3.cpp           |  14 +-
- src/models/kimi-k31.cpp          |  14 +-
- src/models/kimi-linear.cpp       |  28 +-
- src/models/lfm-base.cpp          |   4 +-
- src/models/mamba-base.cpp        |  57 ++-
- src/models/mimo2.cpp             |  15 +-
- src/models/minicpm3.cpp          |   4 +-
- src/models/minimax-01.cpp        |  13 +-
- src/models/minimax-m3.cpp        |  47 +-
- src/models/models.h              |   6 +-
- src/models/nemotron-h-moe.cpp    |  41 +-
- src/models/nemotron-h.cpp        |  11 +-
- src/models/qwen2moe.cpp          |   5 +-
- src/models/qwen35.cpp            |   3 +-
- src/models/qwen35moe.cpp         |   3 +-
- src/models/qwen3next.cpp         |   5 +-
- src/models/qwen3vl.cpp           |   3 +-
- src/models/qwen4exp.cpp          |  16 +-
- src/models/rwkv6-base.cpp        |   9 +-
- src/models/rwkv6.cpp             |   2 +-
- src/models/rwkv7-base.cpp        |   9 +-
- src/skippy/stage_realization.cpp |  15 +-
- 40 files changed, 1342 insertions(+), 330 deletions(-)
 
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
 index 7777f5b34..f6040f8cb 100644
@@ -3544,6 +3502,3 @@ index 2931268ba..c044b686b 100644
      }
  
      std::unordered_map<const ggml_tensor *, ggml_tensor *> replacements;
--- 
-2.54.0 (Apple Git-157)
-

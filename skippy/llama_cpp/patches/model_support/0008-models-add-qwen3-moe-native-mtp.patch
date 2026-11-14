@@ -1,16 +1,8 @@
-From 3abdd5b2bd7d3bda237557a228170740b46ce5c3 Mon Sep 17 00:00:00 2001
+From 384cc1b0af1a98811c4619898cff648e8aaee164 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 6 Nov 2026 10:37:00 -0800
-Subject: [PATCH 08/15] models: add Qwen3-MoE native MTP
+Subject: [PATCH 08/16] models: add Qwen3-MoE native MTP
 
----
- conversion/qwen.py         |  98 ++++++++++++++++
- gguf-py/gguf/constants.py  |  10 ++
- src/CMakeLists.txt         |   8 ++
- src/models/models.h        |   5 +
- src/models/qwen3moe.cpp    | 227 ++++++++++++++++++++++++++++++++++---
- tests/test-llama-archs.cpp |   2 +-
- 6 files changed, 331 insertions(+), 19 deletions(-)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
 index 7c9744f51..e678bd042 100644
@@ -149,10 +141,10 @@ index 5f9cbf1e3..7ed746229 100644
  
      MODEL_ARCH.FLINT: [
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index db01bc2f5..eab1c3a46 100644
+index d30267846..91df78fc9 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -256,6 +256,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -262,6 +262,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
          "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
@@ -465,10 +457,10 @@ index ce7144a22..c4cc708cd 100644
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index ab0585747..dea533e77 100644
+index db3a90b3d..6efc704fc 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -2147,7 +2147,7 @@ int main(int argc, char ** argv) {
+@@ -2154,7 +2154,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||
@@ -477,6 +469,3 @@ index ab0585747..dea533e77 100644
                      0,
                      glm_dsa_indexshare_fixture::DEFAULT,
                      256, 8, false, 2 + dense_mtp_depth, 256);
--- 
-2.54.0 (Apple Git-157)
-

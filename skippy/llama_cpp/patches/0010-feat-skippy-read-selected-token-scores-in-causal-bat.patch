@@ -1,21 +1,12 @@
-From 527096c225afeca0f942b6fb538ac9b87dd11803 Mon Sep 17 00:00:00 2001
+From b407024bd621e8ac09488c5db692322eb6fa5818 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
-Subject: [PATCH 10/16] feat(skippy): read selected token scores in causal
+Subject: [PATCH 10/35] feat(skippy): read selected token scores in causal
  batches
 
 Keep full vocabulary logits on the terminal worker and read bounded
 conditional log probabilities before another iteration can replace them.
 Readouts do not invoke samplers or advance generation history.
----
- include/skippy/execution.h           | 19 ++++++++++
- src/CMakeLists.txt                   |  4 +++
- src/skippy/execution-batch.cpp       | 52 +++++++++++++++++++++++++++-
- src/skippy/selected_logits.h         | 43 +++++++++++++++++++++++
- src/skippy/tests/selected_logits.cpp | 25 +++++++++++++
- 5 files changed, 142 insertions(+), 1 deletion(-)
- create mode 100644 src/skippy/selected_logits.h
- create mode 100644 src/skippy/tests/selected_logits.cpp
 
 diff --git a/include/skippy/execution.h b/include/skippy/execution.h
 index 7098677d8..bf9fb497c 100644
@@ -247,6 +238,3 @@ index 000000000..d33237d1a
 +    if (skippy_selected_log_probabilities(inf.data(), inf.size(), selected.data() + 1, 1, result.data())) return 8;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-

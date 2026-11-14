@@ -1,12 +1,8 @@
-From 982923d59eee72eddc1c073300ea4c2ee62c89ae Mon Sep 17 00:00:00 2001
+From e2515ecaa609b9fa268569a646d6c4dbf6d362af Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Fri, 6 Nov 2026 10:38:07 -0800
-Subject: [PATCH 13/15] models: expose Metis16 delegated pass layers
+Subject: [PATCH 13/16] models: expose Metis16 delegated pass layers
 
----
- src/models/metis16.cpp | 167 +++++++++++++++++++++--------------------
- src/models/models.h    |   3 +
- 2 files changed, 90 insertions(+), 80 deletions(-)
 
 diff --git a/src/models/metis16.cpp b/src/models/metis16.cpp
 index 8a433f3cc..6f0b32b54 100644
@@ -213,6 +209,3 @@ index 15aca9529..8c92196cd 100644
  
          // memory bank of the current forward: keys [n_mem, n_entry, n_tokens], values [n_entry, n_mem, n_tokens]
          ggml_tensor * bank_k  = nullptr;
--- 
-2.54.0 (Apple Git-157)
-

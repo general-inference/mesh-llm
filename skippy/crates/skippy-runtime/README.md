@@ -14,8 +14,9 @@ It does not own TCP transport, mesh lifecycle, or telemetry export.
 ### Experimental draft readout
 
 `SKIPPY_DFLASH_GPU_READOUT=1` attaches stateless greedy backend samplers to
-DFlash/DSpark draft lanes. Supported backends return token IDs instead of
-copying vocabulary-sized logits to the host. Missing optional sampler exports,
+DFlash/DSpark draft lanes. Supported backends select token IDs on the device,
+but the current native greedy sampler also retains its logits output, so this
+does not eliminate vocabulary-sized readback. Missing optional sampler exports,
 refused attachments, or a backend returning processed logits retain host
 argmax. DFlash2 continues to read its selector lattice. The target sampler and
 verification semantics are unchanged.

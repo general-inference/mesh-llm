@@ -227,3 +227,85 @@ Commands, raw responses, timings, request audits, native manifests, graph logs,
 and validation output are retained under `target/host-greedy-evidence/`.
 These measurements qualify the tested M5 Max workloads; they do not establish
 BaseRT parity or performance on other hardware.
+
+## Rejected draft geometry and sampler probes
+
+The next round kept the target/draft weights fixed and tested three possible
+reductions in speculative decode cost. None was retained. The control includes
+the committed host-greedy placement change above.
+
+| Probe | Control aggregate tok/s | Probe aggregate tok/s | Change |
+| --- | ---: | ---: | ---: |
+| Full 16-row trained draft block, return only six proposals | 209.663 | 136.524 | −34.88% |
+| GPU greedy readout, retain token output only | 206.476 | 206.296 | −0.09% |
+| Batch independent GPU argmax reductions, two requests | 208.542 | 212.223 | +1.77% |
+| Batch independent GPU argmax reductions, eight requests | 245.473 | 242.087 | −1.38% |
+
+These are short direct-completion coding probes, not the 512-token prompt
+benchmark above. Each process warmed one batch and measured three batches in
+ABBA fresh-process order; medians cover six batches per arm. Every request
+produced 128 tokens. Shared verification and drafting were enabled, the proposal
+limit was six, and adaptive window selection was disabled in both arms. The
+first three comparisons used two coding prompts and 8,192 total context slots;
+the eight-request comparison used eight prompts and 32,768 slots. The sampler
+comparisons enabled draft GPU readout in both arms. The batching comparison
+used the same CLI and selected saved/control and candidate native bundles.
+
+The full-block probe kept attention at the checkpoint's trained width but
+projected logits only for the requested prefix. It reduced accepted drafts on
+the Rust prompt and increased runtime. It is not evidence that the current
+shorter-block path is incorrect. The DFlash paper's
+[block-size ablation](https://arxiv.org/html/2602.06036v1#S5.SS4.SSS4)
+also treats inference width as a performance tradeoff, including smaller widths
+than training.
+
+The readout audit found that a plain native greedy sampler retains its input
+logits as an output even after selecting a token. A private interface guard
+suppressed unused logits/probability/candidate outputs when a token was
+available, preserving fallback outputs otherwise. Removing those readbacks
+alone did not improve this workload. A second probe shared one matrix argmax
+across structurally unmodified raw-logit rows, preserving filtered/remapped
+samplers. CPU and Metal numerical checks passed at vocabulary widths 19 and
+248,320, including row reordering, repeated rows, and each backend's existing
+tie behavior. A serving graph log contained six `greedy_argmax_batched` node
+lines and no individual `greedy_argmax` node lines, confirming execution of
+the proposed graph. Its mixed end-to-end result did not justify adoption.
+
+All 24 measured outputs matched across arms in each two-request comparison.
+All 96 eight-request completions succeeded, but four prompts had two output
+variants; every candidate variant also occurred in the control. This is not
+an exact-output parity qualification for the eight-request configuration.
+
+Raw responses, timings, output audits, graphs, numerical tests and rejected
+source patches are retained under `target/dflash-full-block-evidence/` and
+`target/dflash-token-only-evidence/`. The canonical source and patch queue were
+restored after these probes. Draft GPU readout remains opt-in, and the
+two-request batching result is not claimed as a shipped gain.
+
+## Adaptive window alignment lead
+
+A follow-up configuration comparison used the saved committed CLI and native
+bundle in both arms, changing only `SKIPPY_DFLASH_ADAPTIVE`: adaptive sizing
+versus fixed six-token proposals. It used the same two 128-token direct coding
+completions, shared verification/drafting, host draft readout, and ABBA method
+as the short probes above. No sampler or native batching probe was enabled.
+
+Fixed sizing reached median **206.875 aggregate tok/s**, versus **178.843**
+for adaptive sizing (**+15.67%**). All 24 measured completions produced 128
+tokens and matched exactly by prompt. Including warmups, telemetry recorded
+384 of 432 fixed-window lane verifications as shared (**88.9%**), versus
+332 of 501 adaptive-window lane verifications (**66.3%**). The adaptive arm
+was also more variable: its six measured batches ranged from 164.3 to 227.3
+tok/s, while fixed sizing ranged from 206.2 to 212.4.
+
+The scheduler currently coalesces only equal-width verification requests.
+Adaptive sizing chooses widths independently per request, so differing choices
+can prevent shared target execution. This is a candidate explanation, not an
+isolated causal proof: acceptance estimates, serial probes, and cost-model
+learning also differ between these arms. The result warrants testing aligned
+adaptive windows or compatible ragged verification, including rollback,
+sampling history, constraints, request tails, and capacity accounting. It does
+not qualify disabling adaptation by default for other prompts or loads.
+
+Raw responses, shared-verification event counts, output checks and commands
+are retained in `target/dflash-window-policy-evidence/`.

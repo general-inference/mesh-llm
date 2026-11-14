@@ -244,6 +244,39 @@ ranking needs a carefully scoped steady-decode analysis before it supports
 an optimization claim. Only Skippy was launched for profiling, with a minimal
 environment; the proprietary engine was not profiled.
 
+## Rejected post-PR #33 matrix tiling probe
+
+The current few-row MMA crossover was originally measured on an M3 Ultra.
+A sweep on the M5 Max used the actual target's five Q8 dense projection
+shapes at 1, 2, 4, 6, 8, 12, and 16 rows. Smaller K splits were generally
+slower. A finer split of 16 SIMD groups improved the 2048-input / 8192-output
+projection at 12 and 16 rows by about 8% and 16% in a repeated-weight
+microbenchmark. An experimental native patch restricted that choice to this
+geometry, 12–16 rows, and M5 Max, retaining all normal resource limits.
+
+The candidate passed 41 GPU-versus-CPU numerical cases, including each
+changed row count and the 11/17-row boundaries. A full decoder ABBA comparison
+used the same release CLI, target/draft weights, and shared-verification
+configuration on both arms. Each fresh process first completed two simultaneous
+fixed 128-token prompts, then ran the PP512/TG256 benchmark with two warmups
+and three measured batches per concurrency. All eight fixed outputs matched
+byte for byte, and all 36 measured requests completed without reported errors.
+Ordinary EOS ended one control request at 238 tokens and one candidate request
+at 190; the other 34 produced 256. Prompt strings varied between batches.
+
+| Decode workload | Qualified control tok/s | Tiling candidate tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 133.806 | 130.841 | -2.22% |
+| Two requests, aggregate | 184.960 | 181.395 | -1.93% |
+
+These medians show no useful end-to-end gain. The single-request difference,
+where the changed geometry is largely absent, also illustrates process/text
+variation. The experiment does not prove a causal 2% regression, but it does
+not justify changing defaults. The patch was removed from the active queue,
+the qualified runtime bundle was restored, and the original queue replayed
+cleanly. Raw commands, numerical cases, sweep results, runtime bundles,
+manifests, and the rejected patch remain under `target/mma-tiling-evidence/`.
+
 ## Host greedy placement on M5 Max
 
 Core patch `0021-metal-prefer-host-greedy-sampling-on-qualified-share.patch`

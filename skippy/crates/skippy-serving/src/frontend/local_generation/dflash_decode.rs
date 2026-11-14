@@ -16,8 +16,8 @@ use crate::frontend::speculative::InferenceSpeculativeStats;
 use crate::frontend::util::openai_backend_error;
 
 use super::dflash_block_size::{
-    Acceptance, BlockCost, adaptive_enabled, choose_block, record_shared, record_shared_serial,
-    shared_model,
+    Acceptance, BlockCost, adaptive_enabled, aligned_block, choose_block, record_shared,
+    record_shared_serial, shared_model,
 };
 use super::token_generation::DecodeState;
 
@@ -73,6 +73,8 @@ pub(in crate::frontend) struct AdaptiveBlocks {
     /// Shared submissions optimize aggregate execution cost. Queue residence
     /// belongs to peer work and must not distort the fit against row count.
     service_cost: bool,
+    /// Coordinate widths only when both draft and verification can be shared.
+    align_windows: bool,
 }
 
 impl AdaptiveBlocks {
@@ -89,6 +91,7 @@ impl AdaptiveBlocks {
             serial_started: None,
             paused: false,
             service_cost: false,
+            align_windows: false,
         }
     }
 
@@ -100,6 +103,7 @@ impl AdaptiveBlocks {
         key.push("#shared-draft-service");
         let mut blocks = Self::new(PathBuf::from(key));
         blocks.service_cost = true;
+        blocks.align_windows = crate::frontend::iteration_scheduler::shared_verification::enabled();
         blocks
     }
 
@@ -175,7 +179,12 @@ impl AdaptiveBlocks {
         if self.windows > 0 && !self.cost.serial_measured() {
             return 0;
         }
-        let chosen = choose_block(&self.cost, &self.acceptance, limit, self.windows);
+        let chosen = if self.align_windows && self.load.0 > 1 {
+            aligned_block(&self.draft_model_path, self.load.0, limit)
+                .unwrap_or_else(|| choose_block(&self.cost, &self.acceptance, limit, self.windows))
+        } else {
+            choose_block(&self.cost, &self.acceptance, limit, self.windows)
+        };
         if chosen > 0 {
             self.serial_since_probe = 0;
             return chosen;
@@ -576,6 +585,39 @@ mod tests {
 
     use super::*;
     use crate::frontend::NativeMtpVerifyWindowDecision;
+
+    #[test]
+    fn concurrent_alignment_does_not_replace_single_lane_or_unshared_choices() {
+        let path = PathBuf::from("/test/concurrent-width-policy.gguf");
+        let make = |accepted| {
+            let mut blocks = AdaptiveBlocks::new(path.clone());
+            for rows in [3, 5, 7] {
+                blocks
+                    .cost
+                    .observe_verify(rows, 20_000.0 + rows as f64 * 1_000.0);
+            }
+            blocks.cost.observe_draft(2_000.0);
+            blocks.cost.observe_serial(30_000.0);
+            blocks.cost.observe_serial(30_000.0);
+            for _ in 0..20 {
+                blocks.acceptance.observe(6, accepted);
+            }
+            blocks
+        };
+        let mut good = make(6);
+        let mut poor = make(0);
+        good.align_windows = true;
+        poor.align_windows = true;
+        assert_ne!(good.next_drafts(6), poor.next_drafts(6));
+        good.load.0 = 2;
+        poor.load.0 = 2;
+        assert_eq!(good.next_drafts(6), poor.next_drafts(6));
+        assert_eq!(poor.next_drafts(2), 2);
+        assert_eq!(good.next_drafts(6), 6);
+        good.align_windows = false;
+        poor.align_windows = false;
+        assert_ne!(good.next_drafts(6), poor.next_drafts(6));
+    }
 
     #[test]
     fn serial_choices_pause_drafting_until_a_probe_is_due() {

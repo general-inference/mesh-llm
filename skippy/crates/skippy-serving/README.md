@@ -57,6 +57,14 @@ remains in request latency telemetry; it is excluded from the cost fit, so a
 peer's work cannot be mistaken for a more expensive draft width. These
 estimates are stored separately from the existing local and split estimates.
 
+When both switches and adaptive sizing are enabled, concurrent lanes use
+aggregate acceptance and keep one width for eight observed windows per lane.
+This lets the target batch their verification rather than fragmenting it with
+independent width choices. Request tails retain their own smaller limits, and
+serial choices are reconsidered after a draft probe. Single-lane and split
+requests keep the existing per-request policy. Sampling, checkpoint and repair
+ownership remain per session.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh

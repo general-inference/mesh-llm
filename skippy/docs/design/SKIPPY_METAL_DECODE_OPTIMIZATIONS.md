@@ -309,3 +309,64 @@ not qualify disabling adaptation by default for other prompts or loads.
 
 Raw responses, shared-verification event counts, output checks and commands
 are retained in `target/dflash-window-policy-evidence/`.
+
+## Align adaptive widths for shared verification
+
+Concurrent local DFlash requests now use aggregate acceptance and one cached
+width for eight observed windows per lane when both shared drafting and shared
+verification are enabled. Cost learning stays isolated by draft model and
+active lane count. Decisions are cached separately for each proposal limit,
+so a request tail cannot shorten its peers. A serial decision is reconsidered
+after the next draft probe. Single-lane, unshared and split paths retain their
+per-request selection. Each session retains ownership of its sampling,
+checkpoints and repair; the verifier receives its selected window without
+padding. There is no new public API or ABI.
+
+This changes the **policy**, rather than padding native verification windows.
+Padding could advance a stateful sampler beyond a request's original window;
+the aligned policy submits only the token rows the request actually selected.
+Both shared switches remain opt-in.
+
+Control is `18e4e04e6`; candidate adds this policy. Both arms use the same native
+bundle (patch digest `9bdd0ef972dd5488927f604413d927ed880ea611c2b7c5e6a4bca14f417f8a54`),
+weights, context/batch limits, host draft readout, six-token proposal limit and
+adaptive sizing. Each arm has two fresh processes, in ABBA order.
+
+| Workload | Control aggregate tok/s | Candidate aggregate tok/s | Change |
+| --- | ---: | ---: | ---: |
+| Two short coding prompts, 128 tokens each | 191.055 | 214.662 | +12.36% |
+| Two requests, 512-token prompts, 256 generated tokens | 138.165 | 162.787 | +17.82% |
+
+The short probe warms one pair and measures three pairs per process. All 24
+measured outputs match exactly by prompt. Including warmups, shared verification
+covers 402 of 555 control lane-windows (72.4%) and 444 of 487 candidate
+lane-windows (91.2%).
+
+The longer pinned llama-benchy probe warms twice and measures three batches at
+each concurrency per process. All 36 measured requests completed all 256 tokens
+without errors. Its single-request medians are 123.387 and 125.606 tok/s; the
+wide run-to-run variation does not establish a single-request gain. Eight
+additional fixed 64-token outputs also matched exactly by prompt.
+
+An eight-request comparison is **inconclusive**: both candidate processes
+completed their six measured batches (48 requests), but the last control
+process returned HTTP 502 during its first measured batch. A separate fresh
+control process with error bodies retained reproduced
+`linear proposal repair failed and the session was retired: RuntimeError:
+failed to trim hybrid memory suffix`. Both failures occurred in the control
+binary. This demonstrates a control-path rollback defect, not its root cause
+or that the candidate fixes it. No eight-request speedup or exact-output parity
+is claimed from this interrupted comparison. Higher-concurrency rollback
+qualification remains outstanding.
+
+The serving suite passed 1,201 tests with 18 existing opt-in tests ignored.
+Focused policy tests cover stable intervals, row-count exploration, limits,
+serial-probe reconsideration, lane isolation, and the unchanged single-lane
+and unshared choices. Skippy-serving and Mesh checks and warning-denying Clippy,
+workspace formatting, and the no-console-print contract passed.
+
+Evidence is retained in `target/dflash-aligned-window-evidence/`, including
+saved binaries/hashes, commands, native manifest, raw responses, progress
+events, output audits, test output and the interrupted/diagnostic eight-request
+runs. These results qualify the tested two-request workloads; BaseRT parity
+and performance at other loads remain unproven.

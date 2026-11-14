@@ -14,6 +14,22 @@ pub struct VerifyBatchRequest<'a> {
 }
 
 impl StageSession {
+    /// Actual native capacity after backend allocation and batch clamping.
+    /// The upstream context metadata functions share the optional draft API
+    /// table; absent exports keep scheduler verification on its serial path.
+    pub fn verification_batch_capacity(&self) -> Option<usize> {
+        let api = skippy_ffi::llama_draft::llama_draft_api()?;
+        let context = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) }
+            .cast::<skippy_ffi::Opaque>();
+        if context.is_null() {
+            return None;
+        }
+        let capacity = unsafe { (api.n_ubatch)(context).min((api.n_batch)(context)) };
+        usize::try_from(capacity)
+            .ok()
+            .filter(|capacity| *capacity > 0)
+    }
+
     /// Shares one target forward across compatible speculative windows.
     /// Each result stops at that lane's first rejection. The caller must trim
     /// or retire each window, as with single-session sampled verification.

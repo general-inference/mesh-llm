@@ -26,6 +26,8 @@ pub mod panic_recovery;
 mod restore_transaction;
 mod session_end_exports;
 mod state_transfer;
+mod verification_batch;
+pub(crate) use verification_batch::RuntimeVerificationRequest;
 
 pub use lifecycle::{SessionLifecycleEvent, SessionLifecycleObserver};
 

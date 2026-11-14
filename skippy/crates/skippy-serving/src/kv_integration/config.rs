@@ -2257,6 +2257,7 @@ mod reserved_admission_harness {
     /// recurrent state; session-end admission checks the radix again.
     #[test]
     fn a_deferred_capture_goes_ahead_on_a_miss_or_a_busy_radix() {
+        skippy_runtime::test_support::require_native_runtime();
         let (kv, config) = harness();
         let mut runtime = RuntimeState::new_modelless_for_test(1);
         let chat_identity = identity(&kv, &config, &[1, 2, 3]);

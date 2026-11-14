@@ -33,7 +33,8 @@ remain opt-in pending repeatable end-to-end gains.
 equal-length speculative windows. Each lane retains its own sampling history,
 checkpoint and rejection boundary. Callers must resolve every window through
 trim or retirement. This API is initially exercised by the concurrent DFlash
-diagnostic; serving still uses independent verification.
+diagnostic. Serving can opt into scheduler coalescing with
+`SKIPPY_SHARED_VERIFY=1`; see the serving crate's README.
 
 The default remains host readout until matched parity and performance trials
 qualify the backend path. `StageModel::dflash_backend_readout_rows` distinguishes

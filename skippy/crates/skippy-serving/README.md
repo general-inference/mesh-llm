@@ -29,6 +29,22 @@ library's ABI as well. This entry point uses local bundles/cache only; acquisiti
 is explicit. Static native test builds retain their existing linked-runtime path.
 This adds native startup, not model-reference resolution or clean-install proof.
 
+## Experimental shared speculative verification
+
+`SKIPPY_SHARED_VERIFY=1` lets the iteration scheduler combine equal-length
+verification windows from independent sessions on a complete causal target.
+It requires native ABI `0.1.82`. Each lane keeps its own sampler, checkpoint,
+rejection boundary and repair. Unsupported models and batches exceeding the
+actual native microbatch capacity use independent verification.
+
+The scheduler waits at most 300 microseconds of idle time to collect a wave;
+useful draft and repair work does not consume that waiting budget. Repairs are
+barriers for their own session; unscoped runtime mutations remain global
+barriers. Cancellation and stale-position checks run before target execution.
+`stage.shared_verification` telemetry records actual shared forwards and their
+batch size. Mesh embeds this same scheduler. The switch remains opt-in while
+serving workloads are validated.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh

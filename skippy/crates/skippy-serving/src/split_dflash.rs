@@ -619,6 +619,7 @@ mod tests {
 
     #[test]
     fn a_draft_device_this_node_lacks_falls_back_to_the_target_device() {
+        skippy_runtime::test_support::require_native_runtime();
         assert_eq!(draft_device_on_this_node(None), None);
         assert_eq!(draft_device_on_this_node(Some("NoSuchDevice9")), None);
     }

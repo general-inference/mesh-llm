@@ -168,38 +168,55 @@ impl StageOpenAiBackend {
         let base_position = params.base_position;
         let generated_len = params.generated_len;
         let max_new_tokens = params.max_new_tokens;
-        let verification = self.iteration_scheduler.execute_runtime_timed(
-            "linear-proposal-verify",
-            move |runtime| {
-                let observed_position =
-                    runtime.session_token_count(&session_id).ok_or_else(|| {
-                        InferenceError::backend("linear proposal session is not active")
-                    })?;
-                if observed_position != base_position {
-                    return Ok(None);
-                }
-                let predictions = runtime
-                    .verify_tokens_sampled(&session_id, &owned_verify_inputs, sampling.as_ref())
-                    .map_err(openai_backend_error)?;
-                let decision = classify_native_mtp_verify_window(
-                    &owned_proposal_tokens,
-                    &predictions,
-                    generated_len,
-                    max_new_tokens,
-                    |token| {
-                        runtime
-                            .model
-                            .token_is_eog(token)
-                            .map_err(openai_backend_error)
-                    },
-                )?;
-                let position_after_verification =
-                    runtime.session_token_count(&session_id).ok_or_else(|| {
-                        InferenceError::backend("linear proposal session disappeared")
-                    })?;
-                Ok(Some((predictions, decision, position_after_verification)))
-            },
-        )?;
+        let finish_session_id = session_id.clone();
+        let finish = move |runtime: &mut crate::runtime_state::RuntimeState,
+                           predictions: Vec<i32>| {
+            let decision = classify_native_mtp_verify_window(
+                &owned_proposal_tokens,
+                &predictions,
+                generated_len,
+                max_new_tokens,
+                |token| {
+                    runtime
+                        .model
+                        .token_is_eog(token)
+                        .map_err(openai_backend_error)
+                },
+            )?;
+            let position = runtime
+                .session_token_count(&finish_session_id)
+                .ok_or_else(|| InferenceError::backend("linear proposal session disappeared"))?;
+            Ok((predictions, decision, position))
+        };
+        let verification = if crate::frontend::iteration_scheduler::shared_verification::enabled() {
+            self.iteration_scheduler.execute_verification_timed(
+                crate::runtime_state::RuntimeVerificationRequest {
+                    session_id,
+                    token_ids: owned_verify_inputs,
+                    sampling,
+                    base_position,
+                },
+                cancellation,
+                finish,
+            )?
+        } else {
+            self.iteration_scheduler.execute_runtime_timed(
+                "linear-proposal-verify",
+                move |runtime| {
+                    let observed_position =
+                        runtime.session_token_count(&session_id).ok_or_else(|| {
+                            InferenceError::backend("linear proposal session is not active")
+                        })?;
+                    if observed_position != base_position {
+                        return Ok(None);
+                    }
+                    let predictions = runtime
+                        .verify_tokens_sampled(&session_id, &owned_verify_inputs, sampling.as_ref())
+                        .map_err(openai_backend_error)?;
+                    finish(runtime, predictions).map(Some)
+                },
+            )?
+        };
         let verification_lock_wait_us = millis_to_micros(verification.runtime_lock_wait_ms);
         let verification_lock_hold_us = millis_to_micros(verification.runtime_lock_hold_ms);
         let execution = verification.value;
@@ -309,7 +326,8 @@ impl StageOpenAiBackend {
         let chat_sampling_metadata = chat_sampling_metadata.map(str::to_string);
         if canonical_position >= position_after_verification {
             let retire_timer = Instant::now();
-            let outcome = self.iteration_scheduler.execute_runtime_timed(
+            let outcome = self.iteration_scheduler.execute_lane_runtime_timed(
+                session_id.clone(),
                 "linear-proposal-retire",
                 move |runtime| {
                     runtime
@@ -331,7 +349,8 @@ impl StageOpenAiBackend {
         }
 
         let repair_timer = Instant::now();
-        let outcome = self.iteration_scheduler.execute_runtime_timed(
+        let outcome = self.iteration_scheduler.execute_lane_runtime_timed(
+            session_id.clone(),
             "linear-proposal-repair",
             move |runtime| {
                 if let Err(error) = runtime.trim_session(&session_id, canonical_position) {

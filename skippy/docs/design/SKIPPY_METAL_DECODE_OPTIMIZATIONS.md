@@ -1668,3 +1668,37 @@ resolve the inherited native gate's missing ASR/diffusion targets or substitute
 for a whole-workspace test run. The converter remains experimental pending
 isolated serving qualification. No affine serving recipe or default is
 promoted. Evidence is in `target/affine-code-layout-evidence/`.
+
+## Dense affine format screening on M4
+
+Jianyang job `job_nbtr6z2fftgpd91` succeeded on the Dan-lab M4 mini with
+source snapshot `bb636ca76a4739adcd2c6116b2e3ff95981d389d`. Its tree
+`fb26abdbe203b6f8e15007fbff2e150ab6015336` equals branch commit `86474d10d`;
+the snapshot gives the private lab transfer a valid Git commit without
+publishing the branch. All 45 actual Metal CPU-reference cases passed.
+
+Five loaded-model dense geometries were screened at 1/8/16 activation rows
+using Q8_0, Q5_1 and Q4_1. Four fresh performance processes used forward,
+reverse, reverse, forward case order. These are repeated-weight operation
+latencies, not serving throughput, equal-weight quality comparisons or DRAM
+bandwidth measurements. The host was on AC power, with no reported thermal
+warning at completion. Downloads and artifact retrieval preserve SHA-256
+checksums. No new native dispatch or format default was introduced.
+
+| Inner / output dimensions | Q5_1 vs Q8_0 latency, 8 / 16 rows | Q4_1 vs Q8_0 latency, 8 / 16 rows |
+| --- | --- | --- |
+| 2048 / 4096 | +8.53% / +17.99% | -34.31% / -1.67% |
+| 2048 / 8192 | -6.65% / +15.40% | -41.52% / -6.87% |
+| 512 / 2048 | +51.92% / +20.65% | -11.27% / +1.05% |
+| 2048 / 512 | +67.06% / +11.10% | +6.31% / +3.75% |
+| 4096 / 2048 | +14.37% / +17.56% | -29.24% / +2.26% |
+
+Q5_1 often improves one-row latency but does not justify a blanket change for
+speculative verification widths. Q4_1 is a more promising eight-row candidate
+for the larger projections; sixteen-row gains are small or absent. A next
+experimental plan targets only 110 main-decoder Q8 large dense tensors and
+preserves 643 tensors, including smaller shared-expert matrices, routers, MTP
+and the output head. This plan has no model quality or serving qualification
+yet and is not promoted to a product recipe. Raw correctness/performance
+logs, the exact cases and source pins, checksummed artifacts, and analysis
+are in `target/dense-affine-format-evidence/`.

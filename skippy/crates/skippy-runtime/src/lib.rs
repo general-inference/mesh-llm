@@ -32,6 +32,7 @@ mod stage_planning;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 mod types;
+pub mod verification_batch;
 mod vocabulary;
 
 pub use activation::{

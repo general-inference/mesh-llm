@@ -105,10 +105,17 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.81`. The patch header in
+The staged ABI is versioned as `0.1.82`. The patch header in
 `skippy/llama_cpp/patches/` and the Rust constants in
 `skippy/crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
+
+ABI `0.1.82` adds `skippy_verify_request` and
+`skippy_verify_batch_sampled` for independent speculative windows sharing one
+target forward. The function requires equal window lengths on a complete
+terminal model and bounds the combined input to one native microbatch.
+Existing public signatures and fields are unchanged; removed declarations:
+none.
 
 ABI `0.1.81` explicitly admits auxiliary device capture outputs while retaining
 exact-graph write validation, required by direct device feature handoff.

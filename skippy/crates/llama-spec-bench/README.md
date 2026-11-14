@@ -138,3 +138,11 @@ stops at its first mismatch because sampled verification intentionally does
 not sample a rejected suffix. It fails on a difference unless
 `--allow-mismatch` explicitly requests a diagnostic report. No throughput
 claim should use that diagnostic mode.
+
+For two concurrent DFlash lanes, provide two prompts and `--dflash-lanes 2`.
+The control verifies each lane independently; `--shared-verify` combines
+equal-length windows using native ABI `0.1.82`. Both arms include proposing,
+verification, repair, and bookkeeping in `decode_wall_ms`, and report total
+output throughput across the lanes. The report records shared versus single
+forwards and the output tokens of each lane for exact comparison. This is a
+runtime diagnostic, not a measurement of the serving scheduler.

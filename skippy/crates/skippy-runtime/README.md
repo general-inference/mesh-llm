@@ -28,6 +28,13 @@ keep the host feature path. This requires native ABI `0.1.81`, whose graph
 admission explicitly validates auxiliary capture writes. Both optimizations
 remain opt-in pending repeatable end-to-end gains.
 
+`StageSession::verify_batch_sampled` accepts requests from
+`verification_batch::VerifyBatchRequest` and shares a target forward across
+equal-length speculative windows. Each lane retains its own sampling history,
+checkpoint and rejection boundary. Callers must resolve every window through
+trim or retirement. This API is initially exercised by the concurrent DFlash
+diagnostic; serving still uses independent verification.
+
 The default remains host readout until matched parity and performance trials
 qualify the backend path. `StageModel::dflash_backend_readout_rows` distinguishes
 observed token rows from host fallbacks; attachment alone is not evidence of

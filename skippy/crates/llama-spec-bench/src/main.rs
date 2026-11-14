@@ -13,6 +13,7 @@ use skippy_runtime::{
     StageSession,
 };
 
+mod concurrent_dflash;
 mod dflash;
 mod verify_reference;
 
@@ -56,6 +57,12 @@ struct Args {
     /// Diagnose batched verification on the serial baseline's exact inputs.
     #[arg(long)]
     verify_reference: bool,
+    /// Concurrent DFlash lanes; provide exactly one prompt per lane.
+    #[arg(long, default_value_t = 1)]
+    dflash_lanes: usize,
+    /// Combine equal-length concurrent verify windows in one target forward.
+    #[arg(long)]
+    shared_verify: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +210,17 @@ fn main() -> Result<()> {
     if prompts.is_empty() {
         bail!("prompt set is empty");
     }
+    if args.dflash_lanes == 0
+        || (args.dflash_lanes > 1
+            && (!args.dflash || prompts.len() != args.dflash_lanes || args.verify_reference))
+    {
+        bail!(
+            "concurrent DFlash requires --dflash, one prompt per lane, and no --verify-reference"
+        );
+    }
+    if args.shared_verify && args.dflash_lanes < 2 {
+        bail!("--shared-verify requires multiple DFlash lanes");
+    }
 
     eprintln!(
         "loading target={} draft={} prompts={} ctx={} max_new_tokens={} window={}",
@@ -216,6 +234,8 @@ fn main() -> Result<()> {
 
     let mut target_config =
         full_model_config(&args.target_model_path, args.ctx_size, args.n_gpu_layers)?;
+    target_config.lane_count =
+        u32::try_from(args.dflash_lanes).context("lane count exceeds u32")?;
     target_config.recurrent_rollback_tokens = args.recurrent_rollback_tokens.unwrap_or_else(|| {
         if args.dflash {
             u32::try_from(args.speculative_window.saturating_add(1)).unwrap_or(u32::MAX)
@@ -236,6 +256,9 @@ fn main() -> Result<()> {
         return verify_reference::run(&args, &target, &baselines);
     }
     let draft = load_draft(&args, &mut target, &target_config)?;
+    if args.dflash_lanes > 1 {
+        return concurrent_dflash::run(&args, &target, &prompts, &baselines);
+    }
 
     let mut reports = Vec::with_capacity(prompts.len());
     for (index, (prompt, baseline)) in prompts.iter().zip(baselines).enumerate() {

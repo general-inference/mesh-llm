@@ -1738,3 +1738,18 @@ inspector output, checkpoint/artifact hashes, the diagnostic writer, payload
 audit, exact prompts, correctness reports and acceptance counts are retained
 in `target/draft-selector-precision-evidence/` and the public draft metadata
 files under `target/draft-choice-evidence/`.
+
+A follow-up width screen kept the original Q8 selector and compared proposal
+caps three, five and seven. All eight 128-token prompts matched their serial
+targets in each process. Caps 3/5/7 required 319/259/230 speculative windows,
+accepted 704/763/792 tokens, and proposed 948/1277/1564. Mean draft time per
+window was 4.407/4.538/4.624 ms, whereas target time was
+15.180/17.752/19.622 ms. The smaller blocks needed enough extra windows to
+lose their lower per-window target cost. Isolated runtime rates were
+163.825/177.268/183.492 tok/s, with serial baselines 97.739/99.930/98.198.
+These unbalanced processes are a screening result, not a causal serving
+speedup qualification. They give no reason to lower the cap or prioritize a
+row-dependent draft-time fit. They also illustrate why proposal acceptance
+percentages cannot be compared without accounting for proposal widths:
+the shortest, slower arm has the highest percentage. The controller remains
+unchanged. Reports are in `width-screening.json` beside the selector evidence.

@@ -1702,3 +1702,39 @@ and the output head. This plan has no model quality or serving qualification
 yet and is not promoted to a product recipe. Raw correctness/performance
 logs, the exact cases and source pins, checksummed artifacts, and analysis
 are in `target/dense-affine-format-evidence/`.
+
+## DFlash 2 selector precision diagnostic
+
+The public BaseRT 0.5 inspector reports that its converted Q8 DFlash 2
+sidecar retains `candidate_selector.hidden_projection.weight` and both
+selector codebooks as F16. The Skippy Q8_0 GGUF stores the corresponding
+three tensors in Q8_0. This public metadata difference suggested checking
+whether selector quantization materially reduced proposal acceptance; it
+does not reveal or establish an engine implementation difference.
+
+An experimental draft restored only these three tensors from the original
+open BF16 checkpoint, revision `51ef7b6923ad6c14cb1bb41c37a9041446496ab6`.
+A temporary C++ diagnostic used public GGML/GGUF APIs to write the mixed
+artifact. Independent full-payload hashing verified that the other 93 tensor
+payloads and shapes remain unchanged. BF16-to-F16 conversion's maximum
+absolute rounding difference was 2.98023223877e-08. The draft grew from
+570,468,544 to 690,153,664 bytes; its SHA-256 is
+`326649243b7277d4522c8cf86eeb2445bec6d080fe53052252e8f64e1c951812`.
+No proprietary format reader, engine code or kernels were copied.
+
+With frozen native B600, the same expert-down target, a seven-proposal limit,
+eight coding prompts and 128 output tokens per prompt, both drafts matched
+their serial target on all eight prompts. Token IDs also matched across
+arms. The Q8 selector accepted 792 of 1,564 proposals in 230 windows; the F16
+selector accepted 793 of 1,562 in 229 windows. Thus this probe gains only one
+accepted token over 1,024 generated tokens and does not explain the large
+acceptance or throughput gap. The attached-draft teacher-forcing diagnostic
+also matched 128 serial target positions, but that separate diagnostic does
+not run draft proposals or rollback.
+
+These two unbalanced runtime processes do not qualify a causal speedup.
+Selector precision is not promoted to a product recipe or default. Public
+inspector output, checkpoint/artifact hashes, the diagnostic writer, payload
+audit, exact prompts, correctness reports and acceptance counts are retained
+in `target/draft-selector-precision-evidence/` and the public draft metadata
+files under `target/draft-choice-evidence/`.

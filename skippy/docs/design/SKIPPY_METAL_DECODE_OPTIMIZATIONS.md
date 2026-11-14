@@ -1527,3 +1527,134 @@ frozen control byte-for-byte, and the rebuilt backend-test executable is also
 byte-identical to its pre-probe control. Restoration audit and build logs are
 under `target/routed-geometry-matrix-evidence/`. No rejected dispatch change
 remains in the native patch queue.
+
+## Rejected 32x8 routed tensor tile
+
+A separate short-batch grouped Q4_K kernel used a 32-output/8-entry tensor
+tile, two SIMD groups, and a 32-value inner step. The existing compact routing
+map was specialized to eight-entry descriptors. Scratch sizing reserved the
+corresponding tile-count bound, including dense/duplicate expert reuse. The
+path was restricted to M5 Max shared buffers with tensor API support,
+contiguous F32 activations, supported routing widths, and 8–31 token rows;
+other paths retained their original kernels.
+
+The new capability was prototyped in its own 0044 patch, separately from the
+0042 vector activation-reuse capability. The GPU smoke test first caught a
+signed/unsigned function-constant mismatch, which was corrected before timing.
+Hardware/shape dispatch checks passed. Then 32 actual CPU-reference Metal
+routing cases passed, covering both target expert geometries, broadcast and
+per-expert inputs, rows 7/8/9/16/31/32, dense expert reuse, duplicate/negative
+IDs, odd output tails, strided weights, and offset ID views. The test selection
+was corrected to the backend's actual `MTL` registry name; zero-selected-case
+runs are excluded from qualification.
+
+Repeated-weight ABBA timings improved expert-down latency by about 61% at
+eight rows and 72% at sixteen; tall-projection latency increased by 4.5–5.2%
+at eight rows and fell about 36% at sixteen. These microbenchmarks did not
+predict a serving gain. A full fresh-process ABBA comparison used the same
+expert-down target, DFlash 2 cap7, eight prompts at concurrency one and paired
+at concurrency two, one warmup cycle and three measured cycles/concurrency.
+All 256 requests completed 128 tokens; 192 were measured, with no cache hits.
+
+| Concurrency | Retained tok/s | Short tile tok/s | Change |
+| --- | --- | --- | --- |
+| 1 | 199.402 | 191.594 | -3.92% |
+| 2 aggregate | 231.829 | 228.344 | -1.50% |
+
+Single-request processes were consistent: 199.189/199.615 for controls versus
+191.494/191.694 for the probe. One candidate single-request prompt had two
+measured text variants. Every prompt was stable within each two-request arm,
+but output text differed between arms. The probe is rejected. Its runtime
+source pin was `c3ae4773a85f2a04db9331bb0519d8c799563d74`; the subsequent
+`MTL` test-selection correction changes only the test executable.
+
+The measured patch, corrected test-reproduction patch, native runtime,
+commands, numerical and timing logs, raw responses, and audits are archived in
+`target/routed-short-tile-evidence/`. The 0044 prototype is removed from the
+active queue and native B600 restored. The repeated-weight gains alone do not
+justify replacing routed vector work in the serving path.
+
+## Device feature capture and broader precision qualification
+
+With restored native B600, the existing opt-in device feature path was
+checked directly using the runtime benchmark. With the expert-down target,
+DFlash 2 cap7 and one 128-token coding prompt, the counter reported 203 target
+rows consumed from device capture and the generated token IDs matched the
+serial target. These checks establish active device ingestion on that smoke;
+its isolated runtime timing is not an HTTP throughput comparison.
+
+A fresh ABCDDCBA comparison then tested four combinations: expert-down-only
+versus broad dense/head/down Q4 target, each with host feature ingestion
+(`SKIPPY_DFLASH_DEVICE_FEATURES=0`) versus device ingestion (`=1`). All other
+settings stayed fixed: native B600, same release CLI and Q8 DFlash 2 cap7,
+default adaptive/shared execution, f16 KV, disabled caches, eight raw coding
+prompts at concurrency one then paired at concurrency two. Each process ran
+one warmup cycle and three measured cycles/concurrency. All 512 requests
+completed 128 tokens without cache hits; 384 were measured.
+
+| Target / feature path | Concurrency 1 HTTP tok/s | Concurrency 2 aggregate tok/s |
+| --- | --- | --- |
+| Expert-down Q4 / host | 198.917 | 231.622 |
+| Expert-down Q4 / device | 201.091 | 230.568 |
+| Dense/head/down Q4 / host | 177.386 | 223.712 |
+| Dense/head/down Q4 / device | 196.697 | 220.348 |
+
+For the expert-down target, device features changed rates by +1.09% and
+-0.46%; measured text matched between host/device at both concurrencies.
+For the broader target they changed rates by +10.89% and -1.50%. The broader
+single-request results have target-text variation: host repeats have two
+variants on two prompts and device repeats have two on one prompt; text
+is not identical across the two arms. At concurrency two, each broader-target
+prompt is stable and text matches across feature paths. That broader
+single-request point estimate is not an identical-output speedup.
+
+Even with device features, the broader target does not beat the expert-down
+host baseline (-1.12% at one request, -4.87% at two). The precision recipes
+remain workload-qualified; neither broader precision reduction nor device
+capture closes the BaseRT speculative gap. Device features remain opt-in;
+this study does not change the default. Commands, primitive offload counters,
+responses, timings and audit are in `target/dflash-device-feature-evidence/`.
+
+## Experimental code-preserving affine expert layout
+
+Core patch 0044 adds a separate quantizer capability: Q4_K to Q4_1 conversion
+that preserves each 32-value group's integer codes and rounds its decoded
+scale and offset to f16. This is not a lossless weight transformation. The
+ordinary quantizer remains in use when calibration is supplied or an affine
+coefficient cannot be represented finitely. No serving kernels or public ABI
+change. This capability is independent of patch 0003's model-loading changes.
+
+The experimental artifact starts from the qualified expert-down Q4 target
+(SHA-256 `4ad842f4ed3ef1070d7818d95163e47402e7de17c79ecb85a0e272aab3ae52f5`).
+It converts 117 routed expert tensors and preserves the remaining 636 tensor
+payloads byte-for-byte. Its size is 23,384,807,712 bytes, SHA-256
+`e7b415ddddfa7bd8348d643534cd559313a9831f332466cfc68ba2cd40dec7d3`.
+Each converted tensor grows 11.11%; the complete model grows 9.16%.
+Independent full-payload auditing verified all 31,406,948,352 integer codes.
+Public GGML dequantization of 122,234,112 sampled weights measured relative
+squared error 4.12888849149e-07 and maximum absolute difference
+0.000137329101562. Native unit tests cover 1,280 randomized blocks, batch
+boundaries, output sentinels, invalid lengths, and coefficient overflow.
+
+The same 128-chunk quality corpus gives perplexity 6.658400 versus 6.657436
+for the parent and 6.644816 for the original compressed target. Mean KL
+against the original is 0.008213 and top-token agreement 96.403% over 32,640
+scored positions. This single corpus does not establish general quality
+equivalence. Repeated-weight microbenchmarks show lower Q4_1 latency, but
+they do not establish a serving gain.
+
+A first eight-prompt ABBA serving run measured 179.123 versus 197.539 HTTP
+tok/s at concurrency one, and 202.138 versus 242.107 aggregate at two.
+Both arms used frozen native B600, the same CLI, DFlash 2 cap7 and f16 KV.
+The controls were slower than earlier runs, so these results are provisional.
+A subsequent comparison is explicitly invalid for speed qualification:
+single-request parent controls collapsed from 169.501 to 90.673 tok/s while
+concurrent unrelated local `maxd` activity was observed (about 30 GB RSS and
+substantial CPU use). These observations do not establish GPU utilization or
+prove the entire cause. All 78 power snapshots showed battery power. Its
+pooled percentages must not be used as causal gains or evidence of BaseRT
+parity. Raw responses and invalidation metadata are retained for diagnosis.
+
+The converter remains experimental pending isolated serving qualification,
+cross-host validation and final product checks. No affine serving recipe or
+default is promoted. Evidence is in `target/affine-code-layout-evidence/`.

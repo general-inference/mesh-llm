@@ -1,0 +1,211 @@
+From 4ba36719fdf9442fabdad20272d3824097bb25ad Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 15 Nov 2026 07:46:13 +1100
+Subject: [PATCH] quant: preserve affine codes in Q4_K to Q4_1 conversion
+
+Transplant the existing 32-value integer grids and round only their affine coefficients to f16. Keep the ordinary quantizer when calibration is supplied or a coefficient cannot be represented. This format conversion is independent of the model-loading adjustments in patch 0003.
+---
+ src/llama-quant-affine.h       | 42 ++++++++++++++++
+ src/llama-quant.cpp            | 16 +++++--
+ tests/CMakeLists.txt           |  1 +
+ tests/test-quantize-affine.cpp | 88 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 143 insertions(+), 4 deletions(-)
+ create mode 100644 src/llama-quant-affine.h
+ create mode 100644 tests/test-quantize-affine.cpp
+
+diff --git a/src/llama-quant-affine.h b/src/llama-quant-affine.h
+new file mode 100644
+index 000000000..9b5039e36
+--- /dev/null
++++ b/src/llama-quant-affine.h
+@@ -0,0 +1,42 @@
++#pragma once
++
++#include "../ggml/src/ggml-quants.h"
++
++#include <cmath>
++#include <cstdint>
++
++// Each Q4_K sub-block is already a 32-value affine integer grid. Q4_1 can
++// carry its codes directly, with only the decoded scale/min rounded to f16.
++// Return false when those coefficients cannot be represented finitely.
++inline bool llama_quantize_affine_codes(const void * source, void * destination, int64_t elements) {
++    if (elements < 0 || elements % QK_K != 0) {
++        return false;
++    }
++    const auto * input = static_cast<const block_q4_K *>(source);
++    auto * output = static_cast<block_q4_1 *>(destination);
++    for (int64_t block = 0; block < elements/QK_K; ++block) {
++        const float scale = ggml_fp16_to_fp32(input[block].d);
++        const float minimum = ggml_fp16_to_fp32(input[block].dmin);
++        const uint8_t * packed = input[block].scales;
++        for (int group = 0; group < 8; ++group) {
++            const int scale_code = group < 4 ? packed[group] & 63 :
++                    (packed[group + 4] & 15) | ((packed[group - 4] >> 6) << 4);
++            const int min_code = group < 4 ? packed[group + 4] & 63 :
++                    (packed[group + 4] >> 4) | ((packed[group] >> 6) << 4);
++            auto & result = output[8*block + group];
++            result.d = ggml_fp32_to_fp16(scale*scale_code);
++            result.m = ggml_fp32_to_fp16(-minimum*min_code);
++            if (!std::isfinite(ggml_fp16_to_fp32(result.d)) ||
++                    !std::isfinite(ggml_fp16_to_fp32(result.m))) {
++                return false;
++            }
++            const uint8_t * codes = input[block].qs + 32*(group/2);
++            const int shift = 4*(group%2);
++            for (int index = 0; index < 16; ++index) {
++                result.qs[index] = uint8_t(((codes[index] >> shift) & 15) |
++                        (((codes[index + 16] >> shift) & 15) << 4));
++            }
++        }
++    }
++    return true;
++}
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index 69379305b..2cbe4e566 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-impl.h"
++#include "llama-quant-affine.h"
+ #include "llama-model.h"
+ #include "llama-model-loader.h"
+ #include "llama-ext.h"
+@@ -1402,6 +1403,17 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+ 
+                     const void * src = load_range(ir*row_size_src, nrows_cur*row_size_src);
+ 
++                    if (work.size() < nrows_cur*row_size_dst) {
++                        work.resize(nrows_cur*row_size_dst);
++                    }
++                    if (tensor->type == GGML_TYPE_Q4_K && new_type == GGML_TYPE_Q4_1 && !imatrix &&
++                            llama_quantize_affine_codes(src, work.data(), nelements_cur)) {
++                        const size_t size_cur = nrows_cur*row_size_dst;
++                        fout.write((const char *) work.data(), size_cur);
++                        new_size += size_cur;
++                        continue;
++                    }
++
+                     const float * f32_data;
+                     if (tensor->type == GGML_TYPE_F32) {
+                         f32_data = (const float *) src;
+@@ -1413,10 +1425,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
+                         f32_data = (const float *) f32_conv_buf.data();
+                     }
+ 
+-                    if (work.size() < nrows_cur*row_size_dst) {
+-                        work.resize(nrows_cur*row_size_dst);
+-                    }
+-
+                     const int64_t nchunk = (nelements_cur + chunk_size - 1)/chunk_size;
+                     const int64_t nthread_use = nthread > 1 ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk)) : 1;
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 133ba2bf3..9560e926a 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -418,6 +418,7 @@ if (NOT GGML_BACKEND_DL AND GGML_CPU)
+     # these tests use the backends directly and cannot be built with dynamic loading
+     llama_build_and_test(test-barrier.cpp  LABEL "main behavior"  LINK ggml)
+     llama_build_and_test(test-quantize-fns.cpp  LABEL "main behavior"  LINK ggml)
++    llama_build_and_test(test-quantize-affine.cpp LABEL "main behavior" LINK ggml)
+     llama_build_and_test(test-quantize-perf.cpp  LABEL "main behavior backend"  LINK ggml)
+     llama_build_and_test(test-rope.cpp  LABEL "main behavior backend"  LINK ggml)
+     llama_build_and_test(test-col2im-1d.cpp  LABEL "main behavior backend"  LINK ggml)
+diff --git a/tests/test-quantize-affine.cpp b/tests/test-quantize-affine.cpp
+new file mode 100644
+index 000000000..77101df97
+--- /dev/null
++++ b/tests/test-quantize-affine.cpp
+@@ -0,0 +1,88 @@
++#include "../src/llama-quant-affine.h"
++
++#include <algorithm>
++#include <array>
++#include <cstdio>
++#include <cstring>
++#include <random>
++#include <vector>
++
++static bool check_codes(const block_q4_K & source, const std::array<block_q4_1, 8> & output) {
++    for (int group = 0; group < 8; ++group) {
++        for (int index = 0; index < 32; ++index) {
++            const int before = (source.qs[32*(group/2) + index] >> (4*(group%2))) & 15;
++            const int after = (output[group].qs[index%16] >> (4*(index/16))) & 15;
++            if (before != after) {
++                return false;
++            }
++        }
++    }
++    return true;
++}
++
++int main() {
++    auto * ctx = ggml_init({1024, nullptr, true});
++    if (!ctx) {
++        return 1;
++    }
++    std::mt19937 rng(42);
++    std::normal_distribution<float> normal;
++    double error = 0, energy = 0;
++    int tested = 0;
++    std::vector<block_q4_K> corpus;
++    for (float amplitude : {0.0f, 0.0001f, 0.01f, 1.0f, 100.0f}) {
++        for (int sample = 0; sample < 256; ++sample) {
++            std::array<float, QK_K> weights, before, after;
++            for (float & value : weights) {
++                value = amplitude*normal(rng);
++            }
++            block_q4_K packed;
++            quantize_row_q4_K_ref(weights.data(), &packed, QK_K);
++            corpus.push_back(packed);
++            std::array<block_q4_1, 8> output;
++            if (!llama_quantize_affine_codes(&packed, output.data(), QK_K) || !check_codes(packed, output)) {
++                std::fprintf(stderr, "affine code conversion failed at amplitude=%g sample=%d\n", amplitude, sample);
++                return 1;
++            }
++            dequantize_row_q4_K(&packed, before.data(), QK_K);
++            dequantize_row_q4_1(output.data(), after.data(), QK_K);
++            for (int i = 0; i < QK_K; ++i) {
++                const double delta = double(after[i]) - before[i];
++                error += delta*delta;
++                energy += double(before[i])*before[i];
++            }
++            ++tested;
++        }
++    }
++    block_q4_1 guard;
++    std::memset(&guard, 0xa5, sizeof(guard));
++    std::vector<block_q4_1> combined(corpus.size()*8 + 2, guard);
++    if (!llama_quantize_affine_codes(corpus.data(), combined.data() + 1, int64_t(corpus.size())*QK_K) ||
++            std::memcmp(&combined.front(), &guard, sizeof(guard)) != 0 ||
++            std::memcmp(&combined.back(), &guard, sizeof(guard)) != 0) {
++        std::fprintf(stderr, "multi-block conversion crossed its output bounds\n");
++        return 1;
++    }
++    for (size_t block = 0; block < corpus.size(); ++block) {
++        std::array<block_q4_1, 8> output;
++        std::copy_n(combined.data() + 1 + 8*block, 8, output.data());
++        if (!check_codes(corpus[block], output)) {
++            std::fprintf(stderr, "multi-block conversion changed codes\n");
++            return 1;
++        }
++    }
++    block_q4_K overflow = {};
++    overflow.d = overflow.dmin = ggml_fp32_to_fp16(65504.0f);
++    std::fill(std::begin(overflow.scales), std::end(overflow.scales), uint8_t(255));
++    std::array<block_q4_1, 8> output;
++    if (llama_quantize_affine_codes(&overflow, output.data(), QK_K) ||
++            llama_quantize_affine_codes(&overflow, output.data(), QK_K - 1) ||
++            llama_quantize_affine_codes(&overflow, output.data(), -QK_K)) {
++        std::fprintf(stderr, "invalid coefficient/shape accepted\n");
++        return 1;
++    }
++    const double nmse = error/std::max(energy, 1.0);
++    std::printf("affine code conversion: %d blocks, all codes identical, relative squared error %.9g\n", tested, nmse);
++    ggml_free(ctx);
++    return nmse < 1e-6 ? 0 : 1;
++}
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1655,6 +1655,16 @@ prove the entire cause. All 78 power snapshots showed battery power. Its
 pooled percentages must not be used as causal gains or evidence of BaseRT
 parity. Raw responses and invalidation metadata are retained for diagnosis.
 
-The converter remains experimental pending isolated serving qualification,
-cross-host validation and final product checks. No affine serving recipe or
-default is promoted. Evidence is in `target/affine-code-layout-evidence/`.
+Jianyang job `job_ryjqgw7d0ta8gtk` succeeded on a Dan-lab Apple M4 mini at
+local commit `86474d10d`. A cold queue replay produced native commit
+`748825b4eab791f3dc768608f37c9ffee96d02d8` and tree
+`d625e60be8c3daed38929f3104dc6cf27ff27747`, matching this workstation's
+prepared tree. All 1,280 converter blocks passed with the same measured error.
+This is a correctness check, not a performance result; its budget was $0.
+
+The full Skippy and Mesh release build (`just with-lld just release-build`)
+also passes with this converter and the packaged Metal runtime. This does not
+resolve the inherited native gate's missing ASR/diffusion targets or substitute
+for a whole-workspace test run. The converter remains experimental pending
+isolated serving qualification. No affine serving recipe or default is
+promoted. Evidence is in `target/affine-code-layout-evidence/`.

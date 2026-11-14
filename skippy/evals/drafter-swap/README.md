@@ -48,8 +48,28 @@ bf16-trained one, so bf16 capture stays.
 **Code review does not specialise.** Acceptance stayed 0.39–0.41 for every variant; 2–3
 epochs cost 6–9% elsewhere.
 
-Next: one coding draft trained on every coding set (`build_coding.py`), measured against the
-shipped draft and the HTML v2 draft.
+**One coding draft beats the specialists.** `coding-v1` is the shipped draft fine-tuned for
+2 epochs on all nine coding sets at once (5,860 complete replies: Rust/TS/Python/Go edits,
+TS/Go/Rust generation, HTML v2, code review, agent turns cut at their first tool call;
+`build_coding.py`). Validation improves on every source from 1 to 2 epochs (0.820 → 0.829).
+Served, against the shipped draft on one Spark (10 prompts per workload, 1024 tokens;
+`results/round2/coding-draft-evals.txt`):
+
+| Workload | Shipped | coding-v1 (2 epochs) | Acceptance | HTML-only draft |
+|---|---:|---:|---|---:|
+| html_v2 | 107.5 | 129.6 (+21%) | 0.54 → 0.67 | 114.1 (0.67) |
+| agent turns | 30.4 | 33.9 (+12%) | 0.40 → 0.57 | 31.2 |
+| rust_gen | 134.9 | 146.6 (+9%) | 0.73 → 0.81 | 121.8 |
+| gen_go / gen_ts | 139.5 / 134.2 | +7% / +4% | 0.84 → 0.90 / 0.76 → 0.77 | below shipped |
+| edits (Py, Go, real HTML) | | −2…+1% | unchanged | ~0 |
+| prose | 74.6 | 76.1 | 0.37 → 0.32 | 72.7 |
+
+Over the ten coding workloads at equal token shares, coding-v1 decodes **+8.1%** faster than
+the shipped draft (+6.7% without agent turns); the HTML-only draft nets −0.1%. One coding draft
+needs no routing or swapping among coding workloads; the swap API is only useful for switching
+to the shipped draft for chat, if prose acceptance (0.32 against 0.37 here, 10 prompts) holds
+up as a real loss. Agent turns still decode slower with speculation than without (33.9 against
+39.9 off): long-context verification, not the draft, limits them.
 
 ### Bugs found (not filed: the hand-off server was unreachable)
 

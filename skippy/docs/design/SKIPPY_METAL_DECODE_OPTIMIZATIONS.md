@@ -370,3 +370,45 @@ saved binaries/hashes, commands, native manifest, raw responses, progress
 events, output audits, test output and the interrupted/diagnostic eight-request
 runs. These results qualify the tested two-request workloads; BaseRT parity
 and performance at other loads remain unproven.
+
+## Preserve recurrent history when unrelated lanes run
+
+The eight-request failure above now has a deterministic native reproducer.
+After A and B verify together, B can retain a pending repair while A and C run.
+The recurrent allocator gathers active lanes contiguously, relocating B as an
+inactive peer. It previously moved B's current-state source and sequence
+metadata without preserving its rollback depth and snapshot planes. A later
+trim could fail or select a different state. This is a native memory ownership
+defect independent of the adaptive-width policy.
+
+Core patch 0022 preserves the logical owner's rollback depth during cell swaps
+and materializes live inactive history before a forward can overwrite its
+sources. The copy gathers each snapshot plane before writing it, handles
+pending rollbacks and fresh zero-state lanes, and covers recurrent R, S and P
+banks through backend tensor access. Scratch storage is reused. Planning never
+copies tensor data. The materialization is conditional on live inactive
+history moving or shifting; it is a correctness fallback whose overhead still
+needs throughput qualification.
+
+This patch owns generic recurrent cell relocation, separately from patch
+0015's staged verification-window trim interface. It adds no public symbols
+or headers and retains Skippy ABI 0.1.82. The complete pinned core, model and
+generated queues replay successfully. The packaged Metal source is
+`16cb58f537c151171cc64e5f49e46726a32df6fd`, with patch digest
+`0182eb8a76d72c37e0b1124e347b38753b7259e36248305b37078295e9527dd9`.
+
+The regression fails before the fix with the same hybrid suffix-trim error.
+With the fix, all eight CPU fixture/rollback tests pass. Four delayed-peer
+scenarios also pass with recurrent state explicitly asserted to reside on
+Metal, including active and inactive pending rollbacks and a new zero-state
+lane. The tests compare every retained snapshot byte before and after peer
+execution, then compare 15 generated predictions against an independent serial
+reference after repair. CPU coverage includes Qwen, GLM and LFM2 fixtures.
+
+Two fresh processes of the old, independently adaptive serving CLI completed
+64 of 64 eight-way 128-token coding requests with the repaired native engine,
+without errors. These were correctness stress runs with debug logging, not
+performance measurements. Some prompts produced more than one output across
+the runs; exact serving-output parity is not established. The interrupted
+eight-request speed comparison above remains historical evidence, not a
+speedup claim. Artifacts and commands are in `target/peer-rollback-evidence/`.

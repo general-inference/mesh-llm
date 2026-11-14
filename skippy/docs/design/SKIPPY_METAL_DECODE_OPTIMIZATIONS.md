@@ -150,7 +150,9 @@ inherited native test-target gate failure.
 Commands, CLI hashes, native manifest, raw responses, telemetry, audits, and
 validation logs remain under `target/dflash2-batch-evidence/`. These gains
 qualify batching this particular draft; replacing DFlash1 with DFlash2 alone
-was slower in the initial diagnostic. They do not establish BaseRT parity or
+was slower in the initial diagnostic. The later target-format-qualified
+comparison below supersedes that diagnostic for the original target. These
+measurements do not establish BaseRT parity or
 justify choosing DFlash2 for every workload.
 
 ## Compatible speculative sharing by default
@@ -1222,3 +1224,152 @@ was needed. The static test recipe first exposed an existing unquoted
 prefix-map path problem under JY's `Application Support` workspace; validation
 used the normal dynamic Metal build instead. This run establishes additional
 hardware correctness coverage, not M4 model throughput.
+
+## Target-qualified DFlash 2 draft choice
+
+With retained native `b60068a0e39b2d1a3fad15fe8c2a4c702009ff2e`, the same
+release CLI and original target weights in both arms, replacing the original
+Q8 DFlash draft with Q8 DFlash 2 at a six-proposal ceiling improved fixed
+128-token HTTP completion throughput:
+
+| Target | Concurrency | DFlash 1 | DFlash 2 | Change |
+| --- | --- | --- | --- | --- |
+| Original UD-Q4_K_M | 1 | 176.194 | 192.354 | +9.17% |
+| Original UD-Q4_K_M | 2 | 220.023 | 236.669 | +7.57% |
+| Dense/head/down Q4 recipe | 1 | 185.402 | 184.474 | -0.50% |
+| Dense/head/down Q4 recipe | 2 | 245.003 | 243.657 | -0.55% |
+
+Each target format used fresh-process ABBA order, three warmups and five
+measured batches per concurrency per process. All 96 requests per format
+completed 128 tokens; measured output text matched between drafts. Every
+original-target DFlash 2 measured batch exceeded every corresponding control.
+The broader Q4 recipe has overlapping results and no established draft-choice
+benefit. All arms used default adaptive DFlash sizing and shared execution,
+f16 KV, two lanes, ctx8192, batch2048, microbatch512, disabled prefix/disk
+caches, greedy seed42, and the same two short coding prompts. Rates include
+prefill and HTTP overhead; concurrency two is aggregate tok/s.
+
+For the original target at concurrency one, measured acceptance increased
+from 0.505 to 0.607 and verification windows fell from 33 to 28 per request.
+Drafting increased from about 87 to 102 ms, while verification fell from about
+588 to 512 ms. These are per-request telemetry intervals, not additive GPU
+execution totals. The generic `spec.adaptive_enabled` telemetry field does
+not describe DFlash's separate adaptive controller.
+
+A separate original-target, DFlash-2-only ABBA comparison raised the proposal
+ceiling from six to its trained default seven: 192.924 to 195.167 tok/s
+(+1.16%) at concurrency one, and 238.626 to 243.563 (+2.07%) at concurrency
+two. All 96 requests completed 128 tokens and measured text matched. The
+single-request candidate range clears every control; concurrency-two ranges
+overlap. The draft's block size is eight with one anchor position. These
+separate draft-choice and ceiling gains must not be multiplied into a claimed
+combined measurement.
+
+The opt-in serving preset is
+`skippy/scripts/recipes/serving/qwen3.6-35b-a3b-dflash2.toml`; its README pins
+the measured draft and target artifacts. Commands, raw responses, statistics,
+and the pinned upstream draft card are in `target/draft-choice-evidence/`.
+This establishes a configuration improvement for the tested target and
+workload, not BaseRT parity or a global draft default.
+
+## Rejected small-batch convolution extension
+
+Extending the retained one-token channel packing to batched convolution
+packed channels into threadgroup y while retaining token positions in x.
+The CPU-reference Metal suite passed 2,340 cases across token counts
+1/2/3/4/7/8/15/16/17/33, including channel tails and fused bias/SiLU.
+However, fresh-process ABBA measurements did not establish a serving benefit.
+Original-target DFlash 1 changed by +0.73% / +0.49% at concurrency one/two;
+plain broad-recipe decode changed by -0.41% / -0.31%, with overlapping
+process variation. A short concurrency-eight comparison gave +1.24%, but a
+longer three-warmup/five-measured repeat gave 271.321 to 270.753 aggregate
+tok/s (-0.21%). All measured outputs matched the respective controls.
+
+The extension was rejected. Owning patch 0043 and the packaged runtime were
+restored to retained native B600; libllama and libggml-metal hashes matched
+the frozen control byte-for-byte. The rejected owner patch, logs, responses,
+and audits remain in `target/ssm-conv-small-batch-evidence/`. The retained
+one-token optimization remains unchanged.
+
+## Expert-down-only precision probe
+
+A narrower candidate converts only the original target's 37 Q5_K routed
+expert-down tensors to Q4_K. All 716 other tensor payloads, names, and shapes
+are preserved byte-for-byte, including dense weights, output head, routers,
+three Q6_K expert-down tensors, and MTP. The product quantizer validated the
+753 literal tensor overrides and produced a 21,421,873,440-byte GGUF, SHA-256
+`4ad842f4ed3ef1070d7818d95163e47402e7de17c79ecb85a0e272aab3ae52f5`.
+This saves 1,241,513,984 bytes versus the original compressed target.
+
+On 128 WikiText-2 raw test chunks at context512, with 32,640 scored positions,
+perplexity was 6.657436 versus the original compressed target's 6.644816.
+The paired PPL ratio was 1.001899 ± 0.000820, mean KL divergence
+0.008046 ± 0.000157, and top-token agreement 96.317 ± 0.104%. Uncertainties
+are the tool's standard errors. The reference is the original compressed
+GGUF, not BF16. This is a small measured corpus-specific quality change,
+not proof of equivalent model quality. Source audit, complete recipe,
+quantization commands, artifact digest, and quality logs are retained in
+`target/expert-down-only-evidence/`. Performance qualification follows below;
+no default precision setting is changed by this probe.
+
+### Complete-configuration comparison
+
+A fresh-process ABCCBA comparison held CLI/native runtime constant and tested
+A: original target + DFlash 1 cap6; B: original target + DFlash 2 cap7; and
+C: expert-down-only Q4 target + DFlash 2 cap7. Each process ran three warmups
+and five measured batches at each of concurrency one/two, totaling 144
+requests, 90 measured. All completed 128 tokens with length finish reasons.
+
+| Configuration | Concurrency 1 tok/s | Concurrency 2 aggregate tok/s |
+| --- | --- | --- |
+| A: original + DFlash 1 | 175.838 | 219.546 |
+| B: original + DFlash 2 | 194.153 | 230.376 |
+| C: expert-down Q4 + DFlash 2 | 225.408 | 239.088 |
+
+This directly measured B/A at +10.42% and C/A at +28.19% for one request;
+C/B was +16.10%. Every C single-request batch exceeded every B batch, and
+every B batch exceeded every A batch. The two-request medians changed by
++4.93% B/A, +8.90% C/A, and +3.78% C/B, but their ranges overlap materially
+and include slow batches. Those two-request point estimates do not establish
+an isolated precision gain. A and B produced identical measured text; C was
+stable within each prompt but differed from A/B, as expected for changed
+weights. These are complete configuration measurements, not identical-output
+kernel comparisons.
+
+At concurrency one, C reduced DFlash 2 verification time from approximately
+509–514 to 426–429 ms per request, with 25 versus 26 verification windows
+and acceptance 0.611 versus 0.574. Changed token paths and acceptance can
+contribute to the gain alongside faster expert-down arithmetic. A wider
+prompt qualification is required before treating the single-prompt gain as
+representative. Raw evidence is `target/draft-choice-evidence/combined*`.
+
+The new serving TOML passed the product's `--print-effective-config` parser
+with file-attributed DFlash strategy, native MTP false, and ceiling seven.
+A normal product server using that TOML loaded the pinned original target and
+draft and returned a successful 128-token length-terminated completion.
+Evidence is `target/draft-choice-evidence/preset-effective-config*` and
+`preset-smoke/`.
+
+### Wider expert-down qualification
+
+The same original + DFlash 2 cap7 versus expert-down Q4 + DFlash 2 cap7
+comparison was repeated across eight short coding prompts, concurrency one,
+fresh-process ABBA, one full warmup cycle plus three measured cycles/process.
+All 128 requests completed 128 tokens; 96 were measured. Dividing measured
+tokens by the sum of HTTP request durations gave 186.864 versus 197.225 tok/s
+(+5.54%). Six prompt medians improved and two regressed, with changes spanning
+-15.31% to +17.45%. Text was stable across measured repeats within each
+prompt/target but differs between targets. The first merge-slices prompt
+repeated its approximately +16% precision benefit; binary search regressed
+15.31%, demonstrating why that first-prompt result is not representative.
+
+The complete recipe is retained as an opt-in source-specific artifact at
+`skippy/scripts/recipes/quantization/qwen3.6-35b-a3b-ud-q4-k-m-expert-down.tensor-types.txt`.
+No model-loading or precision default changes. Commands, requests, responses,
+timings, and audit are retained in `target/draft-choice-evidence/wide*`.
+
+After restoring the retained native source, the static backend tests were
+rebuilt through Just and all 396 retained convolution CPU-reference cases
+passed again on Metal. This removes the stale expanded test binary left by
+the rejected extension. The full native gate's inherited missing ASR and
+diffusion targets remain unresolved; this focused result does not replace it.

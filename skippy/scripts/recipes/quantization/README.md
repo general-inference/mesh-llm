@@ -97,3 +97,34 @@ establish general quality equivalence. See the
 [Metal decode investigation](../../../docs/design/SKIPPY_METAL_DECODE_OPTIMIZATIONS.md)
 for controls, limitations, and the earlier precision experiments. The profile
 is opt-in and does not change model loading defaults.
+
+## Qwen3.6 expert-down-only profile for DFlash 2
+
+`qwen3.6-35b-a3b-ud-q4-k-m-expert-down.tensor-types.txt` uses the same pinned
+Unsloth source as the decode profile above. Its complete 753-tensor inventory
+changes only 37 Q5_K expert-down tensors to Q4_K, preserving the other 716
+payloads byte-for-byte. Dense projections, the output head, routers, three
+Q6_K expert-down tensors, and MTP retain their original precision.
+
+Use the same isolated source and three native libraries as above, substituting
+this recipe for `--tensor-type-file` and choosing a separate output filename.
+The measured product-quantizer output is 21,421,873,440 bytes with SHA-256
+`4ad842f4ed3ef1070d7818d95163e47402e7de17c79ecb85a0e272aab3ae52f5`.
+It saves 1,241,513,984 bytes versus the source. This remains quantization from
+an already compressed model and requires `--allow-requantize`.
+
+With the pinned DFlash 2 draft and seven-proposal ceiling from the
+[serving recipe](../serving/README.md), a fresh-process ABBA test of eight
+short coding prompts at concurrency one measured 197.225 versus 186.864 tok/s
+for the original target (+5.54%). All 128 requests, including warmups,
+completed 128 tokens. Six prompts improved and two regressed; individual
+median changes ranged from -15.31% to +17.45%. Generated text differs between
+the targets and was stable within each prompt/target across measured repeats.
+This is an opt-in workload-dependent tradeoff, not a default recommendation.
+
+On the same 128-context WikiText-2 comparison, PPL was 6.657436 versus the
+original compressed target's 6.644816; mean KL divergence was
+0.008046 ± 0.000157 and top-token agreement was 96.317 ± 0.104%.
+These results do not establish general quality equivalence or BaseRT parity.
+See the decode investigation linked above for complete-configuration results,
+controls, and limitations.

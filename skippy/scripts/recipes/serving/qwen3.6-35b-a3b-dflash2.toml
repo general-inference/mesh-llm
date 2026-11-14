@@ -1,0 +1,6 @@
+version = 1
+
+[speculative]
+speculative_strategy = "dflash"
+native_mtp = false
+dflash_max_tokens = 7

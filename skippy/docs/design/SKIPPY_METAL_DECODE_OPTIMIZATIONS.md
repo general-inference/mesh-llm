@@ -532,6 +532,131 @@ candidate only in stronger test assertions; production source is identical.
 This selected validation does not make the previously failing broad native
 build gate green: its inherited missing ASR/diffusion targets remain unresolved.
 
+## Convolution channel dispatch
+
+A new GPU counter trace of the retained native runtime and routed-down recipe
+covers a warmed request loop at trace-relative 13.120687–25.056605 seconds.
+Shader compilation ended at 10.777350 seconds. Submission IDs map uniquely to
+processes; 1,404,052 scoped shader intervals are attributed to Skippy, with
+1,536 Skippy intervals unmapped. Latest preceding compiled PC ranges are a
+lifetime heuristic, not proof of shader allocation lifetime. Per-kernel union
+intervals overlap and are not additive wall-time fractions. The loop includes
+brief prefill for each 128-token request, and instrumentation is invasive; this
+trace is a bottleneck lead, not a throughput result. Raw exports and attribution
+scripts remain in `target/steady-gpu-evidence/`. A separate CPU stack sample
+in `target/steady-cpu-evidence/` frequently finds the scheduler waiting for
+Metal completion; it does not by itself locate the GPU cost.
+
+The trace highlights the existing one-token SSM convolution path. Its shader
+computes one channel per threadgroup with a single thread. The new geometry
+places 32 independent channels in each threadgroup, retaining each channel's
+arithmetic and guarding partial channel groups. Both scalar and float4
+convolution kernels use the mapping. Batched-token convolution and SiLU fusion
+keep their existing behavior. Selection uses the actual one-token operation
+shape, without a model-family or chip allowlist. There is no public ABI change.
+This is a separate core capability: earlier patches do not own this upstream
+convolution dispatch implementation.
+
+The CPU-reference Metal suite passed 396 convolution cases, including 216 new
+channel-grid cases. Those cover 1/7/31/32/33/127/129/8192/12288 channels,
+3/4/5/8-wide filters, one or three sequences, plain convolution, SiLU fusion,
+and bias-plus-SiLU graphs. New cases live in the narrowly scoped `test-backend-ssm-conv-channels.h`;
+the oversized backend operator test file calls that generator and retains its
+existing common test framework.
+
+Fresh-process ABBA comparisons used identical CLI, model weights, settings,
+and fixed 128-token requests within each pair. Each process ran a warmup plus
+three measured batches per concurrency. Rates include prefill and divide total
+output tokens by the slowest HTTP request duration:
+
+| Weights | Concurrency | Baseline median tok/s | Packed channels median tok/s | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Original | 1 | 110.284 | 112.388 | +1.91% |
+| Original | 2 | 166.161 | 170.678 | +2.72% |
+| Routed-down Q4_K recipe | 1 | 139.934 | 143.960 | +2.88% |
+| Routed-down Q4_K recipe | 2 | 211.510 | 217.138 | +2.66% |
+
+All 48 requests in each comparison completed at 128 tokens. Every measured
+candidate batch exceeded every control at each concurrency and weight format.
+Measured outputs matched exactly across arms. A separate serial teacher-forcing
+check used eight fixed 512-token corpus contexts with identical 256-token
+prefills and 255 one-row decode steps per context. For each weight format,
+all 2,040 scored log probabilities and top-token IDs matched byte-for-byte
+between control and candidate. This checks actual recurrent decode, whereas
+a single 512-row perplexity forward would use the unchanged batched path.
+It does not establish universal bitwise equivalence or general accuracy.
+
+A final-runtime speculative comparison on the original weights completed all
+48 requests at 128 tokens with identical measured outputs. Medians were
+174.724→175.877 tok/s at concurrency one (+0.66%) and
+223.072→224.569 aggregate tok/s at concurrency two (+0.67%). Batches overlap
+and adaptation is visible, so no additional speculative speedup is established.
+The retained performance claim is the plain-decode improvement above. Raw
+evidence is in `fixed-spec-original-summary.json`.
+
+A genuine fresh M4 checkout exposed stale context in core patch 18's CMake
+hunk: it still named `resident_checkpoint_gpu.cpp` after the owning build
+patch had moved that test source to `resident_attention.cpp`. Reconstructing
+that hunk against its actual predecessor fixes the owning patch. All 140
+patches then replayed on a fresh upstream-only checkout, producing final tree
+`6c19b4bdb441a8776f07b5daae718187e5e05db7`, exactly matching the measured
+candidate. The repair changes queue reproducibility, not runtime semantics.
+The local Skippy and Mesh release build passed for that tree. The inherited
+broad native gate's missing ASR/diffusion targets are a separate unresolved
+issue; this selected validation does not make that gate green.
+
+Jianyang job `job_4s332ewhhs3wdj9` checked exact local commit
+`fb775b9dc5fa1462c4d2783170218a9d1d34b8be` on Dan's M4 mini
+(`macmini-764jw9`, macOS 26.5.1). Its fresh checkout replayed the repaired
+queue, built the backend operator test natively, and passed all 396 convolution
+cases on Metal against the CPU reference. The job succeeded at $0. This is
+additional chip correctness coverage, not an M4 throughput measurement. Source
+was fetched through a temporary read-only private-LAN Git listener, which was
+stopped after checkout; no GitHub push or binary transfer was involved. The
+final local packaged native source is `b60068a0e39b2d1a3fad15fe8c2a4c702009ff2e`,
+with the same measured source tree and ABI 0.1.85.
+
+Raw tests, request timings, scores, replay proofs and build logs remain in
+`target/ssm-conv-channels-evidence/`. These measurements establish a local
+convolution-dispatch gain, not parity with BaseRT.
+
+## Rejected dense Q4_K vector row-width probes
+
+After retaining the routed-down Q4_K recipe, two dense-vector variants tested
+whether activation register reuse or reduced register pressure improved the
+remaining dense projections and output head. Both use the existing Q4_K
+arithmetic with a different compile-time output-row count. The production
+baseline handles two rows per SIMDgroup. A private policy limited the probes
+to M5 Max in shared-buffer mode, inner dimensions 512–4096 and at least 512
+output rows, with complete row tiles. Neither probe is retained in the queue.
+
+Both variants passed 11 GPU-versus-CPU operator cases: 512×2048, 2048×4096,
+and 4096×2048 at 1/2/8 token rows, plus the 2048×248320 output head at 1/2
+rows. Dispatch selection/fallback tests passed. Four fresh processes per
+variant ran the same fixed prompts in ABBA order, with one warmup and three
+measured batches per concurrency. All 48 requests per comparison completed
+at 128 tokens; every warm and measured output matched across both arms.
+
+| Dense rows per SIMDgroup | C1 baseline → probe tok/s | Change | C2 baseline → probe aggregate tok/s | Change |
+| --- | ---: | ---: | ---: | ---: |
+| 4 | 139.746 → 136.749 | −2.14% | 212.513 → 208.881 | −1.71% |
+| 1 | 139.358 → 139.815 | +0.33% | 211.913 → 205.875 | −2.85% |
+
+The four-row candidate is consistently slower. The one-row single-request
+result overlaps the controls, while every measured two-request candidate
+batch is slower than every control. The baseline two-row specialization
+remains. No gain is attributed to either probe. Rejected patches, bundles,
+raw requests, numerical tests, timing audits and the restoration log remain
+under `target/dense-vector-evidence/`.
+
+Removing the temporary patch and replaying the retained queue restored native
+source `04f7cff4e6a9600d31a78f484e53929f92b06b8f`, primary-library SHA-256
+`9b3b6350ecea9ec5c0626e8e47f9bc9839c4a1d5efdc288cc0c8b4e41bc201e4`, and
+Metal-library SHA-256
+`39e00dc70cb8ec810bd58ba07f9163293f3cd614f7d18964cd8b06417c23be71`, matching
+the frozen control. The retained precision recipe and routed-vector policy
+are unchanged.
+
 ## Routed-down Q4_K performance recipe
 
 A further format experiment retains the earlier dense/head Q4_K changes and

@@ -2425,3 +2425,78 @@ control; the primary library remains
 The full retained Skippy and Mesh release build had also passed before these
 native-only prototypes. No rejected cooperative dispatch remains in the active
 patch queue.
+
+## Exploratory byte-preserving weight layouts
+
+Following the rejected cooperative kernels, standalone probes test changes to
+weight-byte addresses while leaving the target and draft files untouched.
+These probes are not integrated runtime caches and do not establish serving
+speedups. Packing is checked by reconstructing every original quantization
+block and comparing its complete bytes, including scales.
+
+The first Q4_1 probe separates sixteen blocks' quant bytes from their scales,
+without increasing size, and replaces scattered scalar quant reads with aligned
+vector reads. Its arithmetic and lane assignment follow the retained NR8 body.
+Twelve projection/routing cases cover the two expert geometries, 3/8/16 tokens,
+broadcast and per-selection inputs, 128 experts and negative routing IDs.
+Forty-eight FP64 stored-weight reference comparisons and 24 tight paired
+numerical checks pass. Outputs have small floating-point differences despite
+the exact byte permutation; bit equality is explicitly not claimed.
+
+The initial paired screen covers 24 cases with fixed and changing expert
+selections. It completes a guarded control/packed/packed/control sequence on
+attempt one. GPU latency changes range from -9.71% to +8.06%, with regressions
+among the measured cases and inconsistent host-wall changes. An independent
+audit checks executable/source hashes, all eight accepted guards, 96 raw timing
+pairs and all 24 comparisons. This short-duration screen does not justify a
+production expert-weight cache. Source, correctness evidence and timing files
+are under `target/affine-byte-layout-evidence/`.
+
+Dense Q8_0 probes instead start from the retained native MMA shader, including
+its original arithmetic, tiling policy, residual fusion and K splitting. Checked
+source substitutions add a layout constant and change only quant/scale loads.
+A row-separated variant groups sixteen blocks within each output row; a second
+variant also groups the eight output rows consumed by a SIMD group. Both
+preserve every stored value, with the same byte count on complete row tiles.
+The eight-row variant pads an incomplete final tile in odd-row correctness
+cases.
+
+Each dense variant passes 36 projection cases, including plain/fused residual,
+token tails, an odd output tail and K8192. All 72 old/packed full-output pairs
+are bit-identical. The 144 independent FP64 reference comparisons check every
+output row for M at most 2048 and every seventeenth row for the larger matrices;
+they do not substitute for the full paired-output checks. Four weight banks
+are inverse-byte checked for each geometry.
+
+The row-separated variant's initial 60-case screen is mixed and is not
+promoted. Its raw files and independent audit are under
+`target/dense-byte-layout-evidence/`. Very short per-case measurement durations
+make GPU clock transitions a concern, so the eight-row variant uses at least
+20 ms of GPU warmup and at least 30 ms of measured GPU time per case, across at
+least four 256-dispatch command buffers. GPU timestamps and host-wall latency
+are reported separately; fixed and rotating weight banks remain separate cases.
+The stronger screen completes its guarded ABBA sequence on attempt one. It is
+mixed overall: 21 of 60 cases improve GPU latency and eighteen improve host-wall
+latency. Thus it does not support replacing the existing path generally. A
+consistent signal is the K2048/M8192/N16 projection, including both residual
+variants and both weight-bank modes:
+
+| Residual | Weight banks | Original GPU us | Tiled GPU us | GPU latency change |
+| --- | --- | ---: | ---: | ---: |
+| No | Fixed | 52.040 | 47.563 | -8.60% |
+| No | Rotating | 64.310 | 49.930 | -22.36% |
+| Yes | Fixed | 53.130 | 47.773 | -10.08% |
+| Yes | Rotating | 64.907 | 50.601 | -22.04% |
+
+Both candidate repeats beat both control repeats in each of these four cases.
+Host-wall latency improves in all four, by 8.47–22.08%. The independent audit
+checks the frozen executable/source hashes, eight accepted guards, 240 raw
+timing pairs, all sixty comparisons and the minimum measured GPU duration and
+dispatch count. This remains a standalone projection result, not an integrated
+decode speedup. Smaller activation batches include regressions and are not
+admitted merely because they share a weight shape. The result motivates
+selective runtime integration followed by a fixed-model serving comparison;
+cache allocation, invalidation, residency and lifetime have not yet been
+implemented or qualified. The retained NR8 runtime and target/draft artifacts
+remain unchanged. All source and observations are under
+`target/dense-tiled-byte-layout-evidence/`.

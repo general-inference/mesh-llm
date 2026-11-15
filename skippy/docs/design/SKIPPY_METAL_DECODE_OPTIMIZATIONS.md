@@ -6,7 +6,13 @@ baseline and workload. In the combined queue, the original core patches
 0017–0022 are numbered 0036–0041, following PR #33's core patches; the combined
 native ABI is 0.1.85. BaseRT parity remains unproven.
 
-The latest retained addition extends bounded uint32 offsets to qualified
+The latest retained addition enables the bounded-u32 R8 path for M5 Max
+windows of three through sixteen tokens: three experiments pool to +0.766% C1
+and +0.537% C2 on the fixed-file workload, with exact text. The canonical
+source/package and full-model state checks pass; the retained change is
+recorded locally. No metadata packing is retained.
+
+The preceding retained addition extends bounded uint32 offsets to qualified
 four-row M1 Ultra kernels. The final default build adds 2.14% C1 and 0.61%
 C2 throughput over the prior R8-u32 runtime, with exact outputs. Three earlier
 experiments pool to +1.93% C1 / +1.17% C2. The earlier
@@ -4544,3 +4550,481 @@ ABI remains 0.1.85. No Rust host source, fleet installation, running user
 service, push or PR changes. The smaller-window M5 experiment stays out of
 the retained queue. The broader engine-speed goal and BaseRT parity remain
 unachieved.
+
+### M5 small-window follow-up: component and guarded C1 signal
+
+After the interrupted full-serving attempt, a standalone M5 NR8 screen
+compares original 64-bit relative offsets with bounded uint32 offsets at
+eight and sixteen tokens, preserving geometry and all float arithmetic.
+The screen independently audits 16 guarded ABBA blocks / 32 projection
+cases / 128 raw timing pairs, 48 bit-identical output pairs, 96 FP64
+references and 48 poisoned-write checks. Interrupted blocks are retried;
+accepted boundary and mid-run samples are nominal with no competing CPU
+above the existing threshold. Rotating reconstructed-profile eight-token
+GPU latency falls 2.38-2.55% for gate/up and 4.35-4.66% for down. These are
+component results, not serving TPS. Evidence is under
+`target/affine-u32-m5-window-evidence/component/`.
+
+A separate C1-only campaign keeps the same frozen runtimes and inputs, adds
+100ms mid-request CPU/thermal sampling, and uses three one-second quiet
+samples before startup/retries. Every accepted request must pass boundary
+and mid-request guards. A condition variable stops the observer immediately
+after completion; observer join/wakeup lag is excluded from the HTTP timer.
+Only compact guard records are written during requests; full process
+snapshots remain outside the timer. This protocol differs from the earlier
+boundary-only thirty-second quiet-period campaign and is recorded explicitly.
+
+This C1 campaign independently audits 144 valid / 96 measured requests,
+25 excluded/retried blocks and 194 raw response files. Outputs match exactly,
+all input/runtime pins remain unchanged, and all three measured cycle
+estimates are positive. TPS is 199.7876 -> 202.0529 (+1.1338%). The baseline
+explicitly enables the prior sixteen-token-only R8-u32 path; the candidate
+explicitly enables three-through-sixteen-token R8-u32 admission. R4 is
+disabled in both arms. This is a scoped M5 C1 signal, not a C2 or retained
+default gain. `c1-guarded/verification.json` records the raw/source audit.
+
+An isolated final candidate enables R8 by default on M5 Max while preserving
+the M1-only R4 default. The combined native fixture retains numerical
+coverage and actual pipeline-compilation checks for both R4 and R8. Tree
+`c1cc600f9aaa8895b4563895065960ab5b80aad2`, commit
+`56a86606d7cec34d388b16219c803999792f939d`, full patch SHA-256
+`ad05c510ca4f169f656975bcc600a5ef138c7ee8d603ce37859e4acc4e7e2ccb`
+passes 97 policy checks, 40 native cases / 80 exact output pairs / 160 FP64
+checks, old-library fallback, package identity, recurrent/checkpoint tests,
+four exact full-model state exports and actual R8 pipeline compilation with
+its flag unset. A preceding final-source scaffold has identical production
+code and differs only in native fixture coverage; it is preserved separately.
+
+Three complete experiments against retained M5 defaults pass individual and
+pooled source/raw-response audits. Both diagnostic flags are unset in both
+arms; R4 stays disabled by device policy. All source, input, request, driver
+and runtime pins agree across fresh processes. All 576 measured requests
+(864 including warmups) have exact text across arms and experiments; 146
+interfered blocks are excluded and retried under the recorded guards.
+
+| Serving load | Retained TPS | Candidate TPS | Change |
+| --- | ---: | ---: | ---: |
+| One request | 201.3916 | 202.9345 | +0.7661% |
+| Two requests, aggregate | 254.5577 | 255.9249 | +0.5371% |
+
+All three C1 experiment estimates and all nine C1 cycle estimates are positive.
+C2 is positive in each experiment but has two negative cycle estimates;
+its pooled result passes the predeclared no-regression gate. Evidence is
+`target/affine-u32-m5-window-evidence/final-pooled-verification.json`.
+Do not combine these percentages with earlier campaigns using different
+controls, inputs or measurement protocols.
+
+An isolated draft folds the extension into owning core patch 0042, preserving
+all other patches. Cold replay from pinned upstream reproduces the measured
+native tree `c1cc600f9aaa8895b4563895065960ab5b80aad2` exactly. Canonical
+package/native/model qualification remains required before local retention.
+
+Canonical package qualification then passes: 97 policy checks, 40 cases /
+80 exact native pairs / 160 FP64 checks, both R4/R8 pipeline compilation,
+old-library fallback, recurrent-state and checkpoint-retirement unit tests,
+and four exact full-model state exports with the R8 flag unset. A separate
+CPU selection comparison covers 1,920 combinations of token count, projection,
+expert count, input layout and shared-buffer mode; M1 Ultra, M4 and M3 Ultra
+default R4/R8 selection agrees with the previous source in every case. This
+is policy evidence, not a new serving measurement on those devices.
+
+The extension is retained locally in core patch 0042, with all other patches
+unchanged. Native commit is `33599989d97a5da5639b611ce8d1d132a66706b7`,
+queue digest `951701e48d8586ca25cfa232a772108da537f2b6c91679f137b66a3ea92e5a40`.
+Retained manifest SHA-256 is
+`33d2fd55479b6d60e086fe532ec497dfec2e9a0e4a7e69bbc34c0225d78f8ea0`;
+primary llama library is
+`05e4205b864152e837244a0076b2af612bc241f30432b75b02519d6bb9a6764f`;
+Metal library is
+`4c38c821775793081342514d5fac8e68ed75a6de70eb6808fafa910e1dd86fb2`.
+Both compiled vector shader sources match the measured package byte for byte.
+The retained directory, archive and matching checksum sidecar verify, and
+canonical preparation confirms the same queue/source identity. Previous
+runtime artifacts and owning patch are preserved under
+`target/affine-u32-m5-window-evidence/pre-m5-*`.
+
+R8 now defaults on M1 Ultra and M5 Max; R4 still defaults on M1 Ultra only.
+ABI remains 0.1.85. These local changes remain uncommitted; no fleet install,
+running user service, push or PR is changed. The broad engine-speed objective
+and BaseRT parity remain unachieved.
+
+### Lossless scale metadata: sampled feasibility only
+
+A read-only CPU audit on the authorized M1 Ultra completes successfully through
+Jianyang (`job_22hmfq4spgr1fdn`, run `run_en2gn13nq0adtwa`, $0). All 479,232
+evenly spaced sampled groups across 117 expert tensors fit common half bases
+and six-bit coefficients and reconstruct the original 160-byte Q4_1 groups
+byte for byte from a 144-byte representation. All integer code bytes and stored
+half scale/offset values are preserved. The input checkpoint is unchanged.
+An exhaustive 4,063,232-case CPU half-times-small-integer reference check also
+passes. Evidence is `target/affine-scale-metadata-evidence/m1-downloads/`.
+
+This is a 10% storage reduction for qualifying sampled expert groups, not a
+10% TPS result or full-tensor admission proof. GPU reconstruction correctness,
+projection cost, ownership/cache integration and full serving performance
+remain untested. No metadata packing is in the retained runtime, and no model
+quantization or tuning change is proposed by this experiment.
+
+### Metadata reconstruction on GPU and projection admission
+
+A standalone M5 GPU proof exhaustively checks all 4,063,232 finite-half-base /
+unsigned-six-bit-coefficient combinations for both integer and hybrid
+reconstruction, with fast math both enabled and disabled. Every output half
+bit matches the native ggml reference. Both compiler policies also reconstruct
+65,536 synthetic packed groups byte for byte, including all code bytes.
+`target/affine-scale-metadata-evidence/gpu-codec-proof-audit.json` records source,
+binary and log hashes. This is scalar/codec correctness, not projection speed.
+
+The first integrated projection smoke does not meet the exact-output gate
+under fast math: both hybrid and integer reconstruction have small output
+rounding differences despite passing the FP64 tolerance. Strict compilation
+of both arms makes the same projection outputs bit-identical. A scalar-load
+variant still differs under fast math. These results implicate compiler
+optimization of the integrated projection; they do not identify a specific
+compiler transformation. Failed smoke logs are preserved under the projection
+evidence directory. No native admission is made from the tolerance result.
+
+A separate strict-math feasibility job on an authorized idle Dan-lab M4 mini
+is `job_mt95tmze2075tqt`, run `run_rqgyeskmw7sang8`, with a $0 spend cap.
+Both arms use bounded-u32 addresses and identical dot-product source; candidate
+metadata/code addresses use 144 bytes rather than 160 bytes per group. It
+qualifies R4/R8 exact paired outputs, FP64 references and poisoned writes before
+guarded timing. Its compiler policy differs from the retained runtime, so even
+a positive result would require a further retained-policy implementation and
+full serving proof. No metadata packing is retained.
+
+The M4 job completes successfully at $0. Both screens pass their full exact
+paired/FP64/poisoned-write qualification: R4 has 64 paired / 128 FP64 checks;
+R8 has 48 paired / 96 FP64 checks. Across the two screens, 32 guarded ABBA
+blocks cover 64 projection timing cases / 256 raw timing pairs. Downloaded
+artifacts pass digest verification. A separate local raw-log audit rechecks
+source pins, every accepted guard, numerical roster, ABBA order and ratios.
+The executable checksum is verified by the remote auditor; the executable
+itself is not downloaded, a limitation recorded in the local audit.
+
+| Strict-math M4 screen | Rotating domain-256 projection latency change |
+| --- | ---: |
+| R4, eight geometry/input cases | +22.05% to +47.78% |
+| R8, eight geometry/input cases | +23.91% to +44.13% |
+
+Positive latency changes mean slower execution. Domain-256 fixed-route cases
+are mixed (-7.95% to +10.77% for R4; -6.52% to +8.71% for R8), while
+concentrated domain-16 cases regress about 47-60%. Smaller representation
+size therefore does not establish a useful projection gain for this layout.
+The screen does not identify the hardware cause of the regression.
+
+Reject this layout without native/cache integration or a full-tensor packing
+pass. Preserve the exact codec proof as feasibility evidence, but do not
+repeat this layout unchanged or count its storage reduction as a TPS gain.
+`target/affine-scale-metadata-evidence/m4-projection-verification.json` and
+`research-state.json` record the rejection. The retained M5 u32 default and
+M1 R4/R8 paths remain unchanged; the broad engine-speed goal stays open.
+
+### Command-buffer partitioning: reject a blanket single buffer
+
+An isolated native probe uses the existing internal setter after backend
+synchronization to compare one versus two Metal command buffers per target
+forward. It changes neither the native source queue nor weight/kernel bytes.
+The M1 donor is native tree `56f327d0152ce4e89e3e9f718f5768ba60235391`;
+its M1 policies agree with the subsequently retained M5-only extension.
+The fixed target hash remains `e7b415ddddfa7bd8348d643534cd559313a9831f332466cfc68ba2cd40dec7d3`.
+
+All six width/lane geometries pass full-state and all-logit bit comparisons
+after six forwards per arm. Actual native command callbacks confirm six graphs
+with 12 control commands and six candidate commands, with matching node counts.
+The local M5 eight-row/one-lane smoke also passes exact state and logits. These
+are correctness/topology results, not serving performance.
+
+Initial M1 job `job_0apv8xrnrgz2rex` completes all six correctness checks but
+fails before measurement: the thermal helper's single-string Ruby invocation
+splits the work path at a space. Correcting it to an explicit executable/argv
+pair yields successful job `job_7nrhr2h97vba53a`, run `run_b93s19xv0rseyhc`, $0.
+The failed job is not treated as a performance result or silently restarted.
+
+The successful screen has 18 within-process ABBA blocks / 72 timed arms,
+32 synchronized forwards per arm, four warmup forwards before each arm and
+494 accepted mid-run CPU/thermal guard samples. Input/library pins agree before
+and after timing; raw records and ratios pass a separate transport audit.
+The probe feeds fixed token IDs and requests all-row logits. It does not run
+the draft, acceptance controller, sampler or HTTP path.
+
+| Tokens per lane | Lanes | Two buffers, graph ms | One buffer, graph ms | Latency change |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1 | 11.7501 | 12.8218 | +9.12% |
+| 1 | 2 | 15.7663 | 16.8350 | +6.78% |
+| 3 | 1 | 16.6406 | 18.1036 | +8.79% |
+| 3 | 2 | 20.9842 | 22.6682 | +8.03% |
+| 8 | 1 | 22.6195 | 24.2365 | +7.15% |
+| 8 | 2 | 38.8339 | 40.6968 | +4.80% |
+
+Every measured block regresses. Reject a blanket single-command-buffer policy;
+reducing the command count is not itself a speedup. The existing split permits
+early GPU execution while the remaining nodes are encoded; this experiment
+does not separately attribute the regression to overlap, CPU planning or GPU
+barrier behavior. `target/metal-command-buffer-evidence/m1-verification.json`
+records the exact scope and qualification limits. No serving gain is claimed.
+
+A distinct follow-up tests two background encoding threads rather than one,
+retaining early submission but dividing the remaining graph across two workers
+(three total command buffers versus two). It uses the existing internal control,
+with the same full-state/topology gate and guarded target-forward protocol.
+Job `job_e59w5shzh7tayhx` is an isolated $0 M1 screen; no production default
+changes while that evidence is pending.
+
+The two-worker follow-up completes successfully as run
+`run_t0f62psvr9ysbfj` ($0). All six full-state/all-logit pairs pass; native
+callbacks confirm six graphs, 12 control commands and 18 candidate commands
+with equal node counts. The independent audit validates 18 ABBA blocks /
+72 timed arms / 473 mid-run guards, unchanged inputs/libraries and all raw ratios.
+
+| Tokens per lane | Lanes | Three-buffer native latency change |
+| --- | ---: | ---: |
+| 1 | 1 | -3.1779% |
+| 1 | 2 | -1.2251% |
+| 3 | 1 | +0.3952% |
+| 3 | 2 | -0.0741% |
+| 8 | 1 | +0.6050% |
+| 8 | 2 | +0.4034% |
+
+The one-token cases improve in all three blocks each (one lane: 12.0105 ->
+11.6288 ms; two lanes: 15.6563 -> 15.4645 ms). Both eight-token cases regress
+in every block. Thus no blanket default change is justified. The source of
+any benefit is not isolated by the partition-count experiment.
+`target/metal-command-buffer-parallel-evidence/m1-verification.json` is the
+raw/source audit. These percentages are native target-forward latency, not
+serving TPS, and must not be added to prior TPS gains.
+
+Fresh-process repeat job `job_sywpcwm5wnkycpm` is explicitly created from the
+successful immutable spec using Jianyang rerun. It remains $0, on the same
+authorized M1. A potential one-token-per-lane policy still requires repeated
+results, a semantic graph-shape contract, bounded/idempotent backend updates,
+full rollback qualification and full serving checks before retention. No
+production code or default changes from either command-buffer experiment.
+
+### One-token encoding parallelism: repeat and default-off prototype
+
+The fresh-process repeat succeeds at $0 as run `run_q5949mv94nv13sj`.
+Source, model and native-library pins agree with the first experiment. All
+six geometries again pass full-state/logit and actual topology qualification.
+Its independent audit validates another 18 ABBA blocks / 72 timed arms /
+476 mid-run guard samples. One-token latency improves 2.1629% for one lane
+and 1.2419% for two lanes; all three blocks per case improve. Larger windows
+remain mixed or slower, so there is no blanket default promotion.
+
+Pooling equal-work elapsed times from the two experiments gives one-token
+native latency reductions of 2.6706% (one lane) and 1.2335% (two lanes).
+All six blocks per one-token geometry improve. This remains target-forward
+latency, not serving TPS. `target/metal-command-buffer-parallel-evidence/repeatability.json`
+records custody and the pooled result.
+
+An isolated default-off prototype uses an optional backend hook carrying only
+the count of independent one-token sequence sets. Batch metadata admits equal
+one-token layouts with one unique sequence ID per row; absent, shared, unequal,
+empty or multi-token layouts clear the hint. No model-family branch is added.
+The Metal policy admits shared-buffer M1 Ultra with one or two such lanes;
+other cases retain one extra partition. Missing backend hooks remain optional.
+Function discovery happens at context initialization, not per graph.
+
+The partition setter becomes idempotent. Before changing its command-slot
+count it synchronizes and checks all old partitions, preserving backend error
+state; this prevents an old slot from escaping the narrower status check after
+a transition. The private diagnostic flag defaults off. No shader arithmetic,
+weight bytes, public Skippy ABI or user-facing setting changes.
+
+Prototype tree is `cb4d4f6820fe7b8e72110171ae081e891b0592fc`; the patch from
+the M1 donor has SHA-256
+`e7eeaff287a89cf5aae2b21951ee628d9cbad52dbdf0ac9a960ac4ba5db7caa0`.
+The source is isolated under `target/metal-decode-shape-policy-evidence/`, not
+the retained queue. Local Just validation passes 59 CPU policy/layout checks,
+the batch allocator suite, graph policy, 40 routed cases / 80 exact pairs /
+160 FP64 checks and both R4/R8 compilation checks. On unqualified M5 Max,
+both flag states retain 1,359 two-buffer graphs and zero three-buffer graphs;
+all four exported model-state blocks match exactly through forced rollback,
+checkpoint/shared-lane and peer-repair checks.
+
+M1 qualification job `job_qb6n72wwnbqj1se`, run `run_xdv48zdj71veh8g`, succeeds
+at $0 on the exact same source tree. Its enabled arm executes 1,233 three-buffer
+graphs and 126 two-buffer graphs, versus zero and 1,359 in control. All four
+full-model state exports match exactly; CPU/native tests, forced rejection,
+rollback, checkpoints, shared lanes and all four peer-repair modes pass.
+No serving performance is measured in this job.
+
+The raw remote summary contains duplicate `status` keys because its source
+state uses string keys while the final Ruby merge uses a symbol key. The raw
+artifact is preserved. A local verifier independently checks every test,
+source pin, loaded library and topology/state log, and writes separately named
+source/qualification statuses. Future payload generation fixes the key clash;
+no qualification is inferred from ambiguous status parsing alone.
+`local-qualification.json` and `m1-qualification-verification.json` retain these
+checks and their binary/state-payload download limitations.
+
+End-to-end serving against the retained runtime, with frozen model/draft
+inputs and fresh-process repeatability, remains required. Plain decode and
+DFlash behavior both need checking before any production default changes.
+The broader engine-speed objective and BaseRT parity remain unachieved.
+
+### Semantic partition policy: full serving pipeline dispatched
+
+Job `job_5gq396nq95rmhct`, run `run_sbdxp5j6yhd77vn`, is a $0 M1 pipeline
+covering plain decode and DFlash2 cap7 separately. It uses the frozen M1 CLI,
+affine target and Q8 draft, f16 KV, two lanes, 8192 context cells and disabled
+prefix/disk caches. Control is the retained M1 R4/R8-u32 package (manifest
+`55ce627400f371acae192451d75fa6a2bbf6c6cf8fc26456e2f4fb39f7933dfe`,
+primary library `5c46ee8fc67141027902eee5a71957746a0e1d2f82ec20c72ce00c779179a2b8`).
+Candidate explicitly enables the default-off semantic partition policy;
+routed-u32 flags stay unset in both arms, preserving their M1 defaults.
+
+The pipeline preserves the old qualified prototype libraries before binding its
+already tested source tree to a private native snapshot commit for package
+metadata. It rebuilds and verifies the experimental runtime, checks unchanged
+compiled shader sources, rechecks full-model exact state/rollback and actual
+policy activation using the packaged libraries, then freezes artifacts before
+timing. No source, package or correctness work runs during measurement.
+These are task-owned experimental sources/artifacts, not a fleet installation
+or the retained runtime.
+
+Each serving mode uses three warmup and three measured eight-prompt cycles at
+C1/C2 with within-prompt ABBA. Whole blocks are rejected/retried for sampled
+CPU/thermal interference; boundary and 100ms mid-request guards are required.
+Three one-second quiet samples precede startup/retries; observer wakeup/join
+is outside the timer. Source/input/runtime pins, actual loaded paths, raw
+responses, exact text and request/elapsed rosters must pass independently.
+Plain and speculative metrics are not pooled. Serving evidence is pending;
+`target/metal-decode-shape-policy-evidence/job-m1-serving.json` records the
+immutable submitted spec, and `verify-serving.rb` defines the local re-audit.
+
+### Reusable Metal encoding: standalone feasibility only
+
+Apple documents reusable [indirect compute commands](https://developer.apple.com/documentation/metal/mtlindirectcomputecommand)
+and [ICB-compatible compute pipelines](https://developer.apple.com/documentation/metal/mtlcomputepipelinedescriptor/supportindirectcommandbuffers?language=objc).
+A separate synthetic probe compares original direct two-buffer encoding,
+direct encoding with the ICB-compatible pipeline flag, two-buffer ICB replay
+and one-buffer ICB replay. Dependent dispatches retain explicit barriers and
+resource declarations. Input, weight and parameter contents change between
+replays while buffer bindings and graph shape remain stable.
+
+Local M5 correctness passes six depth/value geometries, 36 exact paired outputs
+and 48 CPU FMA references/finite-write checks across two input frames. This
+checks the mechanism on a simple strict-math recurrence, not any native
+inference kernel, model, ownership/invalidation scheme or serving throughput.
+Setup and pipeline compilation, input reset and one-time command recording are
+outside its timed replay; preencoding time and ICB storage are reported
+separately. The original direct pipeline versus compatible direct pipeline
+control separates compatibility costs from reuse.
+
+An independent $0 Dan-lab M4 job is `job_79tdpp52ky5hgt9`, run
+`run_5yq8ft0z5trhsfb`. It qualifies all outputs before 18 guarded ABBA blocks
+covering three replay alternatives at six synthetic shapes. It runs on a
+different host from the serving comparison. Evidence is under
+`target/metal-reusable-encoding-evidence/`; no reusable encoding is in the
+native patch queue or retained runtime, and no native/TPS gain is claimed.
+
+The first serving pipeline completes successfully and passes the independent
+source/raw-response/guard/mode audit. The exact-source experimental snapshot
+commit is `6e0de09cdbba9bbd07bd798255ba12ff3150738d`, tree unchanged at
+`cb4d4f6820fe7b8e72110171ae081e891b0592fc`. Full-source patch SHA-256 is
+`17c1e17a133e340a2204746677f28ac12f160534a538a0b652c69fd3925017ab`;
+this is an experimental full-source digest, not a canonical queue digest.
+Experimental manifest SHA-256 is
+`95b875b64f2ea6c7d435a4d8256f64151996aedd4735c75a7ba95c3cdfbe893d`;
+primary library is
+`896c0a5f979179cab799da57a1d66dd7bc396d95d06787f55ca8474cdc66d0ed`,
+Metal library is
+`42aba30338b38cd939031ef106a092f2a809e43ae8e112fc00c560874ed48961`.
+The packaged model-state proof and actual policy activation pass before timing;
+rebuilding package metadata preserves every pinned compiled shader source.
+
+| Serving mode | Concurrency | Retained TPS | Prototype TPS | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Plain | 1 | 77.6396 | 80.8352 | +4.1159% |
+| Plain, aggregate | 2 | 117.2146 | 120.9524 | +3.1889% |
+| DFlash2 cap7 | 1 | 124.3473 | 124.3128 | -0.0277% |
+| DFlash2 cap7, aggregate | 2 | 147.8772 | 147.6814 | -0.1324% |
+
+Every plain C1/C2 cycle improves. DFlash cycle signs are mixed; there is no
+DFlash gain established by this pilot. All measured texts match exactly in
+both modes. Each mode independently validates 288 accepted / 192 measured
+requests, with source/input/runtime pins unchanged. The plain audit excludes
+zero blocks; DFlash excludes two whole blocks before retrying.
+
+The initial local mode checker incorrectly expected `stage.openai_decode` in
+plain serving. The built-in plain scheduler emits generation summaries instead.
+The corrected checker requires the frozen explicit-disabled CLI arguments,
+complete zero-drop/uncached plain generation summaries, and no speculative
+attachment/draft/verification events. DFlash retains its explicit strategy,
+variant and cap checks. Request, timing, exact-text and guard gates are unchanged.
+`serving-verification.json` records the independent audit, not just the remote
+job's exit status.
+
+Two further fresh-process repetitions run as $0 job
+`job_zjr83v5jh9b73tk`. They reuse the frozen verified package without native
+rebuilding or repeating model correctness work during measurement. The pilot
+is already observed; prospective confirmation gates require positive plain
+C1/C2 estimates and all corresponding cycles in both fresh runs, unchanged
+cross-process pins/text, and nonnegative pooled DFlash estimates at both
+concurrencies before default promotion. `serving-confirmation-gates.json`
+records these gates before collecting confirmations. No default is changed.
+
+### Reusable encoding: corrected timing screen, no native integration
+
+The first M4 reusable-encoding job succeeds numerically but exposes invalid
+GPU timestamp accounting for empty tail buffers: a 64-dispatch control reports
+about 17 ms GPU duration inside roughly 0.3 ms synchronized wall time. Its
+warmup threshold also depends on those timestamps. Preserve that raw campaign
+as exploratory/invalid timing evidence; do not promote from its apparent gains.
+
+The corrected probe excludes buffers with no encoded work from GPU interval
+accounting and requires every graph's nonempty GPU union to fit its synchronized
+wall interval (10 microseconds timestamp slack). It reruns qualification and
+the full screen as job `job_jzbf8hgjjzezbzj`, run `run_m5pvafbwa6edspy`, $0.
+Its separate source/raw-log audit passes 18 ABBA blocks / 72 timed arms /
+288 mid-run guard samples, 36 exact pairs and 48 CPU FMA/finite-write checks.
+Both the first and corrected source/artifacts remain preserved.
+
+ICB replay reduces CPU encoding time by roughly 68-95%, but GPU intervals rise
+21-81% in this synthetic dependency chain. Two-buffer replay increases wall
+latency in all six shapes (+1.64% to +14.65%). One-buffer replay improves one
+small case (-2.30%) and regresses the other five (+3.23% to +57.93%). The
+compatible direct-pipeline control is mixed. These measurements do not isolate
+the GPU cause or establish behavior on actual native graphs.
+
+Do not integrate this implementation: 11 of 12 replay comparisons regress
+wall latency, despite cheaper CPU encoding. This is not a universal rejection
+of reusable encoding; a materially different approach would need a new cost
+hypothesis and actual native ownership/invalidation and performance proof.
+`target/metal-reusable-encoding-evidence/corrected-verification.json` records
+the valid screen. No native/serving gain or retained change is claimed.
+
+### Retained M5 patch description and package provenance finalized
+
+The owning core 0042 message now correctly describes R8 defaults on M1 Ultra
+and M5 Max and R4 on M1 Ultra; its generated diffstat is restored. Every
+production patch hunk is identical to the already qualified retained source.
+A fresh all-lane cold replay proves the same full native tree
+`c1cc600f9aaa8895b4563895065960ab5b80aad2`. No behavioral or performance
+change is introduced by this metadata correction.
+
+The replay's native commit is `fe0bab90b41e7ec7127f79a72cc07c850b99b6b4`,
+queue digest `4c883167fb80a05249f52cb16cc7facf439f899f337c3b94bcbb8ea963875069`,
+core-0042 SHA-256 `38e90cb4338420b5af79eb3eac1a0391c881e78d964fc012163b25f593f8b074`.
+A Just-built package uses that exact source/queue identity. All 39 compiled
+Metal shader sources match the previously qualified package byte for byte,
+and every source is present in the packaged Metal library. Package file hashes,
+ABI 0.1.85, archive and checksum sidecar pass verification. Canonical preparation
+from the root queue confirms the same identity after retention.
+
+Retained manifest SHA-256 is
+`9d9eb1adb756df89ad278ba546f4f4ed70c632b4c4d0b108c9d4001053285e15`;
+primary library is
+`505a6d96713d53572031b35b20d095df5f6b81baa4761b161aaa7931b5b22a3f`;
+Metal library is
+`5cf1efcabe76158cd6e11474be161eb643695d28c317b0e85184273942e3cc3c`.
+The previous local package, archive, matching sidecar and patch are preserved
+under `target/affine-u32-m5-window-evidence/metadata-refresh/`. This supersedes
+only the preceding retained package's metadata identities; its source-level
+qualification and three serving comparisons remain applicable to the identical
+production tree. No numerical or throughput retest is inferred or claimed.
+
+The M1 parallel-encoding policy remains outside the retained queue while its
+fresh-process serving confirmations run on the separately frozen M1 artifacts.
+No fleet installation, running user service, push or PR is changed.

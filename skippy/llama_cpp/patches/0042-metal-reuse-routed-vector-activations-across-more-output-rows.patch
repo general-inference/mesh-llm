@@ -4,9 +4,9 @@ Date: Mon, 16 Nov 2026 05:06:29 +1100
 Subject: [PATCH] metal: tune routed vector reuse and bounded offsets
 
 Retain the qualified output-row reuse specializations. Add checked uint32
-relative offsets for the exact shared-buffer NR8 geometry, enabled by default
-on serving-qualified M1 Ultra only. Keep other devices on the original default
-and allow explicit private diagnostic overrides.
+relative offsets for qualified shared-buffer R4 and R8 geometries. Enable R8
+by default on M1 Ultra and M5 Max, and R4 on M1 Ultra. Keep other devices on
+the original default and preserve private diagnostic overrides.
 
 Share the existing quantized-vector arithmetic between both offset widths.
 Preserve unsupported-shape, stride, byte-span and old-library fallbacks, with
@@ -14,22 +14,22 @@ cached positive and negative function discovery. Add CPU-only policy CTest
 coverage and explicit native paired/FP64/masked/view/fallback qualification.
 The public Skippy ABI and stored model bytes remain unchanged.
 ---
- ggml/src/ggml-metal/CMakeLists.txt            |  13 +-
- ggml/src/ggml-metal/ggml-metal-device.cpp     |  28 ++
- ggml/src/ggml-metal/ggml-metal-device.h       |   1 +
- ggml/src/ggml-metal/ggml-metal-device.m       |  30 ++
- .../ggml-metal/ggml-metal-routed-offsets.h    |  64 +++++
- .../src/ggml-metal/ggml-metal-routed-tuning.h |  27 ++
- ggml/src/ggml-metal/kernels/mul_mv.metal      | 264 +-----------------
- ggml/src/ggml-metal/kernels/mul_mv_q_n.h      | 262 +++++++++++++++++
- ggml/src/ggml-metal/kernels/routed_u32.metal  |  75 +++++
- .../ggml-metal/kernels/routed_u32_r4.metal    |  75 +++++
- tests/CMakeLists.txt                          |   4 +
- tests/test-backend-ops.cpp                    |   5 +
- tests/test-backend-portable-routed.h          |  43 +++
- tests/test-metal-graph-optimize.cpp           |  43 +++
- tests/test-metal-routed-u32.cpp               | 217 ++++++++++++++
- 15 files changed, 889 insertions(+), 262 deletions(-)
+ ggml/src/ggml-metal/CMakeLists.txt              |  13 +-
+ ggml/src/ggml-metal/ggml-metal-device.cpp       |  28 +++
+ ggml/src/ggml-metal/ggml-metal-device.h         |   1 +
+ ggml/src/ggml-metal/ggml-metal-device.m         |  30 +++
+ ggml/src/ggml-metal/ggml-metal-routed-offsets.h |  70 +++++++
+ ggml/src/ggml-metal/ggml-metal-routed-tuning.h  |  27 +++
+ ggml/src/ggml-metal/kernels/mul_mv.metal        | 264 +-----------------------
+ ggml/src/ggml-metal/kernels/mul_mv_q_n.h        | 262 +++++++++++++++++++++++
+ ggml/src/ggml-metal/kernels/routed_u32.metal    |  75 +++++++
+ ggml/src/ggml-metal/kernels/routed_u32_r4.metal |  75 +++++++
+ tests/CMakeLists.txt                            |   4 +
+ tests/test-backend-ops.cpp                      |   5 +
+ tests/test-backend-portable-routed.h            |  43 ++++
+ tests/test-metal-graph-optimize.cpp             |  43 ++++
+ tests/test-metal-routed-u32.cpp                 | 237 +++++++++++++++++++++
+ 15 files changed, 915 insertions(+), 262 deletions(-)
  create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-offsets.h
  create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-tuning.h
  create mode 100644 ggml/src/ggml-metal/kernels/mul_mv_q_n.h
@@ -96,7 +96,7 @@ index b36e3b56b..95a6f6a97 100644
              VERBATIM
          )
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index e6c95c3af..7cb62c648 100644
+index e6c95c3af..2e5413e07 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
 @@ -3,6 +3,10 @@
@@ -122,7 +122,7 @@ index e6c95c3af..7cb62c648 100644
 +        suffix = tsrc0 == GGML_TYPE_Q4_K ? "_r4" : tsrc0 == GGML_TYPE_Q4_1 ? "_r8" : "_r2";
 +    }
 +    const char * enable_u32 = std::getenv("GGML_METAL_ROUTED_U32");
-+    const bool use_u32 = ggml_metal_routed_offsets::requested(enable_u32, props->device_id) &&
++    const bool use_u32 = ggml_metal_routed_offsets::requested_r8(enable_u32, props->device_id) &&
 +            ggml_metal_routed_offsets::eligible(op, props->device_id, props->use_shared_buffers, nr0, nsg);
 +    const char * enable_r4 = std::getenv("GGML_METAL_ROUTED_U32_R4");
 +    const bool use_r4 = ggml_metal_routed_offsets::requested(enable_r4, props->device_id) &&
@@ -221,10 +221,10 @@ index 7c42724af..8ccb88939 100644
  
 diff --git a/ggml/src/ggml-metal/ggml-metal-routed-offsets.h b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
 new file mode 100644
-index 000000000..dd799fe7b
+index 000000000..30fc69a5d
 --- /dev/null
 +++ b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,70 @@
 +#pragma once
 +
 +#include "ggml-metal-device.h"
@@ -237,6 +237,12 @@ index 000000000..dd799fe7b
 +// the original path by default; the private flag permits explicit diagnostics.
 +inline bool requested(const char * value, ggml_metal_device_id device) {
 +    return value ? std::strcmp(value, "1") == 0 : device == GGML_METAL_DEVICE_M1_ULTRA;
++}
++
++// R8 has separate qualification; enabling it does not enable the R4 diagnostic.
++inline bool requested_r8(const char * value, ggml_metal_device_id device) {
++    return value ? std::strcmp(value, "1") == 0 :
++            device == GGML_METAL_DEVICE_M1_ULTRA || device == GGML_METAL_DEVICE_M5_MAX;
 +}
 +
 +// Inclusive bound on every byte touched relative to the tensor's bound base.
@@ -280,7 +286,7 @@ index 000000000..dd799fe7b
 +
 +inline bool eligible(const ggml_tensor * op, ggml_metal_device_id device,
 +                     bool shared, int rows, int simdgroups) {
-+    return eligible_geometry(op, device, shared, rows, simdgroups, 8, 16, 16);
++    return eligible_geometry(op, device, shared, rows, simdgroups, 8, 3, 16);
 +}
 +
 +inline bool eligible_r4(const ggml_tensor * op, ggml_metal_device_id device,
@@ -1191,10 +1197,10 @@ index e9ebdb8df..b65d1d8bf 100644
          for (bool shared : { false, true }) {
 diff --git a/tests/test-metal-routed-u32.cpp b/tests/test-metal-routed-u32.cpp
 new file mode 100644
-index 000000000..89466e49e
+index 000000000..341ce6ca4
 --- /dev/null
 +++ b/tests/test-metal-routed-u32.cpp
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,237 @@
 +#include "ggml.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
@@ -1212,8 +1218,10 @@ index 000000000..89466e49e
 +
 +static void require(bool ok, const char * why) { if (!ok) throw std::runtime_error(why); }
 +static std::atomic<int> compiled{0};
++static std::atomic<int> compiled_r4{0};
 +static void logger(ggml_log_level level, const char * text, void *) {
-+    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r4_u32'")) ++compiled;
++    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r8_u32'")) ++compiled;
++    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r4_u32'")) ++compiled_r4;
 +    if (level != GGML_LOG_LEVEL_DEBUG) std::fputs(text, stderr);
 +}
 +struct q4 { ggml_fp16_t d, m; uint8_t qs[16]; };
@@ -1238,6 +1246,10 @@ index 000000000..89466e49e
 +        require(requested(nullptr,device)==(device==GGML_METAL_DEVICE_M1_ULTRA), "unqualified default"); ++checks;
 +        require(!requested("0",device), "diagnostic opt-out"); ++checks;
 +        require(requested("1",device), "explicit diagnostic opt-in"); ++checks;
++        require(requested_r8(nullptr,device)==(device==GGML_METAL_DEVICE_M1_ULTRA || device==GGML_METAL_DEVICE_M5_MAX), "R8 default policy"); ++checks;
++        require(!requested_r8("0",device), "R8 diagnostic opt-out"); ++checks;
++        require(requested_r8("1",device), "R8 diagnostic opt-in"); ++checks;
++
 +    }
 +
 +    require(admitted(), "good geometry rejected"); ++checks;
@@ -1279,7 +1291,16 @@ index 000000000..89466e49e
 +        idi->nb[1]=UINT64_MAX;
 +        require(eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2)==(tokens==1), "R4 ID span bound"); ++checks;
 +    }
++    for (int tokens : {1, 2, 3, 8, 15, 16, 17}) {
++        auto * xi = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, tokens);
++        auto * idi = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, tokens);
++        auto * yi = ggml_mul_mat_id(s.ctx, w, xi, idi);
++        require(eligible(yi, GGML_METAL_DEVICE_M5_MAX, true, 8, 2)==(tokens>=3 && tokens<=16), "R8 window admission"); ++checks;
++        require(!eligible(yi, GGML_METAL_DEVICE_M5_MAX, true, 4, 2), "R8 row geometry changed"); ++checks;
++        require(!eligible(yi, GGML_METAL_DEVICE_M5_MAX, false, 8, 2), "R8 private allocation"); ++checks;
++    }
 +    std::printf("PASS policy_checks=%d\n", checks);
++
 +
 +    return checks;
 +}
@@ -1354,7 +1375,7 @@ index 000000000..89466e49e
 +        ggml_backend_tensor_set(id_root, route.data(), 0, ggml_nbytes(id_root));
 +        std::vector<float> arms[2];
 +        for (int arm = 0; arm < 2; ++arm) {
-+            setenv("GGML_METAL_ROUTED_U32", "1", 1);
++            setenv("GGML_METAL_ROUTED_U32", arm ? "1" : "0", 1);
 +            setenv("GGML_METAL_ROUTED_U32_R4", arm ? "1" : "0", 1);
 +
 +            std::vector<float> poison(ggml_nelements(out), std::nanf(""));
@@ -1395,7 +1416,7 @@ index 000000000..89466e49e
 +        const bool policy_only = argc==2 && std::strcmp(argv[1], "--policy-only")==0;
 +        require(argc==1 || policy_only, "usage: test-metal-routed-u32 [--policy-only]");
 +        policy_checks(); if (policy_only) return 0;
-+        ggml_log_set(logger, nullptr); old_library_check(); compiled.store(0);
++        ggml_log_set(logger, nullptr); old_library_check(); compiled.store(0); compiled_r4.store(0);
 +        ggml_backend_load_all(); auto backend = ggml_backend_init_by_name("MTL0", nullptr); require(backend, "Metal backend missing");
 +        int cases = 0;
 +        for (int k : {2048, 512}) for (int experts : {128, 256}) for (int inputs : {1, 8}) for (bool view : {false, true}) {
@@ -1406,12 +1427,14 @@ index 000000000..89466e49e
 +        for (int tokens : {1,2}) for (int k : {2048,512}) for (int inputs : {1,8}) {
 +            run_case(backend,k,k==2048?512:2048,128,tokens,inputs,true,false); ++cases;
 +        }
-+        require(compiled.load() > 0, "new R4 native pipeline never compiled");
++        for (int tokens : {3,8,15}) for (int inputs : {1,8}) {
++            run_case(backend,2048,512,128,tokens,inputs,true,false); ++cases;
++        }
++        require(compiled.load() > 0, "new R8 native pipeline never compiled");
++        require(compiled_r4.load() > 0, "new R4 native pipeline never compiled");
 +
-+        std::printf("PASS native_cases=%d paired_outputs=%d fp64_checks=%d u32_pipeline_compiles=%d\n",cases,2*cases,4*cases,compiled.load());
++
++        std::printf("PASS native_cases=%d paired_outputs=%d fp64_checks=%d u32_pipeline_compiles=%d r4_pipeline_compiles=%d\n",cases,2*cases,4*cases,compiled.load(),compiled_r4.load());
 +        ggml_backend_free(backend); return 0;
 +    } catch (const std::exception & error) { std::fprintf(stderr,"FAIL: %s\n",error.what()); return 1; }
 +}
--- 
-2.54.0 (Apple Git-157)
-

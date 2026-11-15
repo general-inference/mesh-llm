@@ -2227,3 +2227,201 @@ patches, complete diagnostics and separate independent audits remain under
 `target/host-readback-evidence/`. These results narrow the next work toward
 matrix execution and weight layout: substantially fewer copy submissions
 alone did not materially close the measured engine-configuration gap.
+
+## Cumulative retained configuration against merged PR #33
+
+A fresh same-machine M5 Max comparison directly measures the original merged
+PR #33 configuration against the retained current configuration. The control
+uses clean root `74c7d5bd2`, native `7166b39c6add8b266b5d1d80b36d4c31520256f3`,
+the original Unsloth UD Q4_K_M target and original Q8 DFlash draft, with a
+six-proposal ceiling and the earlier adaptive settings. The candidate uses
+native `e795659936a8bb5fd0554d4ee7b788fd6f78b6be`, affine-expert target,
+Q8 DFlash 2 and cap seven. Both primary libraries were freshly hashed against
+their pinned manifests; CLI checksums and manifests are retained with the run.
+Startup telemetry confirms DFlash versus DFlash 2 and the six/seven limits.
+Neither rejected readback prototype nor the rejected short-tile prototype
+is part of the candidate runtime.
+
+This is a complete-configuration result with different target representations,
+drafts and controllers. It is not an engine-only or equal-quality claim. Both
+arms use the same eight fixed prompts, greedy generation, 128-token length
+completions, f16 KV, 8192 context cells, two generation lanes and disabled prefix
+and disk caches. Two resident servers perform three warmup and three measured
+cycles per concurrency, with control/candidate/candidate/control ordering
+within each measured prompt or paired batch.
+
+| Concurrency | Original PR #33 tok/s | Retained current tok/s | Change |
+|---|---:|---:|---:|
+| 1 | 151.001 | 215.265 | +42.56% |
+| 2 aggregate | 147.924 | 267.924 | +81.12% |
+
+The independent audit checks 288 accepted requests, including 192 measured;
+296 raw responses include excluded attempts. Five whole blocks were rejected
+for competing CPU load or non-nominal thermal state and both arms retried after
+three quiet nominal samples ten seconds apart. All accepted measurements pass
+the pre/post batch guards, matching input-token counts, length and zero-cache
+checks. Each candidate cycle exceeds every corresponding control cycle. Text
+differs across configurations, so this is not exact-output parity. Timing
+includes HTTP client validation and artifact writes. The benchmark uses resident
+processes, not a fresh-process hardware qualification, and cannot be combined
+with earlier component percentages or treated as BaseRT parity. Full scripts,
+response files, guard/rejection observations, startup logs, pins and independent
+audit are under `target/cumulative-pr33-evidence/`.
+
+## Rejected affine routed 32x8x128 tensor tile
+
+A new M5 Max experiment revisited routed tensor execution after the affine
+format change. It uses Q4_1 weights, a 32-output/8-entry tile, two SIMD groups,
+and a 128-value inner step instead of the older rejected Q4_K tile's 32-value
+step. The staging allocation is 10,240 bytes. Dispatch requires shared buffers,
+tensor API support, 8–31 token rows, supported routing widths and aligned
+512–4096 inner dimensions; other cases retain their existing paths. This
+experimental core 0045 is unrelated to the rejected readback core 0045.
+
+Native `7c4c3d31b6041dbf5fe76c8379869bec9a3cfca6` cold-replays to the intended
+tree `c64c41406e1107ffae44ca59b4737c0d05fcf817`. It builds through Just and
+passes the dispatch policy suite and 36 independently selected actual Metal
+versus CPU routing cases. Cases cover both expert geometries, rows around the
+dispatch boundaries, broadcast and per-expert activations, duplicate/negative
+IDs, offset ID views, odd output tails, strided weights and non-128-aligned
+fallback dimensions. The kernel stages weights and activations in F16, so
+passing those operation tolerances does not establish unchanged model quality.
+
+A full serving comparison uses identical affine target and Q8 DFlash 2 files,
+cap seven, f16 KV8192, two lanes and disabled caches. Both runtimes include
+NR8; the candidate replaces eligible routed vector operations with the new
+tile. Independent auditing checks 288 accepted requests, including 192 measured,
+and 311 raw responses. Seven complete load/thermal-affected blocks were rejected
+for both arms and retried after three quiet nominal samples ten seconds apart.
+Measured ordering remains within-prompt control/candidate/candidate/control.
+
+| Concurrency | Retained NR8 tok/s | Short tile tok/s | Change |
+|---|---:|---:|---:|
+| 1 | 191.623 | 170.651 | -10.94% |
+| 2 aggregate | 256.101 | 196.061 | -23.44% |
+
+Every candidate cycle is slower than its corresponding control cycle. Output
+text differs between arms. The single-request control drifts from 195.301 to
+187.922 tok/s across cycles, but remains above every candidate cycle. Thus the
+experiment provides no basis for retention or an additional quality campaign.
+The prototype is rejected and removed from the active queue. Frozen runtime,
+patch, build/test logs, request files, guard observations and independent audit
+are retained under `target/affine-short-tile-evidence/`. The measured cumulative
+headline above continues to refer to the retained NR8 configuration.
+
+## Routed Q4_0 format quality screen
+
+A separate $0 experiment on the explicitly authorized idle M1 Ultra changes
+only the 117 main routed expert tensors from retained Q4_1 to ordinary Q4_0.
+It uses existing product quantization tooling and unchanged native
+`748825b4eab791f3dc768608f37c9ffee96d02d8` in pinned source
+`bb636ca76a4739adcd2c6116b2e3ff95981d389d`. The original affine source SHA-256
+was verified before conversion. A full independent tensor-payload audit checks
+all 117 planned changes and exact preservation of the other 636 payloads.
+
+The new file is 21,421,873,440 bytes, versus 23,384,807,712 for affine, with
+SHA-256 `97dfb68b5d4cb4e46fea9611a1f7cf0d6a7701a3eb63ab4d1b3a177e5d33dd86`.
+A fresh matched 128-chunk WikiText quality run completes in
+`job_a8txbmm8fyb87h1` / `run_kvvgg509x5cvm06`. Candidate PPL is 6.700972 versus
+6.652538 for the packed affine reference: ratio 1.007281 ± 0.001220,
+KL divergence 0.017774 ± 0.000359 and top-token agreement 94.620 ± 0.125%.
+The direct affine baseline PPL is 6.6546; packing the reference slightly changes
+its reconstructed score. These measurements describe one corpus and a real
+quality tradeoff, not equivalent quality or a general quality guarantee.
+
+A fresh-process cooled BAAB serving comparison was launched separately as
+`job_7afzt1brwz4g9jc` / `run_bjqv10zh619mt7j`, with the same CLI/runtime,
+DFlash 2 cap seven and disabled caches in both arms. It includes 180-second
+cooldowns, repeated warmup and measured cycles, and a separate thermal/overlap
+watcher. No serving gain or product recipe/default promotion was established.
+Quality artifacts,
+checksums, payload audit, recipe, immutable job specs and serving observations
+are under `target/routed-q4-0-evidence/`.
+
+The user explicitly parked quantization/model tuning to focus on inference
+engine speed. The serving job above was cancelled at that request before a
+complete BAAB result; no serving gain or format promotion is claimed. Future
+engine comparisons keep target and draft artifacts fixed.
+
+## Rejected grouped F32 routed vector execution
+
+A subsequent engine-only prototype groups up to four routed token entries,
+reusing each reconstructed Q4_1 weight across those entries without F16 staging
+or threadgroup barriers. It retains F32 reconstruction and accumulation, uses
+two SIMD groups and sixteen output rows, and admits only eligible M5 Max
+shared-buffer geometries. Native
+`a1ccedbeea9a51c1a3f7d58ae09c12a81662f894` has intended tree
+`e07ac5e82c265d9170bfe4b0e1d906ee66a0bf86`. The build, dispatch policy checks
+and 36 actual Metal versus CPU cases passed.
+
+The serving screen reached its predefined thirty-minute deadline after
+repeated competing-load interruptions. It is incomplete: 264 accepted requests
+include 168 measured requests, with eighteen rejected blocks and 321 raw
+responses. The accepted results show 196.291 versus 174.037 tok/s at concurrency
+one (-11.34%) and 235.877 versus 182.519 aggregate tok/s at concurrency two
+(-22.62%). Every corresponding measured cycle is slower; the final concurrency
+two cycle is partial. Target, draft and serving settings are fixed across arms,
+but generated text differs. These are rejection-screen observations, not a
+completed performance qualification. The prototype was removed from the active
+queue and retained NR8 restored. Patch, frozen candidate runtime, raw responses,
+guard observations and partial audit are under
+`target/affine-grouped-vector-evidence/`.
+
+## Rejected dense cooperative Q8 input kernels
+
+Two dense projection prototypes consume the existing Q8_0 integer codes through
+Metal cooperative register inputs, retain F32 activations, and apply each
+stored F16 block scale in F32. Both use one SIMD group, sixteen output rows,
+eight activation rows and a 32-value inner step. The first uses an int8
+cooperative right operand; the second represents the same integers exactly as
+half values. Neither changes model files or quantizes activations.
+
+Both pass dispatch policy tests, 47 actual Metal versus CPU cases, and ten
+independent FP64 stored-weight reference cases. The latter exercise both plain
+and fused-residual pipelines, rather than relying on intermediate-output
+backend comparisons that prevent fusion. Explicit opt-out smoke tests also
+pass. The half-code runtime cold-replays to tree
+`fb434268e79aebccf2c9f4d172a2a39adea4a3cb`; its primary library SHA-256 is
+`9579d3b7b1282060ade270779050fde84498a9b6dedb5e65624ea690c5ed3fa7`.
+
+Ten-shape hot-weight latency screens compare the same frozen backend executable
+with only a library-initialization opt-out toggled in control/candidate/candidate/
+control order. Each process must pass nominal thermal and quiet competing-CPU
+checks before and after execution; an affected sequence is rejected in full.
+The integer-input screen completes on attempt one and is 4.4–22.7 times slower
+than the existing kernels. The half-code screen completes on attempt eighteen,
+after load and thermal exclusions, and is 4.8–24.4 times slower. Every tested
+shape regresses in both screens. These are operation-level rejection screens,
+not DRAM-bandwidth or serving-throughput qualifications. Neither warrants a
+full serving run or retention. Frozen half runtime, patches, raw logs, guards
+and screen summaries are under `target/dense-cooperative-evidence/half-screen/`
+and `target/dense-cooperative-evidence/int8-screen/`.
+
+A third variant reconstructs existing Q8_0 values into F32 cooperative registers
+and accumulates 128-value inner tiles, with four SIMD groups splitting K and
+2,048 bytes of shared memory used only for final reduction. K must be divisible
+by 128; the policy test explicitly rejects the former 576-value admission.
+The replayed tree is `fbb7442ffa58f98fb00af4aa02987ed7702fa089`.
+Policy, the same 47 Metal cases and the ten direct backend reference cases
+pass; maximum independent NMSE is `2.97487734709e-12`. Explicit opt-out also
+passes without loading the cooperative kernel.
+
+Its guarded ten-shape screen completes on attempt one. Every shape remains
+slower than the existing implementation, by factors of 2.7–6.5. For example,
+K2048/M4096/N8 takes 96.670 versus 17.510 microseconds, and K2048/M512/N8
+takes 34.630 versus 5.320 microseconds. An independent audit verifies the
+frozen executable hash, all eight accepted guards, kernel activation in the
+correct arms, forty raw timing observations and all ten computed comparisons.
+Artifacts and frozen runtime are under
+`target/dense-cooperative-evidence/f32-split-screen/`. This variant is also
+rejected without a serving run; the experimental core 0045 is removed rather
+than left on an eligible production dispatch path. These experiments establish
+no additional engine speedup.
+
+After removal, `just release-runtime-build metal` succeeds for retained NR8.
+Its build metadata and all 24 native-library hashes match the frozen known-good
+control; the primary library remains
+`32bd947b9520a78188989647810f69845f6443b49ede639d12e9c95b0e160efd`.
+The full retained Skippy and Mesh release build had also passed before these
+native-only prototypes. No rejected cooperative dispatch remains in the active
+patch queue.

@@ -1,4 +1,4 @@
-From 74e1396a0c5ab7aae97fcd8dc2df741ac063f039 Mon Sep 17 00:00:00 2001
+From 4b2811efb1ae66065568c3746e3116963f0d8c98 Mon Sep 17 00:00:00 2001
 From: Codex <codex@localhost>
 Date: Mon, 16 Nov 2026 05:06:29 +1100
 Subject: [PATCH] metal: tune routed vector reuse and bounded offsets
@@ -14,30 +14,32 @@ cached positive and negative function discovery. Add CPU-only policy CTest
 coverage and explicit native paired/FP64/masked/view/fallback qualification.
 The public Skippy ABI and stored model bytes remain unchanged.
 ---
- ggml/src/ggml-metal/CMakeLists.txt            |  12 +-
- ggml/src/ggml-metal/ggml-metal-device.cpp     |  23 ++
+ ggml/src/ggml-metal/CMakeLists.txt            |  13 +-
+ ggml/src/ggml-metal/ggml-metal-device.cpp     |  28 ++
  ggml/src/ggml-metal/ggml-metal-device.h       |   1 +
- ggml/src/ggml-metal/ggml-metal-device.m       |  29 ++
- .../ggml-metal/ggml-metal-routed-offsets.h    |  53 ++++
+ ggml/src/ggml-metal/ggml-metal-device.m       |  30 ++
+ .../ggml-metal/ggml-metal-routed-offsets.h    |  64 +++++
  .../src/ggml-metal/ggml-metal-routed-tuning.h |  27 ++
  ggml/src/ggml-metal/kernels/mul_mv.metal      | 264 +-----------------
  ggml/src/ggml-metal/kernels/mul_mv_q_n.h      | 262 +++++++++++++++++
  ggml/src/ggml-metal/kernels/routed_u32.metal  |  75 +++++
+ .../ggml-metal/kernels/routed_u32_r4.metal    |  75 +++++
  tests/CMakeLists.txt                          |   4 +
  tests/test-backend-ops.cpp                    |   5 +
  tests/test-backend-portable-routed.h          |  43 +++
  tests/test-metal-graph-optimize.cpp           |  43 +++
- tests/test-metal-routed-u32.cpp               | 185 ++++++++++++
- 14 files changed, 764 insertions(+), 262 deletions(-)
+ tests/test-metal-routed-u32.cpp               | 217 ++++++++++++++
+ 15 files changed, 889 insertions(+), 262 deletions(-)
  create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-offsets.h
  create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-tuning.h
  create mode 100644 ggml/src/ggml-metal/kernels/mul_mv_q_n.h
  create mode 100644 ggml/src/ggml-metal/kernels/routed_u32.metal
+ create mode 100644 ggml/src/ggml-metal/kernels/routed_u32_r4.metal
  create mode 100644 tests/test-backend-portable-routed.h
  create mode 100644 tests/test-metal-routed-u32.cpp
 
 diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
-index b36e3b56b..1fd6136c6 100644
+index b36e3b56b..95a6f6a97 100644
 --- a/ggml/src/ggml-metal/CMakeLists.txt
 +++ b/ggml/src/ggml-metal/CMakeLists.txt
 @@ -30,6 +30,7 @@ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
@@ -48,15 +50,16 @@ index b36e3b56b..1fd6136c6 100644
  set(METALLIB_KERNELS_FA_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_common.metal")
  set(METALLIB_KERNELS_FA_VEC_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_vec_common.metal")
  set(METALLIB_KERNELS_FA_SHARED
-@@ -56,6 +57,7 @@ set(METALLIB_KERNEL_SOURCES
+@@ -56,6 +57,8 @@ set(METALLIB_KERNEL_SOURCES
      kernels/fa_vec_q5_1.metal
      kernels/fa_vec_q8_0.metal
      kernels/mul_mv.metal
 +    kernels/routed_u32.metal
++    kernels/routed_u32_r4.metal
      kernels/mul_mv_mma.metal
      kernels/mul_mm.metal
      kernels/quantize.metal
-@@ -115,12 +117,17 @@ if (GGML_METAL_EMBED_LIBRARY)
+@@ -115,12 +118,17 @@ if (GGML_METAL_EMBED_LIBRARY)
              list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_VEC_COMMON})
          endif()
  
@@ -75,7 +78,7 @@ index b36e3b56b..1fd6136c6 100644
              # Step 3: inline ggml-common.h (replacing __embed_ggml-common.h__ sentinel)
              COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}" -e "/__embed_ggml-common.h__/d" < "${EMBED}.tmp2" > "${EMBED}.tmp3"
              # Step 4: inline ggml-metal-impl.h
-@@ -154,6 +161,7 @@ else()
+@@ -154,6 +162,7 @@ else()
      configure_file(kernels/common.h     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/common.h     COPYONLY)
      configure_file(kernels/dequantize.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/dequantize.h COPYONLY)
      configure_file(kernels/quantize.h   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/quantize.h   COPYONLY)
@@ -83,7 +86,7 @@ index b36e3b56b..1fd6136c6 100644
      foreach(hdr ${METALLIB_KERNELS_FA_SHARED})
          get_filename_component(hdr_name ${hdr} NAME)
          configure_file(${hdr} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/${hdr_name} COPYONLY)
-@@ -215,7 +223,7 @@ else()
+@@ -215,7 +224,7 @@ else()
          add_custom_command(
              OUTPUT ${AIR}
              COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
@@ -93,7 +96,7 @@ index b36e3b56b..1fd6136c6 100644
              VERBATIM
          )
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index e6c95c3af..2fa52e852 100644
+index e6c95c3af..7cb62c648 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
 @@ -3,6 +3,10 @@
@@ -107,7 +110,7 @@ index e6c95c3af..2fa52e852 100644
  
  #include "ggml-impl.h"
  
-@@ -1540,10 +1544,29 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
+@@ -1540,10 +1544,34 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
              }
      };
  
@@ -121,15 +124,20 @@ index e6c95c3af..2fa52e852 100644
 +    const char * enable_u32 = std::getenv("GGML_METAL_ROUTED_U32");
 +    const bool use_u32 = ggml_metal_routed_offsets::requested(enable_u32, props->device_id) &&
 +            ggml_metal_routed_offsets::eligible(op, props->device_id, props->use_shared_buffers, nr0, nsg);
++    const char * enable_r4 = std::getenv("GGML_METAL_ROUTED_U32_R4");
++    const bool use_r4 = ggml_metal_routed_offsets::requested(enable_r4, props->device_id) &&
++            ggml_metal_routed_offsets::eligible_r4(op, props->device_id, props->use_shared_buffers, nr0, nsg);
 +    const char * fallback_suffix = suffix;
++
 +    if (use_u32) suffix = "_r8_u32";
++    if (use_r4) suffix = "_r4_u32";
      snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
      snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
  
      ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
 +    // Availability is checked only on a cold candidate-pipeline lookup. An
 +    // old combined or override library keeps its established vector kernel.
-+    if (!res.pipeline && use_u32 && !ggml_metal_library_has_function(lib, base)) {
++    if (!res.pipeline && (use_u32 || use_r4) && !ggml_metal_library_has_function(lib, base)) {
 +        snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), fallback_suffix);
 +        snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
 +        res = ggml_metal_library_get_pipeline(lib, name);
@@ -150,18 +158,19 @@ index 817049494..fe499b3e5 100644
  struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline    (ggml_metal_library_t lib, const char * name);
  struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv);
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 7c42724af..e9ef1b049 100644
+index 7c42724af..8ccb88939 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
-@@ -131,6 +131,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -131,6 +131,8 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      X(FA_VEC_Q5_1,     fa_vec_q5_1)    \
      X(FA_VEC_Q8_0,     fa_vec_q8_0)    \
      X(MUL_MV,          mul_mv)         \
 +    X(ROUTED_U32,      routed_u32)     \
++    X(ROUTED_U32_R4,   routed_u32_r4)  \
      X(MUL_MV_MMA,      mul_mv_mma)     \
      X(MUL_MM,          mul_mm)         \
      X(QUANTIZE,        quantize)       \
-@@ -181,6 +182,9 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -181,6 +183,9 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      // kernels from a second metallib, resolved ahead of the combined library
      NSSet<NSString *> * override_fns;
  
@@ -171,7 +180,7 @@ index 7c42724af..e9ef1b049 100644
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
-@@ -850,6 +854,10 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -850,6 +855,10 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
          [lib->override_fns release];
      }
  
@@ -182,7 +191,7 @@ index 7c42724af..e9ef1b049 100644
      ggml_metal_pipelines_free(lib->pipelines);
  
      if (lib->pso_archive) {
-@@ -869,6 +877,27 @@ ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib) {
+@@ -869,6 +878,27 @@ ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib) {
      return lib->dev;
  }
  
@@ -212,10 +221,10 @@ index 7c42724af..e9ef1b049 100644
  
 diff --git a/ggml/src/ggml-metal/ggml-metal-routed-offsets.h b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
 new file mode 100644
-index 000000000..2bba7c587
+index 000000000..dd799fe7b
 --- /dev/null
 +++ b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,64 @@
 +#pragma once
 +
 +#include "ggml-metal-device.h"
@@ -246,9 +255,10 @@ index 000000000..2bba7c587
 +    return bytes <= limit;
 +}
 +
-+inline bool eligible(const ggml_tensor * op, ggml_metal_device_id device,
-+                     bool shared, int rows, int simdgroups) {
-+    if (!op || op->op != GGML_OP_MUL_MAT_ID || !shared || rows != 8 || simdgroups != 2) return false;
++inline bool eligible_geometry(const ggml_tensor * op, ggml_metal_device_id device,
++                              bool shared, int rows, int simdgroups, int required_rows,
++                              int64_t min_tokens, int64_t max_tokens) {
++    if (!op || op->op != GGML_OP_MUL_MAT_ID || !shared || rows != required_rows || simdgroups != 2) return false;
 +    if (device != GGML_METAL_DEVICE_M1_ULTRA && device != GGML_METAL_DEVICE_M4 &&
 +            device != GGML_METAL_DEVICE_M5_MAX) return false;
 +    const auto * weights = op->src[0];
@@ -261,11 +271,21 @@ index 000000000..2bba7c587
 +    if (weights->ne[2] != 128 && weights->ne[2] != 256) return false;
 +    if (weights->ne[3] != 1 || input->ne[3] != 1 || op->ne[3] != 1 ||
 +            ids->ne[2] != 1 || ids->ne[3] != 1) return false;
-+    if (ids->ne[0] != 8 || ids->ne[1] != 16 || ids->nb[0] != sizeof(int32_t) ||
++    if (ids->ne[0] != 8 || ids->ne[1] < min_tokens || ids->ne[1] > max_tokens || ids->nb[0] != sizeof(int32_t) ||
 +            input->ne[0] != inner || (input->ne[1] != 1 && input->ne[1] != 8) ||
-+            input->ne[2] != 16 || op->ne[0] != output || op->ne[1] != 8 || op->ne[2] != 16) return false;
++            input->ne[2] != ids->ne[1] || op->ne[0] != output || op->ne[1] != 8 || op->ne[2] != ids->ne[1]) return false;
 +    if (!ggml_is_contiguous(weights) || !ggml_is_contiguous(input) || !ggml_is_contiguous(op)) return false;
 +    return fits_u32(weights) && fits_u32(input) && fits_u32(ids) && fits_u32(op);
++}
++
++inline bool eligible(const ggml_tensor * op, ggml_metal_device_id device,
++                     bool shared, int rows, int simdgroups) {
++    return eligible_geometry(op, device, shared, rows, simdgroups, 8, 16, 16);
++}
++
++inline bool eligible_r4(const ggml_tensor * op, ggml_metal_device_id device,
++                        bool shared, int rows, int simdgroups) {
++    return eligible_geometry(op, device, shared, rows, simdgroups, 4, 1, 16);
 +}
 +
 +} // namespace ggml_metal_routed_offsets
@@ -946,6 +966,87 @@ index 000000000..182e21147
 +        tiisg,
 +        sgitg);
 +}
+diff --git a/ggml/src/ggml-metal/kernels/routed_u32_r4.metal b/ggml/src/ggml-metal/kernels/routed_u32_r4.metal
+new file mode 100644
+index 000000000..739da5659
+--- /dev/null
++++ b/ggml/src/ggml-metal/kernels/routed_u32_r4.metal
+@@ -0,0 +1,75 @@
++#include "common.h"
++#include "dequantize.h"
++#include "mul_mv_q_n.h"
++
++kernel void kernel_mul_mv_id_q4_1_f32_r4_u32(
++        constant ggml_metal_kargs_mul_mv_id & args,
++        device const char * src0s,
++        device const char * src1,
++        device       char * dst,
++        device const char * ids,
++        threadgroup  char * shmem [[threadgroup(0)]],
++        uint3  tgpig[[threadgroup_position_in_grid]],
++        ushort tiitg[[thread_index_in_threadgroup]],
++        ushort tiisg[[thread_index_in_simdgroup]],
++        ushort sgitg[[simdgroup_index_in_threadgroup]],
++        ushort3 ntg [[threads_per_threadgroup]]) {
++    const int iid1 = tgpig.z/args.nei0;
++    const int idx  = tgpig.z%args.nei0;
++
++    tgpig.z = 0;
++
++    const int32_t i02 = ((device const int32_t *) (ids + iid1*args.nbi1))[idx];
++
++    const uint i11 = idx % args.ne11;
++    const uint i12 = iid1;
++
++    const uint i1 = idx;
++    const uint i2 = i12;
++
++    device char * dst_cur = dst + (i1*uint(args.ne0) + i2*uint(args.ne1)*uint(args.ne0))*uint(sizeof(float));
++
++    if (i02 == -1) {
++        device float * dst_f32 = (device float *) dst_cur;
++        const ushort nth = ntg.x*ntg.y*ntg.z;
++        for (int i0 = tiitg; i0 < args.ne0; i0 += nth) {
++            dst_f32[i0] = 0.0f;
++        }
++        return;
++    }
++
++    device const char * src0_cur = src0s + uint(i02)*uint(args.nb02);
++    device const char * src1_cur = src1 + i11*uint(args.nb11) + i12*uint(args.nb12);
++
++    ggml_metal_kargs_mul_mv args0 = {
++        /*.ne00 =*/ args.ne00,
++        /*.ne01 =*/ args.ne01,
++        /*.ne02 =*/ 1, // args.ne02,
++        /*.nb00 =*/ args.nb00,
++        /*.nb01 =*/ args.nb01,
++        /*.nb02 =*/ args.nb02,
++        /*.nb03 =*/ args.nb02, // args.ne02 == 1
++        /*.ne10 =*/ args.ne10,
++        /*.ne11 =*/ 1, // args.ne11,
++        /*.ne12 =*/ 1, // args.ne12,
++        /*.nb10 =*/ args.nb10,
++        /*.nb11 =*/ args.nb11,
++        /*.nb12 =*/ args.nb12,
++        /*.nb13 =*/ args.nb12, // ne12 == 1
++        /*.ne0  =*/ args.ne0,
++        /*.ne1  =*/ 1, // args.ne1,
++        /*.nr0  =*/ args.nr0,
++        /*.r2   =*/ 1,
++        /*.r3   =*/ 1,
++    };
++
++    mul_vec_q_n_f32_impl<block_q4_1, 4, ggml_metal_kargs_mul_mv, uint>(
++        args0,
++        /* src0 */ src0_cur,
++        /* src1 */ src1_cur,
++        /* dst  */ dst_cur,
++        shmem,
++        tgpig,
++        tiisg,
++        sgitg);
++}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 index 133ba2bf3..814cc8ea6 100644
 --- a/tests/CMakeLists.txt
@@ -1090,10 +1191,10 @@ index e9ebdb8df..b65d1d8bf 100644
          for (bool shared : { false, true }) {
 diff --git a/tests/test-metal-routed-u32.cpp b/tests/test-metal-routed-u32.cpp
 new file mode 100644
-index 000000000..14f8a4ed9
+index 000000000..89466e49e
 --- /dev/null
 +++ b/tests/test-metal-routed-u32.cpp
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,217 @@
 +#include "ggml.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
@@ -1112,7 +1213,7 @@ index 000000000..14f8a4ed9
 +static void require(bool ok, const char * why) { if (!ok) throw std::runtime_error(why); }
 +static std::atomic<int> compiled{0};
 +static void logger(ggml_log_level level, const char * text, void *) {
-+    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r8_u32'")) ++compiled;
++    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r4_u32'")) ++compiled;
 +    if (level != GGML_LOG_LEVEL_DEBUG) std::fputs(text, stderr);
 +}
 +struct q4 { ggml_fp16_t d, m; uint8_t qs[16]; };
@@ -1168,7 +1269,18 @@ index 000000000..14f8a4ed9
 +    require(!fits_u32(&boundary), "stride overflow"); ++checks;
 +    boundary.type = GGML_TYPE_Q4_1; boundary.ne[0] = 33;
 +    require(!fits_u32(&boundary), "partial quant block"); ++checks;
++    for (int tokens : {1, 2, 3, 8, 15, 16, 17}) {
++        auto * xi = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, tokens);
++        auto * idi = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, tokens);
++        auto * yi = ggml_mul_mat_id(s.ctx, w, xi, idi);
++        require(eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2)==(tokens<=16), "R4 token admission"); ++checks;
++        require(!eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 8, 2), "R4 changed row geometry"); ++checks;
++        require(!eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, false, 4, 2), "R4 private allocation"); ++checks;
++        idi->nb[1]=UINT64_MAX;
++        require(eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2)==(tokens==1), "R4 ID span bound"); ++checks;
++    }
 +    std::printf("PASS policy_checks=%d\n", checks);
++
 +    return checks;
 +}
 +
@@ -1192,7 +1304,22 @@ index 000000000..14f8a4ed9
 +    auto fallback = ggml_metal_library_get_pipeline(old, "kernel_mul_mv_id_q4_1_f32_r8_nsg=2_split=0");
 +    require(selected.pipeline && selected.pipeline == fallback.pipeline && selected.nr0 == 8, "old-library fallback failed");
 +    ggml_metal_library_free(old); ggml_metal_device_free(device);
-+    std::puts("PASS old_combined_library_fallback=1");
++    device = ggml_metal_device_init(0, 1); require(device, "R4 fallback device");
++    old = ggml_metal_library_init_from_source(device,
++        "#include <metal_stdlib>\nusing namespace metal;\nkernel void kernel_mul_mv_id_q4_1_f32() {}\n", false);
++    require(old, "R4 old combined library");
++    require(!ggml_metal_library_has_function(old,"kernel_mul_mv_id_q4_1_f32_r4_u32"), "R4 missing function");
++    require(!ggml_metal_library_has_function(old,"kernel_mul_mv_id_q4_1_f32_r4_u32"), "R4 negative discovery cache");
++    auto * x4 = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, 1);
++    auto * ids4 = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, 1);
++    auto * out4 = ggml_mul_mat_id(s.ctx,w,x4,ids4);
++    setenv("GGML_METAL_ROUTED_U32_R4", "1", 1);
++    selected = ggml_metal_library_get_pipeline_mul_mv_id(old,out4);
++    fallback = ggml_metal_library_get_pipeline(old,"kernel_mul_mv_id_q4_1_f32_nsg=2_split=0");
++    require(selected.pipeline && selected.pipeline==fallback.pipeline && selected.nr0==4,"R4 old library fallback failed");
++    ggml_metal_library_free(old); ggml_metal_device_free(device);
++    std::puts("PASS old_combined_library_fallback=1 r4_fallback=1");
++
 +}
 +
 +static void run_case(ggml_backend_t backend, int k, int m, int experts, int tokens,
@@ -1227,7 +1354,9 @@ index 000000000..14f8a4ed9
 +        ggml_backend_tensor_set(id_root, route.data(), 0, ggml_nbytes(id_root));
 +        std::vector<float> arms[2];
 +        for (int arm = 0; arm < 2; ++arm) {
-+            setenv("GGML_METAL_ROUTED_U32", arm ? "1" : "0", 1);
++            setenv("GGML_METAL_ROUTED_U32", "1", 1);
++            setenv("GGML_METAL_ROUTED_U32_R4", arm ? "1" : "0", 1);
++
 +            std::vector<float> poison(ggml_nelements(out), std::nanf(""));
 +            ggml_backend_tensor_set(out, poison.data(), 0, ggml_nbytes(out));
 +            require(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS, "native graph failed");
@@ -1274,7 +1403,11 @@ index 000000000..14f8a4ed9
 +        }
 +        for (int tokens : {3,8,15,17}) for (int inputs : {1,8}) { run_case(backend,512,2048,128,tokens,inputs,true,false); ++cases; }
 +        for (int k : {2048,512}) { run_case(backend,k,k==2048?512:2048,128,16,8,true,true); ++cases; }
-+        require(compiled.load() > 0, "new native pipeline never compiled");
++        for (int tokens : {1,2}) for (int k : {2048,512}) for (int inputs : {1,8}) {
++            run_case(backend,k,k==2048?512:2048,128,tokens,inputs,true,false); ++cases;
++        }
++        require(compiled.load() > 0, "new R4 native pipeline never compiled");
++
 +        std::printf("PASS native_cases=%d paired_outputs=%d fp64_checks=%d u32_pipeline_compiles=%d\n",cases,2*cases,4*cases,compiled.load());
 +        ggml_backend_free(backend); return 0;
 +    } catch (const std::exception & error) { std::fprintf(stderr,"FAIL: %s\n",error.what()); return 1; }

@@ -6,11 +6,13 @@ baseline and workload. In the combined queue, the original core patches
 0017–0022 are numbered 0036–0041, following PR #33's core patches; the combined
 native ABI is 0.1.85. BaseRT parity remains unproven.
 
-The latest retained addition is [bounded uint32 offsets](#retained-bounded-u32-offsets),
-enabled by default on qualified M1 Ultra shapes. The final default build adds
-1.24% C2 throughput over retained NR8 with exact output matches; C1 is flat.
-The preceding three experiments pool to +1.28%. These are separate M1 results,
-not percentages to add to the M5 headline or the earlier NR8 result.
+The latest retained addition extends bounded uint32 offsets to qualified
+four-row M1 Ultra kernels. The final default build adds 2.14% C1 and 0.61%
+C2 throughput over the prior R8-u32 runtime, with exact outputs. Three earlier
+experiments pool to +1.93% C1 / +1.17% C2. The earlier
+[eight-row bounded-offset addition](#retained-bounded-u32-offsets) separately
+adds 1.24% C2 over retained NR8. These are incremental M1 comparisons with
+different baselines, not percentages to add to the M5 headline.
 
 ## Combined implementation against PR #33
 
@@ -4291,3 +4293,254 @@ complete C2 cohort, and `m5-serving-result.json` records the limitation.
 Only the owning patch and evidence ledger change in the repository. Runtime
 artifacts are local; no running service/fleet installation, push or PR occurs.
 The broader engine-speed objective and BaseRT parity remain unachieved.
+
+### Four-row bounded-offset follow-up (retained on M1 Ultra)
+
+The next hypothesis preserves the four-output-row vector geometry and narrows
+only proved-bounded relative offsets. It targets single-request gate/up and
+down projections, where the retained M1 eight-row optimization does not apply.
+Model weights, accumulation order and dispatch count remain unchanged.
+
+Two standalone component screens succeed at $0: M1 Ultra
+`job_4kjr2s94rgx25sx` / `run_9jdwmagbpvjbrw4`, and base M4 mini
+`job_bz959rgggc7568y` / `run_8x1nb64mrvmdbbd`. Each independently audits
+16 guarded ABBA blocks, 32 cases, 128 raw timing pairs, 48 bit-identical
+numerical comparisons, 96 FP64 references and 48 poisoned-output coverage
+checks. Downloaded sources match the submitted payload byte for byte; the
+executable hash is checked remotely but the executable is not exported.
+
+On rotating reconstructed observed-occupancy profiles, M1 gate/up GPU latency
+falls 6.26-9.98% and down latency falls 13.11-14.99%. The corresponding M4
+ranges are 0.60-1.54% and 3.66-7.49%. These cover eight and sixteen tokens,
+with one or eight activation rows. Eight-token routes are prefixes of the
+same reconstructed sixteen-token profiles; these are synthetic assignments,
+not exact native route replay. These are component results, not serving TPS.
+
+The isolated native prototype is tree
+`5acdc9c7b413197d2c873d161343b01e1d802e2c`, based on retained tree
+`1903fe5d457f5791030c52dbbce65803f6c5d41a`. A separate private
+`GGML_METAL_ROUTED_U32_R4=1` diagnostic flag selects the new four-row shader;
+default behavior and the retained eight-row shader bytes remain unchanged.
+Local Just qualification passes 64 policy checks, old-library R4 fallback,
+34 native cases / 68 bit-identical pairs / 136 FP64 checks, actual R4 pipeline
+compilation and graph policy checks. No warnings occur in the native build.
+
+Full-model M1 qualification succeeds as `job_5b56v1yg3qq8w7s` /
+`run_x20mpwhffpa25w2` at $0.
+Its control is the final serving-qualified M1 runtime from
+`run_f97x6g862zmfwnw`; the retained R8 flag is unset in both serving arms,
+and only the candidate enables R4. Correctness and package checks precede
+the fixed-model C1/C2 serving comparison. Independent local re-audit verifies
+the submitted/executed scripts, native source tree, full patch digest,
+64/34/68/136 native qualification counts, raw model activation/state logs,
+exact retained control manifest, unchanged model/draft/CLI/request hashes,
+loaded runtime paths, all raw responses and ABBA cycle arithmetic.
+
+| Workload | Retained R8-u32 tok/s | Add R4-u32 tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 125.0328 | 127.7593 | +2.1806% |
+| Two requests, aggregate | 149.6421 | 150.7708 | +0.7543% |
+
+All 288 valid requests, including 192 measured, have exact outputs; there
+are zero excluded blocks. All three C1 cycle estimates are positive. C2
+has two positive cycles and one negative cycle, so its smaller aggregate
+point estimate is not yet a repeatable gain. These numbers are incremental
+over retained M1 R8-u32, not additive to the different-host PR #33 headline.
+
+Two fresh-process full C1/C2 confirmations are dispatched as
+`job_y4jh9jr1x6yg8e9` / `run_ysnz49qv7497ewy`, using the exact frozen
+qualified runtime bytes and original fixed inputs. No builds or correctness
+runs overlap timing. The candidate remains default-off; the owning patch
+queue and shipped defaults have not changed. Evidence and generators are
+under `target/affine-u32-r4-evidence/`.
+
+An isolated final-source candidate consolidates the common R4/R8 admission
+checks and uses the existing M1-only default policy for R4. Its tree is
+`56f327d0152ce4e89e3e9f718f5768ba60235391`, full patch SHA-256
+`fa693fdc10ff209f2f22a72ebf2463dd9eda484bfdce4e5400b73c1102e6d807`.
+Local Just qualification passes the same 64 policy checks, 34 native cases,
+68 exact pairs and 136 FP64 checks, plus graph policy and old-library fallback.
+The binary contains the exact generated R4 shader; the build has no warnings.
+At preparation, the candidate is not submitted or folded into the retained
+queue: repeatability audits and final-source M1 model/serving qualification
+are still required. Their subsequent completion is recorded below.
+
+An isolated draft folds this addition into the existing owning core patch
+0042, without changing the retained repository patch. Normal all-lane cold
+replay from pinned upstream succeeds at native commit
+`63cbc0a2503ca06a06a5bca927e205f24008fba2`, with tree exactly equal to
+`56f327d0152ce4e89e3e9f718f5768ba60235391`. Draft queue digest is
+`2193efadde0a61ce53c2f4fe6bdf66f168b5336c52265538f121244ac1dcfa00`.
+`queue-draft-state.json` records the exact-tree check. No second native build
+is needed for byte-identical source; default-path M1 model/serving proof is
+still outstanding.
+
+### Dense MMA bounded-offset screen (not integrated)
+
+While M1 R4 confirmations run, a separate hypothesis tests bounded uint32
+relative addresses in the retained dense MMA shader. Eight address types or
+casts narrow, and six constant-buffer byte strides explicitly narrow before
+address multiplication. Buffer bases retain native pointer width. Both arms
+bind the same original weight/input/output buffers; no packing, new quantization,
+float arithmetic change or extra dispatch is introduced.
+
+The standalone probe passes 36 local projection cases / 72 bit-identical
+full-output pairs / 144 FP64 checks and 144 poisoned-output coverage checks.
+Cases include five geometries, three activation widths, residual fusion,
+odd output/token tails, long K and two weight banks. Scope is 2D addressing;
+higher-dimensional broadcast offsets are not qualified by these fixtures.
+Timing uses a concurrent encoder with an output-reuse barrier, at least 20ms
+GPU warmup and 30ms/1024 measured projections per case, with 30 independently
+guarded ABBA geometry blocks and 60 fixed/rotating-bank comparisons.
+
+The M4 mini component screen is dispatched at $0 as `job_y8mtr5jaw29cyzn` /
+`run_7vprw88sntqspbz`. Numerical checks precede timing on that host. There
+is no native admission or serving TPS result for this hypothesis. Source,
+payload, provenance and auditors are under `target/dense-u32-offset-evidence/`.
+
+The initial M4 job succeeds and independently audits all 30 ABBA blocks /
+60 comparisons / 240 raw timing pairs, 72 exact output pairs, 144 FP64
+references and 144 poisoned-write checks. Sources match the submitted payload.
+Fixed-bank GPU latency has median -2.1782%; rotating-bank median is -0.3700%.
+One first fixed-bank control varies from 16.9651 to 10.7023 us between its
+repeats, making its apparent -33.73% comparison unsuitable as a headline.
+
+A stronger screen keeps both shaders unchanged and increases GPU warmup to
+200ms and measured GPU time to at least 100ms per case. It succeeds as
+`job_z5rm2r92hyrf90s` / `run_1c3f8d31tc4cs54`, at $0, with the same full
+raw/numerical audit passing independently. Fixed-bank median becomes -1.3378%
+and rotating-bank median -0.3546%. K512/M2048/N8 fixed-bank reductions repeat
+at 14.43-14.49%, but rotating-bank changes for that shape are +0.72% without
+residual and -4.74% with residual. The result is selective and cache-sensitive,
+not a general kernel or serving gain. No native admission is added. Stronger
+screen files and audits are under `sustained/` in the evidence directory.
+
+Separately, the final-source R4 candidate's isolated local runtime package
+builds and verifies through Just from the exact cold-replayed source. Manifest
+pins native commit `63cbc0a2503ca06a06a5bca927e205f24008fba2` and draft queue
+digest `2193efadde0a61ce53c2f4fe6bdf66f168b5336c52265538f121244ac1dcfa00`.
+The packaged Metal library contains the exact generated R4 shader; its SHA-256
+is `20be454f3f1675987749b00c409d27ce9045b31e492c897e4a205c3ab44aa254`.
+`target/affine-u32-r4-evidence/candidate-runtime-verification.json` records
+package/source/shader identity. The retained package and fleet are unchanged.
+
+### R4 repeatability audit and final M1 dispatch
+
+The two fresh-process confirmations complete successfully at $0 as
+`job_y4jh9jr1x6yg8e9` / `run_ysnz49qv7497ewy`. Pair zero independently
+audits 288 valid / 192 measured requests, one excluded/retried block and
+290 raw response files; pair one audits the same accepted roster with three
+excluded/retried blocks and 301 raw response files. Every accepted response
+matches its original fixed-prompt text exactly across arms and all three
+experiments. Frozen CLI, target, draft, requests, runtime manifests, loaded
+library paths and executed script bytes all match. The local re-auditor
+recomputes every ABBA block and cycle from the downloaded raw responses;
+`confirmation-verification.json` records the complete result.
+
+| Experiment | C1 change | C2 change |
+| --- | ---: | ---: |
+| Initial full-model qualification | +2.1806% | +0.7543% |
+| Fresh-process pair zero | +1.8485% | +1.5938% |
+| Fresh-process pair one | +1.7733% | +1.1597% |
+| Pooled equal-token elapsed time | +1.9340% | +1.1689% |
+
+Pooled C1 is 125.1964 -> 127.6177 tok/s; pooled aggregate C2 is
+149.1740 -> 150.9176 tok/s. All nine C1 cycle estimates are positive.
+Eight of nine C2 cycle estimates are positive; all three experiment-level
+C2 estimates are positive. These remain incremental same-host M1 results
+against retained R8-u32, not a cross-host or BaseRT parity claim.
+
+Final M1-default source qualification is submitted as
+`job_mq0g9wep6waqfmx`, at $0, using tree
+`56f327d0152ce4e89e3e9f718f5768ba60235391`. Correctness, package identity,
+actual default-path activation and fixed-model C1/C2 serving must pass
+before the prepared owning patch or runtime package is retained. The
+retained patch queue and runtime defaults are unchanged at dispatch.
+
+### M5 eight-row small-window follow-up (not retained)
+
+Code inspection identifies a separate admission gap: M5 selects NR8 for
+three-through-sixteen-token routed vectors, but the u32 path currently admits
+only sixteen tokens. An isolated candidate extends that private opt-in range
+to three through sixteen. Actual row selection, chip defaults, shader bytes,
+weight bytes and float arithmetic remain unchanged. M1/M4 continue to select
+NR8 only for the already qualified sixteen-token down geometry.
+
+Candidate native tree is `b4624156dff478e34600fd84e6612ceaeb80f02a`, commit
+`7b1dd5fb8ab0541b2a34958f4e9f74e1d41adc34`, based on final R4 tree
+`56f327d0152ce4e89e3e9f718f5768ba60235391`. The only production change is
+the NR8 minimum admitted token count. Just builds and verifies the isolated
+runtime package and passes 85 admission checks, 40 native cases / 80 exact
+output pairs / 160 FP64 checks, old-library fallback, graph policy,
+recurrent-state roundtrip and checkpoint-retirement tests. The packaged R8
+shader is byte-identical to the baseline, SHA-256
+`c1f58e88eb98879d2362f40df5d88530930364dd721b9e6361180f0dde2e66da`.
+
+Full-model M5 correctness passes before serving measurement, including four
+bit-identical state exports and actual R8-u32 model pipeline compilation only
+in the enabled arm. The initial copied auditor incorrectly expects shader
+bytes inside the test executable, as in the earlier static fixture. This
+fixture is dynamically linked: the corrected audit verifies bytes in the
+Metal library and an exact loaded-library path. A fresh native qualification
+with dynamic-loader logging passes all 85/40/80/160 checks against that library.
+
+The guarded serving comparison starts as local session `66005`. The
+comparison uses the sixteen-token-only R4-candidate runtime as control and
+the extended window as candidate, with R8 explicitly enabled and R4 disabled
+in both arms. This isolates window admission; it is not a comparison against
+unconfigured defaults or a serving gain claim. The current local host reports
+nominal thermal conditions at startup. An already-running Max daemon later
+crosses the CPU interference threshold; warmup blocks are excluded and retried.
+Owned benchmark servers use distinct ports; unrelated processes are untouched.
+Evidence is under `target/affine-u32-m5-window-evidence/`.
+
+The local attempt is interrupted during its first warmup cycle after repeated
+competing Max daemon CPU spikes. Session `66005` exits 130; both owned serving
+processes are confirmed stopped, while the unrelated daemon remains alive.
+Post-attempt fixed-input/runtime pins equal the pre-attempt pins. No measured
+throughput result is qualified, and this extension is not retained. Native and
+full-model numerical proofs remain valid for the frozen experimental source.
+
+### Retained M1 four-row bounded offsets
+
+Final M1-default job `job_mq0g9wep6waqfmx` / `run_45qwk9dsgxdybsw` succeeds
+at $0. Independent local audit verifies the complete source/script/package
+chain, 64 policy checks, 34 native cases / 68 exact pairs / 136 FP64 checks,
+old-library fallback, four exact full-model state exports, actual R4 pipeline
+compilation with its diagnostic flag unset, loaded libraries and all raw
+serving responses. The one thermal block is excluded and retried; 288 valid
+responses include 192 measured. All accepted outputs match exactly.
+
+| Workload | Prior R8-u32 tok/s | Retain R4-u32 tok/s | Change |
+| --- | ---: | ---: | ---: |
+| One request | 125.0717 | 127.7445 | +2.1370% |
+| Two requests, aggregate | 149.7388 | 150.6583 | +0.6140% |
+
+All three C1 and all three C2 cycle estimates are positive. This confirms the
+preceding three-experiment repeatability result on the final source. M1 alone
+uses this R4 default; other devices retain the existing opt-in behavior.
+
+The retained owning core patch 0042 matches the already cold-replayed draft
+byte for byte; every other patch is unchanged. Canonical native tree is
+`56f327d0152ce4e89e3e9f718f5768ba60235391`, native commit
+`63cbc0a2503ca06a06a5bca927e205f24008fba2`, queue digest
+`2193efadde0a61ce53c2f4fe6bdf66f168b5336c52265538f121244ac1dcfa00`.
+The prebuilt, verified exact-source local runtime replaces the retained local
+artifact; its prior directory and archive are preserved for rollback. New
+manifest SHA-256 is `ca7b4d148d4f437e45127ed8bfd4e5d3af339f02f5a4f0da2a49e714a495d741`.
+Primary llama-library SHA-256 is
+`77359bbe8bc181eed0191132b18f137c1052f67b6560b914844918c735fe56e6`;
+Metal-library SHA-256 is
+`20be454f3f1675987749b00c409d27ce9045b31e492c897e4a205c3ab44aa254`.
+The shader hash is unchanged from qualification. The retention preflight's
+initial library-name/hash mismatch is corrected before any mutation; both
+primary and Metal library identities are checked explicitly.
+
+The initial archive-copy check also detects an old checksum sidecar. Its
+rollback copy is preserved and the matching new sidecar is installed;
+verification of the retained archive then passes.
+
+ABI remains 0.1.85. No Rust host source, fleet installation, running user
+service, push or PR changes. The smaller-window M5 experiment stays out of
+the retained queue. The broader engine-speed goal and BaseRT parity remain
+unachieved.

@@ -2500,3 +2500,80 @@ cache allocation, invalidation, residency and lifetime have not yet been
 implemented or qualified. The retained NR8 runtime and target/draft artifacts
 remain unchanged. All source and observations are under
 `target/dense-tiled-byte-layout-evidence/`.
+
+## Integrated selective dense Q8 cache prototype
+
+An additional standalone width sweep holds K2048/M8192 fixed and tests every
+activation width from nine through sixteen, both residual variants and both
+weight-bank modes. It passes 22 numerical cases with 44 bit-identical paired
+outputs and 88 FP64 reference checks, including the retained tail/long-K cases.
+The sustained 32-case ABBA latency screen completes on attempt one. Every
+rotating-bank case improves GPU latency, by 16.19–23.87%; fixed-bank cases are
+mixed, including small regressions. These observations motivate a serving
+experiment covering widths nine through sixteen, rather than a general kernel
+replacement. Source, raw timings and the independent 128-pair audit are under
+`target/dense-tiled-row-width-evidence/`.
+
+Experimental core 0045 adds a buffer-owned cache for contiguous, original
+Q8_0 K2048/M8192 tensors on shared-buffer M5 Max devices. It retains original
+weight storage for all other operations and admits F32 activation widths 9–16
+only. The packed path uses the existing geometry's NT4/RT2/NSG8 tiling and
+original F32 arithmetic; its shader has a distinct entry point, checked against
+the actual compiled library before use. Old precompiled/override libraries
+without that entry retain original storage and dispatch.
+
+The cache owns and tracks Metal resources in the source buffer's residency
+set, bounds additional resources to 1 GiB per process, and declines allocation
+when it would exceed the device's working-set limit or allocation fails. Repeated reads
+reuse the packed resource. Any supported host write after cache creation
+revokes caching for the source buffer, retaining old resources through buffer
+destruction for pending GPU work. Async and graph writes revoke it even before
+the first entry, so queued GPU results are never packed by the CPU. Graph
+preflight ignores non-Metal buffers. Weight views and unsupported layouts use
+the original path; no model-family or tensor-name selection is introduced.
+
+Final native `2cca840a370ee22198db2384b373f014dc4076dd` cold-replays to intended
+tree `65c5f9f653917cba8abbeaf8d92fefbc01fc5002` and builds through Just. Its
+primary-library SHA-256 is
+`32b5bf64d11589f2b891af8420d76b06c202bb582e605a6804d1ad662c0e8b6f`.
+The private backend change does not alter the public Skippy ABI. The actual
+native test covers cache byte preservation, reuse, allocation failure, global
+quota/reclamation, source writes and fallback, plus 34 real Metal cases. The
+same 34 cases pass with the internal opt-out; each arm includes sixteen full
+bit-identical comparisons against original dispatch. Both packed residual
+variants are proven loaded only in the enabled arm. Ten CPU-reference fallback
+projections, the existing graph policy suite and 240 FA-vector cases also pass.
+Static-test and packaged-runtime MMA shader sources hash identically.
+
+The fixed-file serving comparison completes and independently audits 288
+accepted requests, including 192 measured. Twenty-three complete blocks are
+excluded for competing load or thermal state; 328 raw responses include those
+attempts. The audit checks the exact block/prompt roster, ABBA ordering, every
+accepted pre/post guard, response lengths, cache status and text hashes. Both
+frozen native bundles, the shared CLI and all target/draft hashes are verified
+before startup and after the performance processes exit.
+
+| Concurrency | Retained NR8 HTTP tok/s | Packed cache HTTP tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 193.385 | 193.422 | +0.019% |
+| 2 aggregate | 243.622 | 243.883 | +0.107% |
+
+Cycle signs are mixed at both concurrencies; these point estimates do not
+establish a useful serving gain. All measured text matches at concurrency one,
+but not at concurrency two. Timing includes the full HTTP batch and artifact
+validation, using resident servers rather than fresh-process qualification.
+
+A separate debug-enabled diagnostic runs only after performance processes exit.
+It validates eight additional 128-token completions with no cache hits and
+observes the packed plain-projection pipeline loading after startup. Thus the
+new path is exercised in real serving, not solely in the standalone probe;
+the diagnostic is not used as a latency measurement or evidence of its decode
+frequency. The prototype is rejected and experimental core 0045 removed from
+the active queue. No additional decode gain is claimed. Builds, failed-fixture
+diagnostics, corrected fixture, test logs, pre/post source pins, frozen candidate
+bundle, archived patch, raw responses and independent audits are retained under
+`target/dense-packed-runtime-evidence/`.
+
+After removing the prototype, `just release-runtime-build metal` succeeds for
+retained NR8. Its build metadata and all 24 native-library hashes again match
+the frozen control; no packed-weight cache remains in the active native queue.

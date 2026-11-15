@@ -8,6 +8,10 @@ only its stated workloads. In the
 combined queue, the original core patches 0017–0022 are numbered 0036–0041,
 following PR #33's core patches; the combined native ABI is 0.1.85.
 
+The latest retained addition is the [portable down-only NR8 policy](#retained-portable-down-only-nr8-policy):
+fresh-start M1 C2 comparisons confirm about 1.1% additional throughput. This is
+a separate hardware-specific measurement, not an addition to the M5 headline.
+
 ## Combined implementation against PR #33
 
 The control is the clean merged PR #33 commit `74c7d5bd2`, built in a
@@ -2577,3 +2581,587 @@ bundle, archived patch, raw responses and independent audits are retained under
 After removing the prototype, `just release-runtime-build metal` succeeds for
 retained NR8. Its build metadata and all 24 native-library hashes again match
 the frozen control; no packed-weight cache remains in the active native queue.
+
+### Stream-bounded C2 decode diagnostic after cache rejection
+
+A new retained-NR8 capture validates 32 fixed-file completions: sixteen warmup
+requests followed by sixteen streamed requests. Eight disjoint windows begin
+after both concurrent requests emit their first nonempty text and end at the
+earlier last text event. All windows follow the final observed target shader
+compilation. They total 7,690.977 ms; these client observation boundaries are
+not exact GPU phase markers.
+
+The saved trace exports successfully, but the recorder's own status file is
+**54**, despite its log reporting a completed, saved trace. The TOC records
+time-limit termination and a SIGKILL of the launched target. The outer recording
+script's zero exit status does not prove recorder success. Consequently this
+is a diagnostic ranking with a recording warning, not a clean capture,
+complete-sample guarantee, throughput qualification or new performance gain.
+
+The temporal submission-owner/PC join attributes 349,396 shader rows to the
+target, leaving 1,413 target rows unmapped (99.597% of these target rows map).
+One conflicting ownership interval is excluded. The leading per-kernel unions
+inside the streamed windows are:
+
+| Kernel | Union of observed intervals, ms |
+| --- | ---: |
+| Routed Q4_1, eight output rows | 2,005.927 |
+| Dense Q8_0, NT2/RT2 | 692.077 |
+| Dense Q6_K, NT4/RT2 | 651.820 |
+| Gated delta net | 468.200 |
+| Dense Q8_0, NT4/RT2 | 406.487 |
+| Dense Q8_0, NT1/RT2 | 236.865 |
+
+These unions overlap and must not be added or treated as exclusive wall-time
+fractions or hardware utilization. The cache experiment targeted a subset of
+the fifth entry, whereas routed Q4_1 remains the largest observed kernel union.
+The diagnostic supports prioritizing routed arithmetic over another narrow
+dense weight-layout experiment; it does not establish a speedup ceiling.
+
+The next screen should evaluate direct affine-code MMA for routed Q4_1:
+multiply its existing integer codes by F32 activations, then apply the stored
+scale and offset in F32. This retains target/draft files and avoids the F16
+dequantized-weight staging used by the rejected short-tile prototype. It still
+needs routed gather/scatter, masked IDs, tail and numerical checks, realistic
+expert occupancy, and a guarded comparison against retained NR8 before any
+production integration. No gain or working implementation is claimed yet.
+
+Raw streams, client timestamp records, saved trace, streamed export analyzers,
+and an audit of response hashes, roster, scope geometry and attribution
+consistency are under `target/retained-c2-decode-profile/`. The audit explicitly
+retains the recording warning and does not independently re-export every GPU
+sample. The active native runtime and patch queue remain retained NR8.
+
+### Direct affine-code routed MMA feasibility screen
+
+A standalone prototype now multiplies the stored Q4_1 integer codes, represented
+exactly in half, by F32 activations with SIMDgroup MMA. It applies the original
+block scale and offset in F32; it does not stage dequantized weights in half or
+modify weight bytes. Four SIMDgroups split K. CPU-precomputed route tiles gather
+up to eight entries per expert and scatter results to their original positions.
+Routing construction and upload are excluded from timing, so this screen cannot
+establish an engine or serving gain.
+
+The original NR8 arithmetic body supplies the control. Both arms pass 24 routed
+cases, 96 stored-weight FP64 references and 48 paired numerical comparisons.
+F32 reduction order differs and output is not bit-identical. The cases cover
+both expert projection geometries, 3/8/16 tokens, broadcast/per-selection inputs,
+16/128 active experts, two ID frames and a masked entry.
+
+A sustained 48-case ABBA screen completes on attempt two; attempt one is
+rejected for competing MaxDaemon load. Each case has at least 20 ms of GPU
+warmup, 30 ms of GPU timing and 1,024 dispatches per arm. The independent audit
+checks source/binary hashes, all eight accepted pre/post guards, the exact
+geometry roster, 192 raw timing pairs and reported ratios.
+
+The candidate wins 16 of 24 concentrated-routing cases. With sixteen tokens
+and sixteen active experts (roughly eight entries per expert), observed GPU
+latency falls 47.09–59.27%; with eight tokens (roughly four entries per expert),
+it falls 12.28–18.85%. With three tokens it regresses. All 24 cases with 128
+active experts regress, by 33.59–147.64%. These are synthetic projection latency
+changes, not serving results or a new headline metric.
+
+This rules out an unconditional replacement. A separate selective screen keeps
+NR8 for sparse routes and dispatches MMA only for tiles with at least four
+entries. It includes the extra projection dispatch, but still excludes routing
+construction/upload. It must pass numerical checks and mixed occupancy cases
+before the cost of production GPU routing can be evaluated. Initial evidence,
+driver, source and independent audit are retained under
+`target/routed-affine-code-mma-evidence/`; the selective variant is under
+`target/routed-affine-selective-evidence/`. Neither changes the active runtime.
+
+The CPU-mapped selective variant passes its 24 numerical cases, then its timing
+campaign is superseded before an accepted complete sweep. Only that owned
+driver and its verified child are stopped. No latency result is accepted from
+its interrupted campaign.
+
+A further variant under `target/routed-affine-gpu-map-evidence/` builds routing
+tiles and sparse IDs entirely on the GPU, writes indirect dispatch arguments,
+then runs sparse NR8 and rich affine-code MMA projections. Every timed
+projection includes the route scan, compaction, two explicit buffer barriers
+and indirect MMA dispatch; there is no CPU route upload or readback in the
+timed loop. It passes 24 numerical cases, 96 stored-weight FP64 references,
+48 paired comparisons and 48 checks of GPU route ownership and indirect grids.
+
+Its latency campaign uses 24 short, independently guarded ABBA blocks, each
+covering fixed and rotating IDs for one geometry. Completed blocks survive
+interference in later blocks. CPU/thermal samples before, after and every
+100 ms during each process reject affected blocks. The campaign completes and
+passes an independent audit of 24 ABBA blocks, 48 projection cases, 192 raw
+timing pairs and 228 mid-run guard samples, as well as the correctness checks
+above. With sixteen tokens and sixteen active experts, GPU projection latency
+falls 21.37–28.27% across all eight cases, including routing and dispatch costs.
+All other cases regress: 3-token cases by 14.39–32.15%, 8-token cases by
+10.77–23.30%, and 16-token cases with 128 active experts by 5.43–10.68%.
+These results restrict further work to sufficiently occupied routes; they do
+not establish real-model route occupancy or a serving gain.
+
+The initial implementation still dispatches sparse NR8 groups for rich entries,
+which return after writing zero before MMA overwrites those outputs. A prepared
+variant under `target/routed-affine-compact-evidence/` instead compacts sparse
+entry indices and generates indirect grids for both projections. It is not yet
+built into the native runtime. Its standalone Just build and numerical run
+pass the same 24 cases, 96 FP64 references, 48 paired comparisons and 48 GPU
+ownership/grid checks. Those ownership checks require every original entry to
+appear exactly once across rich tiles and the compact sparse list, including
+masked entries. Its latency campaign begins after the prior owned campaign
+exits and passes its audit, so the two never measure concurrently. Its work is
+isolated from the active retained runtime; no serving gain is claimed.
+
+The compact campaign completes and passes its independent audit: 24 guarded
+ABBA blocks, 48 projection cases, 192 raw timing pairs and 228 mid-run guard
+samples. Its sixteen-token/sixteen-active-expert cases improve GPU projection
+latency by 24.51–39.39%, including GPU mapping and both indirect dispatches.
+All other cases regress: three-token cases by 6.62–32.08%, eight-token cases by
+3.95–31.02%, and sixteen-token/128-active-expert cases by 4.88–11.14%. The
+synthetic screen supports a narrow serving experiment, not general admission
+or a new headline metric.
+
+### Experimental native routed affine implementation
+
+Experimental core 0045 introduces a separate private GPU route-compaction and
+affine-code MMA capability; it does not replace the activation-register reuse
+policy owned by core 0042. New host and Metal modules own the implementation.
+Scratch belongs to the output allocation and is rebuilt from current graph IDs
+on every operation; no route state is cached across graphs. Explicit barriers
+preserve producer and temporary-buffer ordering on concurrent encoders.
+
+Admission is limited to shared-buffer M5 Max devices, F32 activations, Q4_1
+weights, sixteen token rows, eight selections, and the two screened projection
+geometries. Weight/input/output tensors must be contiguous; expert IDs may be
+strided and offset top-k views. The source can contain 128 or 256 experts.
+Sparse entries retain NR8 arithmetic; sufficiently occupied tiles use direct
+affine-code MMA. All unsupported cases retain existing dispatch. An internal
+presence opt-out supports validation. Missing functions or unavailable pipeline
+geometry decline before encoding; combined and override-library lookup uses
+the actual library's function index. Public Skippy ABI remains 0.1.85.
+
+The first native build exposes a scratch-size template type mismatch, corrected
+before qualification. The initial 128-expert-only candidate passes its native
+tests but does not activate on the serving target. Its debug diagnostic confirms
+the target has 256 experts; no latency run is started for that candidate.
+The mapper is then generalized to the admitted expert count, with a sufficiently
+large threadgroup for the masked-entry owner. The 128-only bundle, diagnostic
+failure and pins remain archived rather than being overwritten.
+
+The corrected native source passes 48 actual Metal CPU-reference cases with the
+feature enabled and the same 48 disabled. Coverage includes both expert counts,
+both projection geometries, broadcast/per-selection inputs, strided/offset IDs,
+masked and repeated expert IDs, adjacent token counts and strided-weight
+fallbacks. All three new pipeline names load only in the enabled arm. Private
+shape/device/scratch policy tests pass. A separate explicit hardware target
+checks per-kind function discovery and two old/partial combined-library
+fallbacks without issuing any encoder commands. That target is absent from
+default CTest runs, which therefore gain no new GPU requirement.
+
+Final cold replay matches intended tree
+`a51242b233a9b2a4ae77ff0c3048d0ea5ada6d2f`; native SHA is
+`d69322d0ceff0a2d9ce15d6a315e7027aeaeff8a`. The packaged primary-library SHA-256
+is `9f0d2ef29e7fffd0b4d69b2c421b75ae5643983c0d581f9fd1cf56fcf9eb6da4`.
+The Just native runtime build succeeds, and tested static/packaged dynamic
+shader sources hash identically. A frozen versioned bundle preserves those
+files for serving. The corrected real-model diagnostic validates eight further
+128-token, zero-cache completions and observes all three affine pipelines
+loading after startup. This diagnostic confirms activation, not latency or
+decode frequency.
+
+The fixed-file resident-server A/B is now running against frozen retained NR8,
+with three warmup and three measured cycles per concurrency and predefined
+load/thermal exclusions. Both servers must prove they loaded their respective
+frozen library paths. Target, draft, shared CLI and all native library hashes
+pass pre-run verification. No serving gain is claimed yet. The local queue and
+dist package contain the experimental candidate; there is no deployment, push
+or PR. Source, builds, failed and corrected diagnostics, pins, raw requests and
+audits live under `target/routed-affine-native-evidence/`.
+
+At the user's request, portable kernel work moves to an idle Dan-lab M4 mini
+through Jianyang. Both available M4 minis have 16 GiB memory; the fixed target
+file is about 23 GB, so a single mini cannot replace the full-model serving
+comparison. No smaller model is substituted for that headline comparison.
+
+M4 job `job_ypyds4xkda98vd4` succeeds at $0: the standalone 256-expert kernel
+passes 24 cases, 96 FP64 references, 48 paired comparisons and routing checks.
+It builds immutable source on the host through Just and transfers no model or
+prebuilt binary. This research harness directly invokes the kernels; it does
+not change the native M5-only admission policy. A subsequent timing job catches
+a Ruby command-path issue caused by spaces in the job directory, before any
+accepted timing. The corrected job `job_wzw9x77qteskk6d` is running on
+`macmini-764jw9`, with both fixed/rotating IDs and GPU routing/indirect dispatch
+cost included. Its source payloads, job records and logs are under
+`target/routed-affine-m4-evidence/`. M4 projection timings cannot establish the
+M5 full-model serving gain.
+
+The corrected M4 timing job succeeds at $0. Its audit checks 24 guarded ABBA
+blocks, 48 projection cases, 192 raw timing pairs, 776 mid-run guard samples,
+96 FP64 references and 48 paired numerical comparisons. With sixteen active
+experts, eight-token GPU projection latency falls 11.95–17.81%, and
+sixteen-token latency falls 54.01–54.87%. Sparse sixteen-token/256-active-expert
+cases regress by 0.65–2.12%. The control is the retained NR8 arithmetic body,
+not a claim about the default shipped M4 dispatcher. These observations do not
+establish real-model routing distribution or serving throughput.
+
+The local M5 resident-serving campaign reaches its fixed 30-minute deadline
+under competing workload. It accepts 124 requests, including 76 measured, all
+at concurrency one; it never reaches the required concurrency-two dataset.
+This is incomplete evidence, not a measured absence of gain. No complete
+comparison, additional serving headline or BaseRT parity claim is made.
+Post-run target/draft/shared-CLI and frozen-library pins still pass, and the
+owned servers exit before verification. The inherited descriptive method label
+in the executed driver is documented; its final summary is never produced and
+no incomplete result is finalized as a serving gain.
+
+The candidate remains unpromoted. Its complete patch is archived as
+`target/routed-affine-native-evidence/unpromoted-0045.patch`, and core 0045 is
+removed from the active queue. `just release-runtime-build metal` succeeds for
+retained NR8; all 24 native-library hashes and build metadata match the frozen
+control exactly. No owned serving process remains. The M4 projection result is
+promising research evidence, while full-model qualification remains outstanding.
+Nothing is pushed and no PR is raised.
+
+The dedicated M1 Ultra comparison subsequently completes in Jianyang job
+`job_6q2p4afd6294hpz`, run `run_2s2s03ngfkfsaqs`, at $0. Its private native
+candidate admits M1 Ultra in addition to M5 and otherwise retains the same
+sixteen-token geometry and original weight bytes. Native correctness,
+real-model activation, 288 completion validations (192 measured), zero rejected
+blocks, independent serving audit, and pre/post frozen-file pins all pass.
+The measured C1 result is 124.8793 versus 124.8087 tokens/s (−0.0565%); C2 is
+146.2881 versus 144.7085 aggregate tokens/s (−1.0798%). C1 text is identical;
+C2 has one prompt with differing output. This candidate supplies no useful
+serving improvement and remains unpromoted. These are resident M1 measurements,
+not fresh-process qualification or a conclusion about M5 throughput.
+
+Digest-verified server artifacts permit a post-hoc telemetry audit without
+another timing run. Each measured arm/concurrency contains 48 requests and
+6,144 output tokens; all 144 request-decode records per server match the full
+warmup/measured roster, and telemetry reports no dropped events or export
+errors. In C2, shared verification covers 89.87% of control request-windows
+and 90.79% of candidate request-windows. Aggregate draft acceptance is 51.98%
+versus 52.60%. C1 proposal, acceptance, and window counts match exactly. Thus
+neither absent shared batching nor lower aggregate draft acceptance explains
+this result. Summed per-request C2 verification elapsed time rises from
+61,173.785 to 62,728.966 ms; these overlapping request totals are not GPU time
+and do not establish which kernel or synchronization cost caused the regression.
+
+Existing shared-verification events report request count, not token rows or
+expert occupancy. They cannot establish how often the sixteen-token native
+path runs or whether real routes have the synthetic screen's reuse. A temporary
+opt-in graph callback and eight-request streamed occupancy diagnostic are
+prepared under `target/routed-affine-density-evidence/`. It reads graph-produced
+expert IDs after scheduler synchronization, validates tile-count conservation,
+and groups projection observations inside intervals after both requests emit
+their first text. Synchronization perturbs timing and may change scheduler
+cohorts, so its results cannot qualify throughput or natural shape frequency.
+The diagnostic is not submitted while the approved M1 is occupied by unrelated
+CI. The active local native source remains retained NR8 at `e795659936a8bb5fd0554d4ee7b788fd6f78b6be`;
+no diagnostic or candidate is promoted, pushed, or deployed.
+
+Reviewing the standalone screen also exposes an execution-context limitation:
+its encoder uses default serial dispatch, whereas the digest-verified M1
+activation log reports `use concurrency = true` for both target and draft.
+This does not invalidate the isolated serial projection measurements, but they
+do not represent the native concurrent graph's synchronization or overlap.
+A separate $0 M4 job, `job_rg4j2vv5axbkpe5`, tests one specific dependency:
+sparse and rich dispatches write disjoint output rows, so it compares the same
+affine kernels with and without their intervening buffer barrier. Both arms
+use concurrent encoders and an explicit end-of-projection barrier to protect
+output/scratch reuse between timed iterations. The mapper dependency remains
+protected in both arms. Numerical qualification compares the barrierless arm
+with NR8 and validates complete, unique route ownership before timing. This is
+a synchronization screen, not a full-graph or serving throughput result.
+
+That M4 job completes successfully at $0, run `run_zmg2kvc22ec8gev`. Its audit
+validates 24 ABBA blocks, 48 projection cases, 192 raw timing pairs, 747
+mid-run guard samples, 48 route checks, 96 FP64 references and 48 numerical
+paired checks. For sixteen-token/sixteen-active-expert cases, removing the
+sparse-to-MMA barrier reduces projection latency by only 0.0667–0.9799%.
+Sparse sixteen-token cases range from a 1.0143% reduction to a 0.0963%
+regression. Eight-token/concentrated cases improve 2.47–4.72%, but these are
+outside the currently qualified native admission. This does not justify
+promoting the failed full-serving candidate or forecasting additional TPS.
+The result and digest-verified artifacts are retained under
+`target/routed-affine-barrier-evidence/`.
+
+The occupancy diagnostic is submitted as `job_z40g0v6adxc8a5c` with a $0 cap
+after the approved M1 reports idle. Admission succeeds, but a subsequent agent
+snapshot shows another CI job running and the diagnostic still queued with no
+attempt. It has not built or executed yet. No competing job is interrupted and
+the same diagnostic handle is retained rather than resubmitted.
+
+The occupancy job later starts but fails during the native build: its temporary
+module includes `ggml-impl.h`, which the llama library's include path does not
+provide. No diagnostic requests execute. The corrected module uses the existing
+`llama-impl.h` / `LLAMA_LOG_INFO` interface, as other Skippy modules do. A repair
+spec requires the exact failed native tree and patch digest before replacement;
+it cannot silently overwrite a different checkout. The original failed spec,
+patch and log are preserved. Corrected intended tree is
+`2597d4c1c6d3f71aca066489cb5994c14c2faa42`; the repair remains unsubmitted while
+CI owns the M1.
+
+A separate concurrent two-projection screen completes successfully on the M4
+in $0 job `job_m1ctj1gr42cp0ea`, run `run_nz30fgkfref2nhg`. Both projections
+share input/ID buffers and have private weights, outputs and route scratch.
+NR8 can dispatch the siblings concurrently; the candidate retains both internal
+global barriers. Both arms protect output/scratch reuse with an end-of-pair
+barrier. The audit validates 24 guarded ABBA blocks, 48 timing cases, 192 raw
+timing pairs, 1,566 mid-run guard samples, 96 route checks, 192 FP64 references
+and 96 paired numerical comparisons. Submitted and retrieved probe/harness/audit
+source hashes match. The timing unit is a projection pair, not an individual
+kernel. Sixteen-token/sixteen-active-expert pair latency falls 54.17–55.26%;
+sparse sixteen-token cases regress 1.55–2.24%. This screen preserves the strong
+concentrated-route gain even with independent sibling work, but cannot rule out
+other whole-graph concurrency costs or establish real-model expert occupancy.
+The K2048/M512 geometry represents gate/up sibling work; K512/M2048 pairs are
+synthetic independent work. Artifacts remain under
+`target/routed-affine-pair-evidence/`. Full serving still supplies no additional
+retained gain, and neither experimental native variant is promoted.
+
+The corrected occupancy module passes a local Just-driven C++17 syntax compile
+against the actual native-stage headers with `-Wall -Wextra -Wpedantic -Werror`.
+This checks the logging/include repair without a full local runtime build or
+model execution. After confirming there is no Jianyang lease reserving the M1,
+the repair is queued at priority 1 as `job_9xnyqyextbjayg9`, with a $0 cap.
+External CI currently occupies the agent; it is not interrupted. This is a new
+immutable repair spec for the terminal build failure, not a duplicate of a
+live diagnostic attempt. The latest authoritative job read still reports
+queued with no attempt, so no occupancy result is claimed.
+
+The corrected occupancy run subsequently succeeds at $0: job
+`job_9xnyqyextbjayg9`, run `run_t9x378gwjt09jd7`. Its native source cold replay,
+loaded-library path check, eight zero-cache 128-token streamed completions,
+and post-run target/draft/CLI/frozen-library pins pass. Digest-verified artifacts
+are retrieved, and the occupancy audit is rerun locally against the full saved
+server log. All 16,380 diagnostic sequences are present and uncapped; ID bounds
+and tile/entry conservation pass. Four intervals after both requests' first
+text contain 13,923 projection records. Their sixteen-token observations are:
+
+| Projection | Records | Mean active experts | Entries in tiles of at least four |
+| --- | ---: | ---: | ---: |
+| K2048/M512, broadcast inputs | 7,360 | 54.12 | 45.63% |
+| K512/M2048, per-selection inputs | 3,404 | 53.78 | 46.11% |
+
+Those records have contiguous weights/inputs/outputs and no output view, so the
+observed shapes satisfy those candidate admission requirements. All scoped
+sixteen-token records together number 10,764. This is a synchronized,
+projection-weighted observation, not an estimate of uninstrumented shape
+frequency or independent router samples. It reveals a substantial mismatch
+with the favorable sixteen-active-expert synthetic screen: more than half of
+entries still take the sparse path. It does not alone prove why serving fails
+to improve.
+
+`prepare-profiles.rb` validates anonymous route reconstructions for all 10,764
+observations and selects 32 rich-entry quantiles per projection. Each selected
+profile preserves active-expert count, aggregate eight-entry tile histogram,
+rich-entry count, and unique top-k IDs within each token. Expert identities,
+token correlations, and associations between full tiles and their tails are
+synthetic; histograms do not uniquely determine those associations. Selected
+profiles span 24–93 active experts and 0–104 rich entries out of 128. A $0 M4
+screen is submitted as `job_6tw3y38jsqv7r2r` to compare unchanged NR8 and
+affine kernels under these profiles, with a concurrent encoder and protected
+output/scratch reuse. Fixed routing uses the lowest-rich quantile; rotating
+routing cycles all 32 profiles. This is not exact route replay or full-model
+throughput qualification. Artifacts are under
+`target/routed-affine-density-evidence/` and
+`target/routed-affine-observed-evidence/`.
+
+The observed-occupancy synthetic M4 job succeeds at $0, run
+`run_y0bv91whjpxs4r7`. Its audit passes eight ABBA blocks, sixteen projection
+timing cases, 64 raw timing pairs, 309 mid-run guard samples, 48 route checks,
+96 FP64 references and 48 paired numerical comparisons. Submitted and retrieved
+probe, harness, audit and profile-header hashes match. Concentrated synthetic
+control cases still improve 53.93–54.71%, but rotating reconstructed profiles
+produce much smaller changes:
+
+| Projection | Reconstructed rotating-profile GPU latency change |
+| --- | ---: |
+| K2048/M512, broadcast input (gate/up geometry) | +0.47% |
+| K2048/M512, per-selection input (synthetic cross-case) | −1.75% |
+| K512/M2048, broadcast input (synthetic cross-case) | −3.92% |
+| K512/M2048, per-selection input (down geometry) | −2.77% |
+
+The fixed lowest-rich quantile regresses 6.47–12.04%. These synthetic
+observations are consistent with the failed serving transfer, but are not
+causal proof for the M1 full model or exact route replay. They substantially
+weaken the case for further integration of the mapper/compact-sparse/MMA
+candidate as designed. A next kernel approach should reduce overhead on
+sparse expert work without assuming the sixteen-active-expert reuse pattern;
+no further serving gain is claimed and the retained engine remains unchanged.
+
+### Rejected direct diagonal affine matrix screen
+
+A standalone alternative removes route mapping entirely. Each 32-thread SIMD
+group forms a matrix product whose rows belong to independent selected experts,
+then consumes only diagonal outputs. Quantization codes remain exact half
+integers; scales, offsets and activations retain F32 arithmetic. The kernel has
+no route scratch, indirect dispatch or internal barrier. Job
+`job_9c5cd2x3g9n8jv4`, run `run_9pmfkgg951w6n3b`, succeeds on the M4 at $0.
+Poisoning outputs before candidate execution verifies complete finite writes
+and masked zeros; 48 coverage checks, 96 FP64 references and 48 full paired
+numerical checks pass. Eight guarded ABBA blocks cover sixteen timing cases,
+64 raw timing pairs and 587 mid-run guard samples. Despite removing routing
+overhead, concentrated cases regress 188.47–226.25% in GPU latency and
+reconstructed-profile cases regress 73.68–185.28%. This approach is rejected;
+unused matrix arithmetic does not pay off in this screen. Evidence is under
+`target/affine-diagonal-evidence/`.
+
+### Wider vector reuse and portable NR8 qualification
+
+The next M4 screen changes only accumulated output rows per SIMD group from
+eight to sixteen or thirty-two, retaining original bytes, lane assignment and
+per-output arithmetic. Separate numerical qualification precedes each guarded
+timing phase. Job `job_t3f820wf47402j9`, run `run_68mfspk3vx7ht9r`, completes
+at $0. With rotating reconstructed profiles, NR16 gate/up latency regresses
+7.50%, while down changes −0.39%. NR32 regresses 27.74% and 7.04%, respectively.
+Synthetic cross-cases also offer no consistent gain. Neither widening is
+integrated. Both phases' audits and raw artifacts are under
+`target/affine-vector-width-evidence/`.
+
+Source review also clarifies a hardware distinction in earlier comparisons:
+the retained native source contains NR8, but `ggml-metal-routed-tuning.h`
+admits that Q4_1 width only on M5 Max. Native M1/M4 fall back to four rows
+(`N_R0_Q4_1 = 4`); the captured M1 debug log loads the unsuffixed routed Q4_1
+pipeline. Thus descriptions of the retained engine as an NR8 source baseline
+do not mean that its M1 full-serving control executes NR8. The standalone
+screens explicitly compare NR8 arithmetic and cannot establish a speedup over
+the shipped M1/M4 kernel. A direct NR4/NR8 comparison is submitted on M4 as
+`job_yrzgn1g1m9x6sdm` and on approved M1 Ultra as `job_p47j2py4496d4t0`.
+Both use identical source, host-native builds, numerical/write coverage checks,
+and concentrated/reconstructed-occupancy profiles. The old arm is NR8 and the
+packed label denotes NR4, so a positive reported packed-arm latency means
+NR8 is faster. These remain synthetic operation screens, not serving metrics.
+
+Both portable NR4/NR8 jobs complete successfully at $0: M4 run
+`run_fh6sqq4q115f4zs` and M1 Ultra run `run_y9tgs33t5m4adjd`. Each audit
+validates eight ABBA blocks, sixteen timing cases, 64 raw timing pairs, 48
+poisoned-output/masked-zero coverage checks, 96 FP64 references and 48 paired
+numerical comparisons. Retrieved shader hashes and probe/harness/audit sources
+match the submitted source. Numerical differences remain nonzero, so these
+checks are not bit-equality or full-model quality qualification.
+
+| Device | NR8 versus NR4 gate/up latency, rotating reconstructed profiles | NR8 versus NR4 down latency, rotating reconstructed profiles |
+| --- | ---: | ---: |
+| M1 Ultra | +3.60% | −6.30% |
+| M4 | +1.47% | −3.86% |
+
+Gate/up uses K2048/M512 with broadcast input; down uses K512/M2048 with
+per-selection input. The M1 down improvement also holds for the fixed sparse
+profile (−6.24%); the M4 fixed sparse down case changes only −0.32%. This
+supports investigating a narrow down-only policy, not generally enabling NR8
+on either device. No serving TPS gain is established.
+
+An isolated native worktree over retained `e795659936a8bb5fd0554d4ee7b788fd6f78b6be`
+contains an unpromoted policy prototype. It selects the existing NR8 shader
+only on M1 Ultra/base M4 shared buffers, Q4_1 K512/M2048, exactly sixteen token
+rows, eight expert selections and two SIMD groups. Existing M5 policy and all
+other cases retain their previous choices. Dispatch-boundary tests are added
+in the existing policy suite; they have not executed yet. The prototype's
+intended tree is `986e05c36526af9b6cf4a73d0f47db173f8d2a3f`. It introduces no
+shader or public ABI change. Before any promotion, actual native backend
+correctness/activation, fixed-file serving comparison and cold replay remain
+required, and the change must be folded into its owning core 0042 patch. The
+active local source and queue remain retained; nothing is pushed or deployed.
+
+The portable prototype gains an opt-in native backend fixture module with 35
+cases, using the suite's actual CPU references. Cases include broadcast and
+per-selection inputs, 16/256 experts, masked and repeated IDs, offset/strided
+ID views, strided expert weights and adjacent-width/geometry/type/selection
+fallbacks. Default backend test rosters are unchanged unless
+`SKIPPY_TEST_PORTABLE_R8` is set. Both updated native test translation units
+pass a local Just-driven C++17 syntax compile. This does not execute their
+policy assertions or GPU comparisons. Updated intended prototype tree is
+`68ac922e99396abf34ab969a26c64a7fda003fb5`.
+
+Jianyang job `job_7x957p7v5ghfw77` is submitted at priority 1 with a $0 cap for
+native build/correctness, real-model activation and fixed-file serving ABBA on
+the approved M1. It requires the exact prior diagnostic source tree, committed
+root source, old private-patch digests and frozen-file pins before archiving
+and replacing its own previous research patches. Retained control libraries,
+target, draft and shared host-built CLI are preserved in a new evidence
+directory. The method labels name native NR4 control and the down-only NR8
+candidate, rather than the earlier mapper/MMA experiment. Both static-tested
+and packaged vector shader sources must match before serving. Three warmup and
+three measured eight-prompt cycles at C1/C2 retain within-prompt ABBA ordering,
+predefined whole-block interference exclusions, loaded-library checks and
+pre/post file pins. Latest authoritative job state is queued with no attempt;
+no new native correctness, activation or serving result is claimed yet.
+
+The first job starts but its clean-checkout guard rejects four untracked
+native preparation markers before mutating any patches or running tests.
+Read-only job `job_zjr426rvyw28p3q` confirms there are no tracked native changes;
+the native tree still matches the prior diagnostic. The repaired guard checks
+the exact four marker names and their contents (upstream SHA, patched SHA,
+patch digest and preparation schema 5), while continuing to reject all other
+changes. It does not delete or ignore an arbitrary dirty checkout.
+
+Corrected job `job_y2gqn1kzwdraw5p`, run `run_9x5myy3r8r8k2za`, succeeds at $0.
+Cold replay matches prototype tree `68ac922e99396abf34ab969a26c64a7fda003fb5`.
+The native policy suite and all 35 actual Metal CPU-reference cases pass,
+including observed NR8 and fallback pipelines. Tested static and packaged
+vector shader sources match. Eight real-model diagnostic completions validate
+activation of `kernel_mul_mv_id_q4_1_f32_r8_nsg=2_split=0`. All pre/post
+target/draft/shared-CLI and frozen-library pins pass. The resident comparison
+completes 288 valid requests, 192 measured, with no rejected blocks:
+
+| Concurrency | Frozen native NR4 control | Down-only NR8 candidate | TPS change |
+| --- | ---: | ---: | ---: |
+| 1 | 125.0321 | 125.0424 | +0.0082% |
+| 2 aggregate | 146.9441 | 148.4653 | +1.0352% |
+
+All measured output text matches exactly across arms at both concurrencies.
+All three C2 candidate cycles beat their corresponding control cycles
+(148.5936/147.8473/148.9595 versus 147.0617/147.0450/146.7262). All 288 raw
+responses, batch timing records and load/thermal guards are retrieved with
+artifact SHA-256 verification. Running the executed audit locally against
+those raw files reproduces the complete remote audit exactly. This is a small
+M1 resident-serving improvement, not an addition to the M5 cumulative headline,
+fresh-process confirmation or BaseRT parity.
+
+Job `job_zyq446m48tse421` is submitted at $0 to repeat C2 from two newly started
+pairs of the same frozen control/candidate servers. Each restart retains three
+warmup and three measured eight-prompt cycles and within-prompt ABBA; this adds
+two fresh starts per arm and 192 measured C2 requests across both repeats.
+Independent raw-response/guard audits and pre/post frozen-file pins remain
+required. No build or GPU correctness work runs during measurement. The
+confirmation measures warmed serving across process starts, not cold-start
+latency. The prototype remains outside the active local queue until that
+confirmation and ownership folding are complete.
+
+## Retained portable down-only NR8 policy
+
+Fresh-process confirmation job `job_zyq446m48tse421`, run
+`run_7xk88szwax20bxm`, completes successfully at $0. The two new resident
+process pairs independently improve M1 C2 throughput by 0.8610% and 1.3366%.
+Their combined control/candidate rates are 147.0620 and 148.6776 aggregate
+tokens/s (+1.0986%). All 288 requests validate, including 192 measured;
+no blocks are rejected. Measured output text matches across arms and process
+starts. Pre/post frozen-file pins pass. All raw responses and guards are
+retrieved with artifact SHA-256 verification, and both independent audits and
+the pooled result are recomputed locally from those files. This confirms a
+small warmed-serving gain across process starts, not cold-start latency.
+
+The actual M4 native qualification also passes: job `job_ee9qgsnp7528rhs`, run
+`run_kw5wzd3cbsp0mj7`, uses exact committed root source plus the pinned native
+prototype, builds through Just on the mini, and passes the native policy suite
+and all 35 CPU-reference Metal cases. Its native tree matches the M1 tested
+tree `68ac922e99396abf34ab969a26c64a7fda003fb5`. No model or prebuilt binary
+is transferred; the M4 result is operation qualification, not serving TPS.
+
+The change is now folded into owning core 0042. Core 0043's test-list insertion
+is rebased to retain its convolution fixtures alongside the new opt-in routed
+fixtures. An isolated full queue replay, then the active local Just native
+build, both reproduce the exact benchmarked prototype tree. The folded native
+commit is `57450b1e3fc0ad06c2060dfd994a4f3c9812e59a`, with queue digest
+`7095c93fb5def828bd69cb28ed999a42a5be8e755322917b502cbd7a951de518`.
+The local M5 policy suite and the same 35 backend reference cases pass. Tested
+static and packaged vector shader sources match, and the vector shader file
+is byte-identical to the retained pre-change source. All 24 packaged library
+hashes verify. Public ABI remains 0.1.85 and runtime label 0.76.1; the packaged
+primary-library SHA-256 is
+`4d0ff11e0aba5b5a988b5ce389d9f49dbf90f71ca73a3560fc8c76139c440039`.
+
+This retains existing NR8 arithmetic only for the qualified M1 Ultra/base M4
+Q4_1 down shape: K512/M2048, sixteen token rows, eight expert selections and
+two SIMD groups on shared buffers. No additional M5 throughput or BaseRT parity
+is claimed. The integrated package and audit are frozen under
+`target/affine-portable-r8-evidence/native-integrated/` and
+`target/affine-portable-r8-evidence/integration-audit.json`. Nothing is pushed
+and no PR is raised.

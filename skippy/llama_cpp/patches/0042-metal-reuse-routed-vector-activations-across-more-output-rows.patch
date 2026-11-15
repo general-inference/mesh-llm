@@ -1,19 +1,23 @@
-From 412c49fe1ba33b33c86cd06789a6d8541411f67a Mon Sep 17 00:00:00 2001
+From 8b7ee927bd3a16321ace3d376329145979a48776 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Sun, 15 Nov 2026 09:19:22 +1100
-Subject: [PATCH] metal: reuse multi-row routed vector activations on M5 Max
+Date: Sun, 15 Nov 2026 21:45:46 +1100
+Subject: [PATCH] metal: reuse routed vector activations across qualified chip
+ geometries
 
-Extend the owning routed activation-reuse capability with an experimental Q4_1 eight-row specialization. Preserve complete SIMDgroup row tiles and existing hardware/shape fallbacks.
+Retain the M5 Max reuse specializations. Extend the owning capability with exact-shape Q4_1 down-only NR8 dispatch on M1 Ultra and base M4, guarded by token, selection and SIMD-group counts. Add opt-in native CPU-reference coverage and policy boundary checks. No shader or public ABI change.
 ---
- ggml/src/ggml-metal/ggml-metal-device.cpp     |  8 ++++++
- .../src/ggml-metal/ggml-metal-routed-tuning.h | 20 +++++++++++++++
- ggml/src/ggml-metal/kernels/mul_mv.metal      |  3 +++
- tests/test-metal-graph-optimize.cpp           | 25 +++++++++++++++++++
- 4 files changed, 56 insertions(+)
+ ggml/src/ggml-metal/ggml-metal-device.cpp     |  8 ++++
+ .../src/ggml-metal/ggml-metal-routed-tuning.h | 27 ++++++++++++
+ ggml/src/ggml-metal/kernels/mul_mv.metal      |  3 ++
+ tests/test-backend-ops.cpp                    |  5 +++
+ tests/test-backend-portable-routed.h          | 43 +++++++++++++++++++
+ tests/test-metal-graph-optimize.cpp           | 43 +++++++++++++++++++
+ 6 files changed, 129 insertions(+)
  create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+ create mode 100644 tests/test-backend-portable-routed.h
 
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
-index e6c95c3af..4b6ee1d86 100644
+index e6c95c3af..f043d18de 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
 @@ -3,6 +3,7 @@
@@ -30,7 +34,7 @@ index e6c95c3af..4b6ee1d86 100644
  
 +    const auto * props = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
 +    const int tuned_rows = ggml_metal_routed_tuning::rows(
-+            props->device_id, props->use_shared_buffers, tsrc0, ne00, ne01, op->src[2]->ne[1], nsg, nr0);
++            props->device_id, props->use_shared_buffers, tsrc0, ne00, ne01, op->src[2]->ne[1], nsg, nr0, op->src[2]->ne[0]);
 +    if (tuned_rows != nr0) {
 +        nr0 = tuned_rows;
 +        suffix = tsrc0 == GGML_TYPE_Q4_K ? "_r4" : tsrc0 == GGML_TYPE_Q4_1 ? "_r8" : "_r2";
@@ -40,10 +44,10 @@ index e6c95c3af..4b6ee1d86 100644
  
 diff --git a/ggml/src/ggml-metal/ggml-metal-routed-tuning.h b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
 new file mode 100644
-index 000000000..ff10a3b12
+index 000000000..d65eb01aa
 --- /dev/null
 +++ b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,27 @@
 +#pragma once
 +
 +#include "ggml-metal-device.h"
@@ -53,7 +57,14 @@ index 000000000..ff10a3b12
 +// Reuse the per-lane activation registers across more output rows. Preserve
 +// complete SIMDgroup row tiles: the vector bodies load every unrolled row.
 +inline int rows(ggml_metal_device_id device, bool shared_buffers, ggml_type type, int64_t inner,
-+                int64_t output, int64_t tokens, int nsg, int fallback) {
++                int64_t output, int64_t tokens, int nsg, int fallback, int64_t selections = 8) {
++    // Portable screen supports this down-projection shape only. Gate/up
++    // remains faster at the existing width on these two measured devices.
++    if ((device == GGML_METAL_DEVICE_M1_ULTRA || device == GGML_METAL_DEVICE_M4) &&
++            shared_buffers && type == GGML_TYPE_Q4_1 && inner == 512 && output == 2048 &&
++            tokens == 16 && selections == 8 && nsg == 2) {
++        return 8;
++    }
 +    if (device != GGML_METAL_DEVICE_M5_MAX || !shared_buffers || tokens < 3 || inner < 512 || inner > 4096 ||
 +            output < 512 || tokens > 31 || nsg <= 0) {
 +        return fallback;
@@ -85,8 +96,74 @@ index 5d012e484..018c70b14 100644
  template [[host_name("kernel_mul_mv_id_q6_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q6_K_f32_impl   <N_R0_Q6_K>>>;
  template [[host_name("kernel_mul_mv_id_iq1_s_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_s_f32_disp<ggml_metal_kargs_mul_mv>>>;
  template [[host_name("kernel_mul_mv_id_iq1_m_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_m_f32_disp<ggml_metal_kargs_mul_mv>>>;
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4d947c695..463123c0f 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -10530,7 +10530,12 @@ static const ggml_type other_types[] = {
+ #endif
+ 
+ // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
++#include "test-backend-portable-routed.h"
++
+ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
++    if (std::getenv("SKIPPY_TEST_PORTABLE_R8")) {
++        return make_portable_routed_cases();
++    }
+     std::vector<std::unique_ptr<test_case>> test_cases;
+     std::default_random_engine rng(0);
+ 
+diff --git a/tests/test-backend-portable-routed.h b/tests/test-backend-portable-routed.h
+new file mode 100644
+index 000000000..9df3198a1
+--- /dev/null
++++ b/tests/test-backend-portable-routed.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++// Explicit opt-in native qualification, using the backend suite's actual
++// graph construction, CPU reference, strided views and negative/repeated IDs.
++template<class Parent>
++struct test_portable_routed final : Parent {
++    using Parent::Parent;
++    std::string op_desc(ggml_tensor *) override { return "PORTABLE_ROUTED_REUSE"; }
++};
++
++static std::vector<std::unique_ptr<test_case>> make_portable_routed_cases() {
++    std::vector<std::unique_ptr<test_case>> cases;
++    for (bool broadcast : {false,true}) {
++        for (bool offset : {false,true}) for (bool masked : {false,true}) {
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 0, offset, masked));
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id_dup>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 0, offset, masked));
++        }
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 256, 8, broadcast, 2048, 16, 512, 0, true, true));
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id_dup>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 256, 8, broadcast, 2048, 16, 512, 0, true, true));
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 2080, true, true));
++        for (int tokens : {8,15,17}) {
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, tokens, 512));
++        }
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 512, 16, 2048));
++    }
++    for (int selected : {4,16}) cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, selected, false, 2048, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q5_1, GGML_TYPE_F32, 16, 8, false, 2048, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, false, 2032, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, false, 2048, 16, 480));
++    GGML_ASSERT(cases.size() == 35);
++    return cases;
++}
 diff --git a/tests/test-metal-graph-optimize.cpp b/tests/test-metal-graph-optimize.cpp
-index e9ebdb8df..d5b0df9f1 100644
+index e9ebdb8df..b65d1d8bf 100644
 --- a/tests/test-metal-graph-optimize.cpp
 +++ b/tests/test-metal-graph-optimize.cpp
 @@ -8,6 +8,7 @@
@@ -97,11 +174,29 @@ index e9ebdb8df..d5b0df9f1 100644
  
  #include <cstdio>
  #include <vector>
-@@ -344,6 +345,30 @@ static int run_unary_mul_cases() {
+@@ -344,6 +345,48 @@ static int run_unary_mul_cases() {
  
  int main() {
      int preference_failures = 0;
 +    using ggml_metal_routed_tuning::rows;
++    for (auto device : {GGML_METAL_DEVICE_M1_ULTRA, GGML_METAL_DEVICE_M4}) {
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 8;
++        for (int64_t tokens : {8, 15, 17, 32}) {
++            preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, tokens, 2, 4, 8) != 4;
++        }
++        for (int64_t selections : {1, 4, 16}) {
++            preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, selections) != 4;
++        }
++        preference_failures += rows(device, false, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_K, 512, 2048, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 2048, 512, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2032, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 1, 4, 8) != 4;
++    }
++    for (auto device : {GGML_METAL_DEVICE_M1, GGML_METAL_DEVICE_M1_MAX,
++                       GGML_METAL_DEVICE_M4_PRO, GGML_METAL_DEVICE_M4_MAX, GGML_METAL_DEVICE_M3_ULTRA}) {
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 4;
++    }
 +    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 2048, 512, 3, 2, 4) != 8;
 +    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 512, 2048, 31, 2, 4) != 8;
 +    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, false, GGML_TYPE_Q4_1, 2048, 512, 8, 2, 4) != 4;

@@ -1,6 +1,6 @@
-From f27e6b3d75ddcaba7c13b3daf35f38faa351bb7b Mon Sep 17 00:00:00 2001
+From 668114cbfc3537e02d6a676de29a15510d9a4bc4 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Sun, 15 Nov 2026 05:02:56 +1100
+Date: Sun, 15 Nov 2026 21:45:46 +1100
 Subject: [PATCH] metal: process decode convolution channels across SIMD lanes
 
 ---
@@ -56,7 +56,7 @@ index b21c53b74..882be2b0f 100644
      const int64_t i3 = tgpig.z;
  
 diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 4d947c695..fb6daa1ef 100644
+index 463123c0f..a7435a252 100644
 --- a/tests/test-backend-ops.cpp
 +++ b/tests/test-backend-ops.cpp
 @@ -4862,6 +4862,8 @@ struct test_ssm_conv_bias_silu : public test_case {
@@ -68,9 +68,9 @@ index 4d947c695..fb6daa1ef 100644
  // GGML_OP_SSM_SCAN
  struct test_ssm_scan : public test_case {
      const ggml_type type;
-@@ -10532,6 +10534,7 @@ static const ggml_type other_types[] = {
- // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
- static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+@@ -10537,6 +10539,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         return make_portable_routed_cases();
+     }
      std::vector<std::unique_ptr<test_case>> test_cases;
 +    append_ssm_conv_channel_cases(test_cases);
      std::default_random_engine rng(0);

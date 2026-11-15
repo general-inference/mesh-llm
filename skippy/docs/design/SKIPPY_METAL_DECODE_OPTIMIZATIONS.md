@@ -1764,6 +1764,131 @@ baseline, including PR #33; they are not an engine-only comparison against
 PR #33, a general quality guarantee, an M5 serving qualification, or evidence
 of BaseRT parity. Component percentages must not be added or multiplied.
 
+## Routed affine reuse on M5 Max
+
+The local extension of core patch 0042 reuses activations across eight output
+rows for eligible shared-memory M5 Max Q4_1 routed-vector projections at token
+widths 3 through 31. Other widths, incomplete row tiles and unsupported inner
+dimensions retain their earlier paths. Forty actual CPU-reference Metal cases
+and the dispatch-boundary tests passed. Repeated-weight operation tests at
+widths 8 and 16 measured roughly 8–11% lower gate/up latency and 18–20% lower
+down-projection latency. A serving comparison was stopped when unrelated
+`maxd` activity appeared, so there is no qualified serving gain for NR8 yet.
+Evidence is under `target/routed-affine-reuse-evidence/`.
+
+A completed two-resident-server comparison isolated NR8 against frozen B600,
+using the same affine-expert model, CLI, DFlash 2 cap7, f16 KV, two lanes and
+disabled caches. The candidate also contains quantizer-only patch 0044, which
+does not alter serving arithmetic. Three warmup and three measured eight-prompt
+cycles ran per concurrency, with each measured prompt/batch ordered
+control/candidate/candidate/control. Predefined load/thermal checks rejected
+five whole blocks for both arms and retried after three quiet samples ten
+seconds apart. An independent audit verified 288 accepted requests, including
+192 measured; 305 raw response files include rejected attempts. Every accepted
+batch had nominal thermal state and no observed competing CPU load before and
+after it. Input token counts matched, outputs reached 128 tokens, and caches
+were unused. Batch elapsed time includes client validation and artifact writes.
+
+| Concurrency | NR4 control tok/s | NR8 tok/s | Change |
+| --- | --- | --- | --- |
+| 1 | 216.829 | 218.499 | +0.77% |
+| 2 aggregate | 253.060 | 259.430 | +2.52% |
+
+All measured single-request outputs match byte-for-byte. Each measured cycle
+is faster with NR8 (218.361/218.968/218.171 versus
+216.537/217.714/216.242). The small single-request improvement supports keeping
+the narrow dispatch change. Two-request output variation prevents treating
+that point estimate as an identical-output speedup. These are within-prompt
+comparisons with two resident servers, not a fresh-process qualification or
+evidence of BaseRT parity. The real-model diagnostic below also loaded the
+`kernel_mul_mv_id_q4_1_f32_r8_nsg=2_split=0` pipeline. The restored packaged
+runtime exactly reproduces the pre-fusion NR8 primary-library SHA-256
+`32bd947b9520a78188989647810f69845f6443b49ede639d12e9c95b0e160efd`.
+Raw guard observations, rejected blocks, response files and independent audit
+are under `target/routed-affine-reuse-evidence/paired-resilient/`.
+
+## Rejected routed gate/up/SwiGLU fusion
+
+The rejected core patch 0045 prototype was a separate capability: it combined paired
+Q4_1 routed gate/up projections and split SwiGLU in one M5 Max kernel, reusing
+F32 activations and keeping both accumulators in F32. It does not change
+weights or the public ABI. Its graph matcher admits the parallel projection
+branches explicitly, preserves captured intermediate outputs, keeps structural
+packing independent of token width, and rejects output overlap with every
+input, including exact activation aliases and leaf weights or IDs. The full
+encoder requires all inputs and output on one shared M5 Max device and uses
+the existing fallback outside token widths 3–31.
+
+The actual M5 Max kernel compiled and executed. All 58 CPU-reference numerical
+cases passed across both geometries, broadcast/per-expert activations, negative
+routing IDs, widths 1/2/3/8/16/31/32, captured intermediates and an exact input
+alias. The short-row cases now use a 1e-4 relative squared error threshold,
+50 times tighter than the inherited 5e-3. A trial 1e-6 threshold failed near
+3e-5 because the CPU Q4_1 reference quantizes activations to Q8_1. An independent
+oracle dequantizes weights, retains F32 activations and accumulates in double.
+It checks eight sampled output rows per token/expert, including four/eight-row
+tile boundaries and the last row. All 16 eligible cases pass with maximum relative squared error
+2.77041678939e-14. Together with 20 allocation-backed policy checks, that test
+reports 36 checks and zero failures. The existing Metal graph-policy test also
+passed. Queue replay produces the exact intended native tree
+`c48d7438de526c9cf48c8c498eec66b96cc742e2`. The packaged runtime build passed
+at `bba02246f508fa828cad6d7ebebb6800ec8c6669`; subsequent changes are test-only.
+
+The generic operation performance harness repeats only its final node and is
+unsuitable for timing this whole graph. An explicit `--benchmark` mode on the
+policy test instead times the complete three-node graph. Four ABBA processes
+used the same binary with fusion disabled only for the control. At 2048 inner
+dimensions and 512 output rows, width-eight latency fell 4.44% with broadcast
+activations and 6.36% with per-expert activations. Width-sixteen reductions
+were 1.17% and 3.10%. The reverse geometry improved 8.05–11.58% at widths
+eight/sixteen. Unchanged width-one cases varied from -1.73% to +4.41%, so
+these modest component measurements retain a noise limitation. The fixture
+uses 16 experts with eight selected and repeated weights; it does not measure
+serving throughput or DRAM bandwidth. Source, raw logs, load guard and analysis
+are under `target/routed-glu-fusion-evidence/`.
+
+A full-serving comparison uses the frozen NR8 runtime as control, rather
+than disabling every existing fusion. Its first attempt was invalidated during
+the first candidate process: the load snapshot recorded unrelated `maxd`
+PID 68931 at 45.2% CPU and about 26.4 GB RSS. Only the owned server was stopped;
+the unrelated daemon was untouched. No complete comparison or causal serving
+gain may be claimed from those partial responses.
+
+A separate real-model diagnostic, with debug logging and fusion statistics
+enabled, completed two 128-token requests. The new pipeline loaded, and the
+device-wide counter reported 2,118 `MUL_MAT_ID+MUL_MAT_ID+GLU` fusions. The
+same shared counter is logged by two backend contexts and must not be summed.
+These instrumentation settings alter encoding concurrency; the diagnostic is
+path-activation evidence, not a performance result. Logs and responses are in
+`target/routed-glu-fusion-evidence/serving-diagnostic/`.
+
+A shorter two-resident-server comparison then completed, with predefined
+thermal/load exclusions applied to whole within-prompt ABBA blocks. Three
+warmup and three measured eight-prompt cycles ran at each concurrency. Every
+measured prompt or paired batch ran control/candidate/candidate/control.
+The guard rejected two blocks (fair thermal state, then unrelated `maxd`
+activity) and retried them after three quiet samples ten seconds apart.
+An independent audit verified 288 valid requests, including 192 measured,
+matching input token counts, 128 output tokens, zero cached tokens, and
+nominal thermal state with no observed competing CPU load before and after
+each accepted batch. There are 291 raw response files, including rejected
+attempts. Batch wall time includes client validation and artifact writes.
+
+| Concurrency | NR8 control tok/s | Fused tok/s | Change |
+| --- | --- | --- | --- |
+| 1 | 214.796 | 210.255 | -2.11% |
+| 2 aggregate | 272.404 | 266.254 | -2.26% |
+
+The single-request outputs match byte-for-byte, and the candidate is slower
+in every measured cycle. Two-request output variation prevents interpreting
+that percentage as an identical-output regression; it also provides no reason
+to promote the prototype. The small component latency gain does not survive
+full serving. Patch 0045 was removed from the active queue, with its complete
+source, frozen runtime, oracle binary, raw responses and independent audit
+retained under `target/routed-glu-fusion-evidence/`. NR8 is qualified separately
+above; the rejected-fusion comparison includes it in both arms. Neither
+kernel is included in the clean M1 Ultra affine-format percentages above.
+
 ## Dense affine format screening on M4
 
 Jianyang job `job_nbtr6z2fftgpd91` succeeded on the Dan-lab M4 mini with
@@ -1809,6 +1934,31 @@ logits introduce a small separate measurement difference. This is a measurable
 quality tradeoff, not an equivalent-weight improvement. No serving throughput
 qualification has been run. Raw checksummed logs and payload audit are in
 `target/dense-affine-format-evidence/m1-quality-artifacts/`.
+
+A cooled M1 Ultra BAAB serving run (`job_nm5x3wvnsbkab5j`, run
+`run_075fthbct662tyb`) then completed at $0. Both arms used native
+`748825b4eab791f3dc768608f37c9ffee96d02d8`, the same CLI and DFlash 2 cap7,
+f16 KV, two lanes, disabled caches and eight coding prompts. Each process
+had 180 seconds idle before loading, then three warmup and three measured
+cycles per concurrency. Independent auditing checked all 384 raw responses,
+including 192 measured: matching input token counts, 128-token length
+completions and zero cache hits. All 126 guard observations through completion
+reported nominal thermal state, without throttling or overlapping jobs.
+Each process pair's spread is below 0.37%.
+
+| Concurrency | Affine parent HTTP tok/s | Selective dense HTTP tok/s | Change |
+| --- | --- | --- | --- |
+| 1 | 125.135 | 127.342 | +1.76% |
+| 2 aggregate | 146.391 | 147.338 | +0.65% |
+
+Text differs between formats. These small complete-configuration changes do
+not justify replacing the preferred affine-expert recipe given the measured
+1.94% perplexity increase, and do not establish BaseRT parity. The selective
+dense plan remains an experimental quality/performance tradeoff rather than
+a promoted recipe. Checksummed returned artifacts, independent raw-response
+audit and telemetry are under
+`target/dense-affine-format-evidence/m1-serving-artifacts/` and
+`m1-serving-guard.jsonl`.
 
 ## DFlash 2 selector precision diagnostic
 

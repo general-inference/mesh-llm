@@ -655,6 +655,11 @@ impl StageModel {
         self.inner.bighead.as_ref()
     }
 
+    /// A packaged pointer head takes precedence over the generic causal readout.
+    pub fn has_bighead_backend(&self) -> bool {
+        self.inner.bighead.is_some()
+    }
+
     pub(crate) fn apply_bighead_lora(&self, session: &StageSession) -> Result<()> {
         let Some(adapter) = &self.inner.bighead_lora else {
             return Ok(());

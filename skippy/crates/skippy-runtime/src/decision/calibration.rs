@@ -166,9 +166,11 @@ mod tests {
                 .unwrap_or(false)
         );
         assert!(
-            !serde_json::from_str::<DecisionCalibration>(r#"{"schema_version": "99", "kinds": {}}"#)
-                .map(|c| c.validate().is_ok())
-                .unwrap_or(false)
+            !serde_json::from_str::<DecisionCalibration>(
+                r#"{"schema_version": "99", "kinds": {}}"#
+            )
+            .map(|c| c.validate().is_ok())
+            .unwrap_or(false)
         );
     }
 

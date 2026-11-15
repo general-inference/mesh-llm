@@ -42,6 +42,10 @@ mod cache;
 mod preparation;
 mod sequence;
 
+fn use_causal_readout(has_pointer_head: bool, supports_causal_readout: bool) -> bool {
+    supports_causal_readout && !has_pointer_head
+}
+
 #[derive(Clone, Debug)]
 struct ReadoutJob {
     question: usize,
@@ -97,10 +101,11 @@ impl StageOpenAiBackend {
         let scheduler = self.iteration_scheduler.clone();
         let plan = tokio::task::spawn_blocking(move || {
             let reader = scheduler.execute_runtime("decision-plan", |runtime| {
-                Ok(runtime
-                    .model
-                    .supports_causal_readout()
-                    .then(|| runtime.model.reader()))
+                Ok(use_causal_readout(
+                    runtime.model.has_bighead_backend(),
+                    runtime.model.supports_causal_readout(),
+                )
+                .then(|| runtime.model.reader()))
             })?;
             let Some(reader) = reader else {
                 return Ok(None);

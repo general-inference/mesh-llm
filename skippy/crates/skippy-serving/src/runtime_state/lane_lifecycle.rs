@@ -25,9 +25,9 @@ impl RuntimeState {
         Ok(self.session_stats())
     }
 
-    /// Only DiffusionGemma reports a System One canvas.
+    /// A pointer head and DiffusionGemma both claim the model's execution lane.
     pub(crate) fn serves_system_one(&self) -> bool {
-        self.model.system_one_canvas_length().is_ok()
+        self.model.has_bighead_backend() || self.model.system_one_canvas_length().is_ok()
     }
 
     /// Whether this loaded runtime can execute the System One endpoint, not

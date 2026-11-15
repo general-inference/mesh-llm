@@ -235,7 +235,13 @@ impl BigHeadModel {
             let (answer, options) = hidden.split_last().expect("checked above");
             let option_refs: Vec<&[f32]> = options.iter().map(|v| v.as_slice()).collect();
             let logits = pointer_logits(&self.config, &self.weights, answer, &option_refs);
-            probabilities.push(kind_probabilities(&self.config, &q.kind, &logits));
+            let mut distribution = kind_probabilities(&self.config, &q.kind, &logits);
+            if q.kind == "noul" {
+                // The training renderer scores false then true, while DecisionOutput
+                // and Jev's Noul response place p(true) first.
+                distribution.swap(0, 1);
+            }
+            probabilities.push(distribution);
             input_tokens += q.prompt_token_count;
         }
         super::check_output(request, &probabilities)?;
@@ -323,6 +329,45 @@ mod tests {
             synthetic_states
                 as fn(&mut [RenderedQuestion]) -> Result<Vec<Vec<Vec<f32>>>, DecisionError>,
         ))
+    }
+
+    fn true_noul_states(
+        rendered: &mut [RenderedQuestion],
+    ) -> Result<Vec<Vec<Vec<f32>>>, DecisionError> {
+        Ok(rendered
+            .iter_mut()
+            .map(|question| {
+                question.prompt_token_count = 1;
+                vec![
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    vec![0.0, 1.0, 0.0, 0.0],
+                    vec![0.0, 1.0, 0.0, 0.0],
+                ]
+            })
+            .collect())
+    }
+
+    #[test]
+    fn noul_distribution_reports_true_probability_first() {
+        let request = super::super::DecisionRequest {
+            state: super::super::DecisionValue::String("true statement".into()),
+            questions: vec![super::super::DecisionQuestion {
+                key: "truth".into(),
+                instructions: None,
+                kind: super::super::DecisionQuestionKind::Noul {
+                    when_true: None,
+                    when_false: None,
+                },
+            }],
+            seed: [0; 32],
+        };
+        let model = model().with_provider(Box::new(
+            true_noul_states
+                as fn(&mut [RenderedQuestion]) -> Result<Vec<Vec<Vec<f32>>>, DecisionError>,
+        ));
+        let output = model.decide(&request).unwrap();
+        assert!(output.probabilities[0][0] > 0.9);
+        assert!(output.probabilities[0][1] < 0.1);
     }
 
     #[test]

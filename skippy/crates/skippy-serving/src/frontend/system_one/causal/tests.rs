@@ -1,6 +1,14 @@
 use super::*;
 use skippy_runtime::decision::causal::QuestionPlan;
 
+#[test]
+fn loaded_pointer_head_preempts_independent_causal_readout() {
+    assert!(!use_causal_readout(true, true));
+    assert!(!use_causal_readout(true, false));
+    assert!(use_causal_readout(false, true));
+    assert!(!use_causal_readout(false, false));
+}
+
 /// Construct a mixed-method plan for causal response-assembly tests.
 fn fixture() -> (SystemOneRequest, DecisionPlan) {
     let request = serde_json::from_value(serde_json::json!({

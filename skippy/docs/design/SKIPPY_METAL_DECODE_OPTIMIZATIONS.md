@@ -1807,6 +1807,159 @@ runtime exactly reproduces the pre-fusion NR8 primary-library SHA-256
 Raw guard observations, rejected blocks, response files and independent audit
 are under `target/routed-affine-reuse-evidence/paired-resilient/`.
 
+## Current affine/NR8 configuration against BaseRT
+
+A fresh paired comparison used BaseRT 0.5's public canonical Q4 target and
+converted DFlash 2 Q8 sidecar against Skippy's affine-expert target and GGUF
+DFlash 2 Q8 sidecar. Both used a seven-proposal ceiling, greedy sampling,
+f16 KV, 8192 context cells, two lanes and disabled prefix reuse. Target and
+draft representations differ; this is a complete-configuration comparison,
+not equal-quality or engine-only efficiency. Full SHA-256 pins were refreshed
+before either server started, including BaseRT target
+`7171b37ffccdf16dfd920f55be766e6faffa31f64e04ca9cd0064943bf72881b`
+and its draft `ee4c3d0902c7e9bc9e8f0ed9798caae8a5584ac80362ec32ebc0651946141eb1`.
+
+The two resident servers ran three warmup and three measured eight-prompt
+cycles at concurrency one and two. Every measured prompt/batch alternated
+BaseRT/Skippy/Skippy/BaseRT. Three whole blocks affected by unrelated `maxd`
+activity were rejected for both arms and retried after three quiet samples
+ten seconds apart. Independent auditing verified 288 accepted requests,
+including 192 measured, with matching input token counts, 128-token length
+completions and zero cache hits. All accepted batches had nominal thermal
+state and no observed competing CPU load before and after them. Batch elapsed
+time includes client validation and artifact writes. There are 300 raw response
+files, including excluded attempts.
+
+| Concurrency | BaseRT tok/s | Skippy affine/NR8 tok/s | Skippy relative change |
+| --- | --- | --- | --- |
+| 1 | 309.412 | 215.712 | -30.28% |
+| 2 aggregate | 367.784 | 272.092 | -26.02% |
+
+The candidate's single-request cycles are stable at
+215.383/216.328/215.428 tok/s. Text differs between engines as expected from
+their different target quantizations. This comparison confirms that BaseRT
+parity has not been achieved: matching these rates would require approximately
+43.4% and 35.2% more Skippy throughput respectively on this workload. It is
+not valid to combine these percentages with component gains or results from
+other machines and workloads. Commands, guard/rejection records, all raw
+responses, refreshed source hashes and independent audit are under
+`target/basert-current-gap-evidence/`.
+
+## Affine/NR8 GPU attribution
+
+A fresh Metal System Trace launch profiles native `e795659936a8` with the
+affine-expert target and DFlash 2 cap7. Two complete eight-prompt warmup cycles
+precede one measured profile cycle. All 24 requests complete 128 tokens without
+cache hits. The 5.018145-second steady interval starts at trace time
+24.087373 seconds, after the last Skippy shader compilation at 20.787230333.
+
+The mapping table contains 18 submission-ID ownership reuses across processes.
+The analysis therefore uses each interval's latest preceding mapping timestamp
+and rejects conflicting PID ownership within that interval, rather than taking
+the final owner of an ID. The corrected temporal join leaves the steady-scope
+ranking unchanged: 325,093 shader intervals attributed to Skippy, 1,286 Skippy
+intervals without a matching shader PC range, and three unowned intervals.
+Shader attribution still uses the latest preceding compiled PC range for the
+owned PID, a code-lifetime heuristic. Per-kernel interval unions can overlap;
+they are not additive or exclusive wall-time fractions.
+
+| Shader category | Union active ms within profile scope |
+| --- | --- |
+| Routed Q4_1 vector, eight output rows | 1,218.782 |
+| Dense Q8_0 few-row MMA, nt4 | 576.559 |
+| Dense Q8_0 few-row MMA, nt2 | 367.582 |
+| Q6_K few-row MMA, nt4 | 366.003 |
+| Gated delta net | 294.553 |
+| Dense Q8_0 few-row MMA, nt1 | 230.036 |
+
+Matrix work remains the largest target after the affine layout and NR8 change.
+The Q8 category includes both target and draft operations; it does not by itself
+justify quantizing every dense tensor. This profile is invasive diagnostic
+evidence, not a throughput result or a causal comparison against the older
+Q4_K trace. The full trace, raw exports, timestamp-aware ownership analysis,
+steady-window markers and request validation are retained under
+`target/affine-nr8-gpu-evidence/`.
+
+## Public-API BaseRT GPU attribution
+
+A matching 90-second Metal System Trace launch profiles the public Superfluid
+CLI and BaseRT 0.5 with its canonical Q4 target, converted DFlash 2 Q8 sidecar,
+cap7, f16 KV, 8192 context cells and two lanes. It runs the same eight raw
+prompts, two warmup cycles and one profile cycle. All 24 requests produce
+128-token length completions without cache hits. No implementation code is
+reconstructed or copied.
+
+The launched HTTP process is PID 27898. The recorded process inventory lists
+two workers with the expected executable path; only PID 27910 has GPU shader
+records. Attribution uses that GPU-active worker, not the HTTP parent. Its
+last shader compilation is at trace time 10.811935625 seconds, before the
+3.315475-second steady window starting at 13.254581 seconds. A timestamp-aware
+submission-owner join handles four reused submission IDs. It attributes
+184,107 steady shader intervals to the worker, out of 187,271 total intervals;
+no worker intervals remain without a shader PC mapping. The PC-range
+code-lifetime heuristic and non-additive union-time limitations still apply.
+
+| Observed BaseRT shader label | Union active ms within profile scope |
+| --- | --- |
+| `moe_silu_gate_up_shexp_gated_q4_s1r2` | 735.152 |
+| `moe_expert_gemm_shexp_scatter_gated_q4` | 494.726 |
+| `tc_gemm_q4_tiled_ns_n128` | 250.575 |
+| `tc_gemm_q8_u8_w128_sk` | 216.464 |
+| `tc_gemm_q4_tiled_ns_n128_seg_ab` | 215.265 |
+| `gdn_verify_fused_defer_hd128_f16` | 173.002 |
+
+Public startup logs also report 131 target projections tiled at load time
+(959 MiB replacing packed rows; 948 MiB of mapped pages released, with 111
+tensors never wrapped). These logs and labels provide research leads for
+weight packing, shared/routed expert fusion and recurrent verification; names
+alone do not establish their algorithms or full numerical precision.
+
+During the respective eight-prompt steady windows, Skippy records 3,695 unique
+Metal command-buffer IDs and BaseRT's worker 527, selected by the mapping
+timestamps and owning PID. The counts motivate investigating submission and
+synchronization, but different target/draft representations and token paths
+prevent treating them as an engine-only overhead ratio. Attributed shader
+interval unions cover 3,735.643 ms of Skippy's 5,018.145 ms window and
+2,894.416 ms of BaseRT's 3,315.475 ms window. These are profiler coverage
+measurements, not hardware utilization or exclusive runtime fractions.
+
+The public metrics delta for BaseRT's steady cycle reports 1,024 emitted
+tokens, 1,179 proposals and 777 accepted proposals. Skippy's eight corresponding
+profile requests report 1,506 proposals, 791 accepted and 222 windows.
+Acceptance and proposal counts depend on the controller, quantization and
+text; they do not establish a single causal explanation. They support
+rechecking proposal width after the affine format change. Trace, logs, metric
+snapshots, raw responses and corrected worker attribution are retained under
+`target/basert-gpu-evidence/`.
+
+## Affine/NR8 proposal width confirmation
+
+The lower proposal count seen in BaseRT's profile prompted a new width test
+after the format change. Both Skippy arms use the exact retained affine/NR8
+runtime and model/draft bytes; only the proposal ceiling changes from seven
+to five. The same two-server, within-prompt ABBA method runs three warmup and
+three measured eight-prompt cycles per concurrency. Five whole blocks affected
+by unrelated `maxd` CPU load are rejected for both arms and retried after three
+quiet samples ten seconds apart.
+
+Independent auditing verifies 288 accepted requests, including 192 measured,
+with matched input token counts, 128 output tokens, zero cache hits, nominal
+thermal state and no observed competing CPU load before and after each
+accepted batch. All measured output text matches byte-for-byte at both
+concurrencies. The 310 raw response files include excluded attempts.
+
+| Concurrency | Cap7 tok/s | Cap5 tok/s | Cap5 change |
+| --- | --- | --- | --- |
+| 1 | 217.040 | 206.888 | -4.68% |
+| 2 aggregate | 272.475 | 268.450 | -1.48% |
+
+Cap5 is slower in every measured cycle at both concurrencies. The cap7 serving
+preset remains unchanged; fewer draft proposals alone do not establish a
+speed improvement for this runtime. This confirms the width choice on the
+new format without assuming that the older Q4_K result transfers. Raw
+responses, guards, rejected blocks and independent audit are retained under
+`target/affine-width-evidence/`.
+
 ## Rejected routed gate/up/SwiGLU fusion
 
 The rejected core patch 0045 prototype was a separate capability: it combined paired
@@ -2010,3 +2163,67 @@ row-dependent draft-time fit. They also illustrate why proposal acceptance
 percentages cannot be compared without accounting for proposal widths:
 the shortest, slower arm has the highest percentage. The controller remains
 unchanged. Reports are in `width-screening.json` beside the selector evidence.
+
+## Rejected post-fence shared-output readback experiments
+
+Native candidate `9c3bf3dbebc37b5c2b4b47e2d06bdeb3b7e11047` queues
+host-readable decode outputs until the existing recurrent completion fence,
+then reads them through the owning buffer API. Private buffers and callers
+without that fence retain their original asynchronous transfers. Metal shared
+buffer readability is exposed through a private backend capability; `is_host`
+remains false. This is additional to PR #33's KV placement and gather-free
+attention work, which is already present in both arms.
+
+The diagnostic retained 1,376 graph command buffers but removed all 2,097
+target output-copy command buffers. The 222 draft lattice copies remained.
+All eight measured texts and input token counts matched the control, and
+telemetry reported no dropped events. A focused native unit also checks
+producer completion, destination lifetimes, views, fallback buffers and the
+unchanged fence.
+
+A separate uninstrumented comparison used identical affine target and Q8
+draft files, NR8 in both arms, cap seven, two resident servers and within-prompt
+ABBA ordering. The independent audit validated 288 accepted requests, including
+192 measured requests; 300 raw responses include rejected load-affected blocks.
+Accepted blocks passed the nominal thermal and competing-load guards.
+
+| Concurrency | Original tok/s | Post-fence reads tok/s | Change |
+|---|---:|---:|---:|
+| 1 | 215.790 | 216.797 | +0.47% |
+| 2 | 265.910 | 266.577 | +0.25% |
+
+All measured output texts matched exactly. C1 improved in each of three cycles;
+C2 had one negative cycle and throughput drift in both arms. These small changes
+are not a qualified serving gain or evidence of BaseRT parity. Removing copy
+submissions alone did not deliver the expected large improvement. The candidate
+was not promoted. A follow-up restored asynchronous bulk logits transfers
+while retaining post-fence feature reads, to isolate whether CPU logits
+copying offset the submission savings. Evidence, frozen candidate and
+control packages, and independent audit remain in
+`target/host-readback-evidence/`.
+
+The feature-only follow-up used native
+`62f0a924d95486284189783b66e68dfa26a2c449`, primary-library SHA-256
+`09434e1704a809141eb9e34ed96afa624ccc2c37350e455a8ff0bac326e1ba6f`.
+Its diagnostic matched all eight texts and input counts exactly, removed
+1,864 feature-copy commands, and retained 233 logits copies and 222 draft
+lattice copies alongside the original 1,376 graph command buffers.
+
+The same paired serving protocol independently validated 288 accepted requests,
+192 measured, with 297 raw response files. Six whole blocks were rejected for
+competing CPU load or non-nominal thermal state; both arms were retried after
+three quiet, nominal samples. Every measured output text matched across arms.
+
+| Concurrency | Original tok/s | Feature-only reads tok/s | Change |
+|---|---:|---:|---:|
+| 1 | 218.642 | 219.283 | +0.29% |
+| 2 | 267.503 | 267.750 | +0.09% |
+
+Both concurrency levels include a negative comparison cycle, and C2 drifts
+materially across cycles in both arms. Neither version establishes a useful
+serving gain. Both prototypes are rejected, and experimental core 0045 is
+removed from the active patch queue. Frozen runtimes, durable prototype
+patches, complete diagnostics and separate independent audits remain under
+`target/host-readback-evidence/`. These results narrow the next work toward
+matrix execution and weight layout: substantially fewer copy submissions
+alone did not materially close the measured engine-configuration gap.

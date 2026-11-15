@@ -1,16 +1,16 @@
 # Metal decode optimization evidence
 
-The measurements below were collected on the branch based at `c8bdb738f`,
-before general-inference/mesh-llm PR #33. They remain historical measurements,
-not performance claims for the combined implementation. Integration with
-merged commit `74c7d5bd2` is in progress; the fresh comparison below qualifies
-only its stated workloads. In the
-combined queue, the original core patches 0017–0022 are numbered 0036–0041,
-following PR #33's core patches; the combined native ABI is 0.1.85.
+This branch includes merged PR #33 (`74c7d5bd2`). This ledger contains historical
+pre-PR #33 measurements and later comparisons; each section defines its own
+baseline and workload. In the combined queue, the original core patches
+0017–0022 are numbered 0036–0041, following PR #33's core patches; the combined
+native ABI is 0.1.85. BaseRT parity remains unproven.
 
-The latest retained addition is the [portable down-only NR8 policy](#retained-portable-down-only-nr8-policy):
-fresh-start M1 C2 comparisons confirm about 1.1% additional throughput. This is
-a separate hardware-specific measurement, not an addition to the M5 headline.
+The latest retained addition is [bounded uint32 offsets](#retained-bounded-u32-offsets),
+enabled by default on qualified M1 Ultra shapes. The final default build adds
+1.24% C2 throughput over retained NR8 with exact output matches; C1 is flat.
+The preceding three experiments pool to +1.28%. These are separate M1 results,
+not percentages to add to the M5 headline or the earlier NR8 result.
 
 ## Combined implementation against PR #33
 
@@ -3165,3 +3165,1129 @@ is claimed. The integrated package and audit are frozen under
 `target/affine-portable-r8-evidence/native-integrated/` and
 `target/affine-portable-r8-evidence/integration-audit.json`. Nothing is pushed
 and no PR is raised.
+
+## Rejected wider SIMD lane sharing
+
+M4 job `job_00k3ztp5fd7zkgx`, run `run_jr2s91xxj49cj33`, completed
+successfully at $0. It tested four lanes per quant block with eight or sixteen
+output rows per SIMD group, and eight lanes with sixteen rows, against the
+retained NR8/two-lane standalone control. Original Q4_1 bytes and F32 inputs
+were preserved; summation grouping changed. Each of three sequential phases
+passed 96 FP64 reference checks, 48 numerical paired checks and 48 poisoned
+output/write checks across 24 routed cases before its guarded timing phase.
+All eight ABBA blocks per variant passed sampled thermal/interference guards.
+
+For rotating anonymous captured-occupancy profiles, GPU latency changes were:
+
+| Rows / lanes per block | Gate/up broadcast | Gate/up selected | Down broadcast | Down selected |
+| --- | ---: | ---: | ---: | ---: |
+| 8 / 4 | +2.52% | +1.26% | +4.52% | +3.93% |
+| 16 / 4 | +12.32% | +8.51% | +7.99% | +7.74% |
+| 16 / 8 | +22.02% | +17.86% | +18.55% | +18.39% |
+
+Positive numbers mean slower. The few fixed sparse-profile improvements did
+not generalize to rotating profiles; all three variants are rejected without
+changing the retained runtime. These are kernel measurements, not serving TPS.
+The profiles preserve selected aggregate occupancy statistics from synchronized
+M1 observations, not actual expert identities or exact route replay. Pipeline
+thread-limit metadata does not establish register pressure or hardware occupancy.
+
+Artifacts under `target/affine-vector-lanes-evidence/downloads/` were retrieved
+with SHA-256 checks. Submitted host sources and shader hashes match the returned
+sources and summaries. The raw timing, correctness and guard audits were
+reproduced locally for all phases and exactly match remote audit output; the
+local replay explicitly omits the remote executable hash check because no
+prebuilt executable was transferred between Macs. The remote audit performed
+that check on the execution host. No build or correctness run overlapped timing.
+
+## Threadgroup-size screen: retain two SIMD groups
+
+M4 job `job_qpfszz7cn2r5c02`, run `run_jdnvhgnhf5ghc6f`, succeeds at $0.
+It compares one, four and eight SIMD groups per threadgroup against two,
+retaining NR8 and original Q4_1/F32 arithmetic and lane assignment. A source
+comparison verifies that each candidate kernel differs only in output-row
+grouping. Dispatch geometry changes accordingly; no scratch or routing pass
+is added. The same anonymous occupancy profiles and guarded ABBA protocol are
+used, with numerical qualification completed before each timing phase.
+
+All three remote independent audits pass: each checks eight accepted blocks,
+16 projection cases, 64 raw timing pairs, 96 FP64 references, 48 numerical
+paired outputs and 48 poisoned-output/write checks. One group increases
+rotating profile-domain-256 latency by 0.14–0.70%. Eight groups changes it by
+-0.52% to +0.14%, with broadcast down slightly faster but selected down slower.
+Four groups also yields mixed changes around zero. These results do not justify
+changing the retained two-group policy or running a serving promotion campaign.
+They provide no additional TPS gain. Source and artifacts are under
+`target/affine-vector-groups-evidence/`. All 132 selected source, raw timing,
+guard and correctness artifacts are SHA-256 verified against the terminal
+inventory. Submitted and executed sources match. Local raw audit replay
+reproduces all three remote audits exactly, with the remote executable hash
+check explicitly omitted locally because no prebuilt executable is transferred.
+No runtime source is changed.
+
+## Lossless routed-weight row tiles: no promotion
+
+M4 job `job_9y6gtbnvdp3pkb2`, run `run_3bztq4t0e8xzqes`, succeeds at $0.
+It tests a byte permutation over four, eight and sixteen output rows and sixteen
+Q4_1 blocks. Quant codes and half scale/offset bytes are copied verbatim into
+aligned code and coefficient planes, with unchanged total byte count. Every
+original block is recovered and compared byte-for-byte before dispatch. This
+does not change quantization, model values or model files. The test weights
+are generated fixtures, not a full model cache.
+
+Source comparison verifies unchanged NR8 arithmetic, lane assignment and
+two-SIMD-group dispatch: only packed weight-load branches change. Each phase
+passes 24 full byte-roundtrip cases, 96 FP64 checks, 48 paired numerical checks
+and 48 poisoned-output/write checks before eight guarded ABBA timing blocks.
+The existing anonymous captured-occupancy profiles are used; they are synthetic
+reconstructions, not exact route replay or serving frequency measurements.
+
+| Tile rows | Gate/up broadcast | Gate/up selected | Down broadcast | Down selected |
+| --- | ---: | ---: | ---: | ---: |
+| 4 | -0.29% | -0.46% | -0.55% | -0.68% |
+| 8 | +2.91% | +2.06% | +3.53% | +3.34% |
+| 16 | +1.70% | +0.69% | +3.81% | +3.42% |
+
+These are GPU latency changes on rotating profile-domain-256 cases; positive
+means slower. Four-row tiles give less than one percent improvement there but
+regress fixed sparse cases by about 0.4–0.6%. Wider tiles regress rotating
+cases. This evidence does not justify a duplicate expert-weight cache and its
+memory/loading cost. No candidate is promoted and no additional serving TPS
+is claimed. Research sources and raw evidence live under
+`target/affine-routed-tiled-evidence/`.
+
+All 132 selected artifacts are retrieved with SHA-256 verification against the
+terminal inventory. Returned host, shader and audit sources match the submitted
+payload. The raw timing, correctness, byte-roundtrip and guard audit replays
+locally for all three variants and reproduces remote audit output exactly.
+Only the remote executable hash check is omitted locally because no prebuilt
+executable is transferred; that check passed on the execution host. No runtime
+source, native patch or retained package is changed by this screen.
+
+## Rejected explicit vector state I/O in gated delta net
+
+The retained recurrent kernel is another visible entry in the scoped C2
+diagnostic. A standalone screen preserves its F32 recurrence and all speculative
+state snapshots while replacing four scalar initial-state loads and snapshot
+stores per lane with explicit `float4` accesses. No state precision, token
+acceptance, snapshot count or model file changes. The original retained kernel
+body is extracted directly; attention and recurrent update arithmetic stay
+unchanged. This tests explicit vector accesses, not a new recurrent algorithm.
+
+The target GGUF metadata confirms state width 128, 32 value heads and 16
+query/key groups (`ssm.state_size`, `ssm.time_step_rank`, `ssm.group_count`).
+The first valid screen used eight query/key groups and is treated as a generic
+fixture only: job `job_1g62sbva48tmnr4`, run `run_qv6dtqy1xs1aps8`. A second
+screen uses the target's metadata dimensions: job `job_pgd893m76wcewg3`, run
+`run_h3jvrxj9t68n5nm`. Both complete successfully at $0 on the M4 mini.
+
+Each passes 96 correctness cases, 192 FP64 output/state checks, 96 paired
+numerical checks and 192 poisoned-output/untouched-slot checks. Cases cover
+1/3/8/16 tokens, one/two sequences, 1/8/16 snapshot slots, scalar/per-channel
+gates and fused/unfused snapshot destinations with padded fused slot strides.
+Eight guarded ABBA blocks then measure 8/16 tokens, one/two sequences and
+1/16 snapshot slots, with scalar gates and fused snapshots. Each arm includes
+at least 250 ms of GPU time and 1,024 dispatches. A concurrent encoder protects
+output reuse between dispatches. No correctness work overlaps timing.
+
+At target metadata dimensions, GPU latency changes range from -0.66% to
++2.37%; the four sixteen-token cases change by +0.16%, +0.48%, -0.07% and
++0.26%. There is no consistent gain, so explicit vector state I/O is rejected
+without a native integration or serving campaign. Generated inputs and isolated
+dispatches do not establish target-model serving speed, actual dispatched
+sequence geometry, production cache alias safety or hardware utilization.
+
+Three preceding attempts are excluded: one host build rejected misleading
+indentation, one audit used `filter_map` unavailable in the mini's Ruby 2.6,
+and one short timing campaign lacked a mid-run guard sample in every arm.
+The corrected campaigns retain the guard requirement and lengthen timing;
+excluded timings are not pooled with accepted measurements. Research sources
+and evidence are under `target/gdn-vector-state-evidence/` and
+`target/gdn-vector-state-qh16-evidence/`. No retained kernel is changed.
+
+For each accepted screen, all 43 selected source, correctness, timing and guard
+artifacts are retrieved and SHA-256 verified. Returned sources match the
+submitted payloads. Local raw audit replay reproduces each remote audit exactly,
+omitting only the executable hash check because the remote executable is not
+transferred between Macs. That check passed on the execution host. The active
+native checkout remains clean at `57450b1e3fc0ad06c2060dfd994a4f3c9812e59a`.
+
+## Recurrent row reuse: benefit depends on snapshot obligations
+
+A different GDN screen shares query/key/gate values across two or four value
+state rows per SIMD group, retaining F32 state, sequential recurrence and all
+requested snapshots. Each lane holds four state elements per row. It adds no
+scratch, routing pass or internal barrier; dispatch covers fewer SIMD groups.
+Job `job_dxbbjsp9ejwdsf3`, run `run_dtz81gspg0r3q3e`, succeeds at $0 on M4.
+Both variants pass the full 96-case FP64/paired/poison/untouched-slot roster
+before eight guarded ABBA blocks each. Four-row reuse improves final-state-only
+cases but not consistently the sixteen-snapshot cases.
+
+The actual capped DFlash configuration requires a different count: the serving
+cap is seven, `DFlashProposalConfig::recurrent_rollback_tokens()` adds the
+anchor (eight rollback tokens), and the native delta-net graph sets
+`K = cparams.n_rs_seq + 1` (nine slots). A confirmation adds K9 to correctness
+and times K1/K9/K16 for 1/8/16 tokens and one/two sequences, repeating the full
+roster three times. Job `job_q34pfs8xxzcb5ta`, run `run_5rnssdkqfj5aa56`,
+succeeds at $0. It passes 128 correctness cases, 256 FP64 checks, 128 paired
+checks and 256 poison/untouched checks, then 54 guarded ABBA blocks and 216
+raw timing records. Every arm includes at least 250 ms GPU time and 1,024
+dispatches. Correctness and builds do not overlap timing.
+
+Pooled GPU latency at target metadata dimensions D128/H32/QH16 is:
+
+| Tokens / sequences | Final state only (K1) | Nine slots (K9) | Sixteen slots (K16) |
+| --- | ---: | ---: | ---: |
+| 1 / 1 | -1.07% | +8.53% | +5.43% |
+| 1 / 2 | -4.20% | -5.26% | -2.77% |
+| 8 / 1 | -8.75% | -0.57% | +0.48% |
+| 8 / 2 | -18.40% | -0.08% | +0.36% |
+| 16 / 1 | -22.10% | +0.28% | +0.05% |
+| 16 / 2 | -24.43% | -0.66% | -0.48% |
+
+Positive means slower. One-token cases vary substantially between repeats;
+their pooled means do not justify a native policy. All three repeats improve
+the sixteen-token final-state-only cases, but K9 multi-token cases remain mixed
+around zero. No row-reuse runtime integration or serving gain is claimed.
+These are generated inputs and isolated dispatches, not captured model tensors
+or full-graph measurements.
+
+All 82 selected artifacts from the initial screen and 225 from confirmation
+are SHA-256 verified, with returned sources matching submitted payloads.
+Local raw timing, guard and correctness audits reproduce all remote audits
+exactly, omitting only remote executable hash checks because prebuilt binaries
+are not transferred between Macs. Remote executable checks passed on-host.
+Evidence lives under `target/gdn-row-reuse-evidence/` and
+`target/gdn-row-reuse-confirm-evidence/`. Native patches remain unchanged.
+
+The difference between output obligations motivates a separate, unimplemented
+hypothesis: record the F32 per-token update deltas during verification, then
+replay the accepted prefix in token order from retained initial state, writing
+one committed state instead of all intermediate full states. This must include
+delta writes and the replay kernel in timings and prove every accepted prefix
+against the original snapshots. It must preserve state lifetime, cache aliasing,
+rollback, inactive lanes and pipeline/export/checkpoint semantics before any
+native integration. K1 timing alone does not establish this optimization's
+cost or correctness, and provides no projected TPS gain. The explicit proposed
+gates are saved in `deferred-state-hypothesis.json` under confirmation evidence.
+
+## Deferred recurrent-state replay: standalone feasibility
+
+The deferred-state hypothesis now has a working standalone prototype. During
+verification it writes F32 update deltas, one per token/value row, instead of
+full recurrent-state snapshots. A replay kernel starts from the retained initial
+state and applies decay and recorded rank-one updates in token order through a
+different accepted length for each sequence. It writes one committed state.
+The baseline exposes the requested state by snapshot view; no artificial baseline
+copy is added. This compares the selected accepted-state obligation, not the
+complete production rollback/export contract.
+
+The first recorder uses four-row query/key reuse. Job `job_5s3xvbbem0ngf6b`,
+run `run_442x8qcm8bcac6x`, succeeds at $0 on M4. Its 32 cases check scalar and
+per-channel gates, one/two sequences, 1/3/8/16 tokens and both snapshot
+destinations. Every accepted prefix is checked, including zero/full acceptance
+and differing lengths across two sequences: 256 prefix checks, plus 64 FP64
+attention checks and 32 paired attention checks. Initial state is preserved;
+delta writes, poisoned committed outputs and scratch/output guards pass.
+Numerical tolerances pass but 52,096,182 paired state values differ at bit level.
+This variant is not described as exact replay. With verification and replay in
+one concurrent encoder, eight guarded ABBA blocks show 35.85–59.99% lower GPU
+latency, including delta writes, replay and dependency barriers. Acceptance
+lengths are preknown; this is an optimistic isolated GPU screen, not serving.
+
+Job `job_9qthb9rnnzp3ptj`, run `run_v3v79qn31e7hee7`, then adds a CPU wait
+after verification, updates accepted lengths, submits replay separately, and
+waits for committed state. Baseline submits verification and waits once; its
+accepted snapshot remains available by view. Wall time encloses encoding and
+all waits; GPU time sums candidate command durations. Three full ABBA rosters
+pass. GPU savings persist, but pooled host time regresses 12.78–22.56% for
+one sequence and improves 3.85–12.81% for two. This still uses synthetic accepted
+lengths, not the actual sampler. The returned independent audit inherited the
+earlier experiment's stale free-text limitations field; returned summary and
+host source describe the executed boundary method correctly. Original artifacts
+are unchanged, and `scope-correction.json` records the corrected scope.
+
+### Preserve original-row arithmetic and replay rounding
+
+A second recorder retains the original one-row kernel body, removes snapshot
+writes, and records its update delta. Replay uses explicit
+`fma(keys, delta, state * decay)`. Together these changes resolve the observed
+rounding difference in the tested fixture; they do not independently identify
+which change caused it. Job `job_6r6sj8h1qarhn0e`, run
+`run_2xhkceaq5y9p023`, passes all 32 attention cases and 256 accepted-prefix
+comparisons with zero differing state values, zero paired attention NMSE and
+zero maximum paired state error. FP64 checks, initial-state preservation and
+scratch guards also pass. Same-encoder GPU latency falls 19.05–53.76%.
+
+The stricter separate-submission confirmation is job `job_357fdpvv06at69x`,
+run `run_wmcr7a9gxyqad7h`. It requires exact attention and accepted-state
+equality, then repeats all eight timing cases three times: 24 ABBA blocks and
+96 raw timing records, at least 250 ms GPU time and 1,024 cycles per arm.
+Its audit passes with zero differing state values. Pooled latency changes are:
+
+| Tokens / sequences | Acceptance profile | GPU latency | Host elapsed |
+| --- | --- | ---: | ---: |
+| 8 / 1 | Half | -48.04% | +20.19% |
+| 8 / 1 | Full | -43.08% | +23.04% |
+| 8 / 2 | Half / full | -49.72% | -6.05% |
+| 8 / 2 | Full / full | -48.74% | -5.12% |
+| 16 / 1 | Half | -31.43% | +25.24% |
+| 16 / 1 | Full | -21.63% | +31.23% |
+| 16 / 2 | Half / full | -38.92% | -3.51% |
+| 16 / 2 | Full / full | -35.98% | -1.59% |
+
+Positive means slower. Both eight-token/two-sequence profiles improve host
+elapsed in all three repeats. The sixteen-token/two-sequence full-acceptance
+profile regresses in one repeat. One-sequence cases consistently regress,
+despite lower GPU time, so a broad default would be unjustified. These figures
+are per-operation synthetic cycle times, not model TPS or end-to-end serving
+gains. Fixed contiguous inputs and separate initial/committed buffers do not
+qualify production state aliases, strides or long-running model behavior.
+
+All 43/107/43/107 selected artifacts from these four successful runs are
+SHA-256 verified. Submitted host, shader and audit sources match executed
+sources. Local raw correctness, timing and guard audits reproduce remote audit
+output exactly; only remote executable hash checks are omitted locally because
+binaries are not transferred between Macs. Those checks passed on-host.
+Host elapsed is independently checked to enclose summed GPU durations, and
+pooled ratios are recomputed from raw arm records. Evidence is under
+`target/gdn-deferred-{state,boundary,original,original-boundary}-evidence/`.
+
+### Native state consumers constrain integration
+
+Current native code depends on full snapshots beyond the final accepted state.
+`skippy_trim_session()` synchronizes then changes recurrent rollback metadata
+through `seq_rm`; it does not currently submit a state reconstruction kernel.
+`skippy_preserve_verify_window()` can serialize the state after a window's first
+row before a later decode overwrites history, using the selected `rs_idx` plane.
+`llm_graph_context::build_rs_impl()` gathers selected state rows and preserves
+extra inactive states. These paths, along with export and older checkpoints,
+must continue to see valid full states.
+
+A possible next integration point is state gathering in the following graph:
+reconstruct the selected state directly into its gathered destination, rather
+than add an immediate replay submission and wait. This is not implemented.
+It requires durable initial state and replay inputs across graph-buffer reuse,
+sequence/slot identity, inactive-lane retention, and materialization for state
+export and checkpoint reads. Simply skipping the snapshot copy would violate
+existing native semantics. No native queue, retained runtime or public ABI is
+changed by these standalone experiments; no additional TPS or BaseRT parity
+is claimed.
+
+## Durable replay packets and matched state gathering
+
+The next standalone screen includes a durable packet: the verification kernel
+copies initial F32 state, keys and computed F32 decays while recording deltas.
+Replay consumes these saved buffers. Correctness deliberately overwrites all
+original query/key/value/gate/beta/state inputs after verification; all accepted
+prefixes must still match the original snapshot kernel exactly. This closes a
+standalone input-lifetime gap without yet qualifying native graph reuse.
+
+The baseline now produces a dense selected state with a gather after snapshot
+verification, matching the state-read obligation in the current target graph's
+`build_rs_impl()` path. This standalone gather is checked exactly against all
+256 selected-prefix references; it is not the native GET_ROWS implementation.
+Both arms submit verification, wait, update synthetic accepted lengths, submit
+their state gather/replay and wait. Candidate timings include durable packet
+writes as well as replay. They do not add a copy to a baseline path capable of
+consuming a snapshot directly: this is a separate matched-gather comparison.
+
+M4 job `job_sx3c8k4ngrs7bj5`, run `run_mv7h0svfaakmpr8`, succeeds at $0.
+It passes 32 attention/durable-packet cases, 64 attention FP64 checks, 32 paired
+attention checks, 256 FP64/paired accepted-prefix checks and 256 exact baseline
+gather checks. No attention or accepted-state values differ from the retained
+kernel in tested cases, including scalar/per-channel gates and mixed accepted
+lengths for two sequences. Initial state is unchanged during recording; saved
+initial state remains unchanged after replay, with scratch guards intact.
+Timing follows correctness and consists of three complete eight-case ABBA
+rosters, totaling 24 blocks and 96 raw records. Each arm has at least 250 ms
+GPU time and 1,024 full cycles. No build or correctness overlaps measurement.
+
+| Tokens / sequences | Acceptance profile | GPU latency | Host elapsed |
+| --- | --- | ---: | ---: |
+| 8 / 1 | Half | -50.84% | -22.32% |
+| 8 / 1 | Full | -43.82% | -16.41% |
+| 8 / 2 | Half / full | -52.22% | -30.77% |
+| 8 / 2 | Full / full | -51.99% | -30.88% |
+| 16 / 1 | Half | -19.12% | -6.30% |
+| 16 / 1 | Full | -13.54% | -4.76% |
+| 16 / 2 | Half / full | -20.54% | -10.69% |
+| 16 / 2 | Full / full | -19.02% | -10.28% |
+
+Positive would mean slower. All three repeats improve host elapsed in both
+eight-token/two-sequence profiles. The sixteen-token/one-sequence full profile
+regresses in one repeat. These are operation-cycle timings on synthetic
+contiguous tensors, not model TPS. They exclude actual sampler work, complete
+graph overlap, native cell remapping/inactive history and arbitrary cache
+aliases. All 107 selected artifacts are SHA-256 verified; submitted sources
+match executed sources. Local raw audits reproduce remote output exactly,
+omitting only the on-host executable check because binaries are not transferred
+between Macs. Pooled host/GPU ratios are recomputed from raw arm records and
+host elapsed encloses summed GPU command durations. Evidence is under
+`target/gdn-durable-gather-evidence/`.
+
+### Native replay-map foundation
+
+An isolated native worktree at the retained native base now contains a prototype
+`ggml-metal-state-replay-map.h`. It tracks complete pending physical cache rows
+with packet identity, sequence, accepted prefix and publication version.
+Exact-row reads can plan direct replay; partial reads require whole-row
+materialization. Full contiguous overwrites can discard pending data, while
+partial/strided writes materialize first to preserve untouched bytes. Old
+materialization plans cannot retire newer data at the same address. Packet
+eviction enumerates outstanding rows; GPU lifetime/order is explicitly the
+future cache owner's responsibility.
+
+Directed tests and 10,000 deterministic operations compare lazy state against
+an independent eager byte cache, covering partial exports/writes, strided holes,
+duplicate/permuted gathers, overlapping copies, packet eviction and stale plans.
+The Just-built suite passes address and undefined-behavior sanitizers. This is
+CPU cache-coherence qualification, not a native GPU or serving proof.
+
+The new header remains isolated under
+`target/gdn-deferred-native-evidence/native-stage/`; no backend hook or CMake
+integration exists yet. `integration-state.json` records the remaining ownership,
+GET_ROWS, fallback, synchronous/batch/asynchronous transfer, checkpoint/export,
+GPU lifetime and full-serving gates. The active native queue and runtime remain
+unchanged, and no additional serving TPS gain is claimed.
+
+## Native deferred-state adapter: default-off qualification
+
+The isolated native worktree now implements the backend adapter, behind
+`GGML_METAL_GDN_DEFERRED=1`. Its complete source tree is
+`c4b5b303897c9c292dd58a3cb10b77683e61cc76`, based on retained tree
+`68ac922e99396abf34ab969a26c64a7fda003fb5`. It is not in the active patch queue
+or retained runtime package. Public Skippy declarations and ABI are unchanged.
+
+Each recurrent cache buffer owns metadata and two durable packets per eligible
+cache region. Record/replay/gather pipelines are compiled before full snapshots
+are deferred. The guard currently admits F32 D128/H32/G1, sixteen query/key
+heads, K9, eight/sixteen tokens and one/two sequences on shared buffers. Q/K/V
+may use the original kernel's contiguous-row layouts, including the convolved
+QKV view strides used by the target graph. Other source tensors retain their
+required contiguous layouts. Unsupported cases preserve eager snapshot behavior.
+
+The recorder saves initial state, keys, F32 decays and deltas. Pending physical
+snapshot rows name a packet, cohort sequence, token prefix and publication
+version. GET_ROWS produces dense requested states directly from these packets,
+or copies coherent physical rows. Row IDs are read on the GPU after their
+scheduled upload; the adapter does not assume that a shared buffer is classified
+as host memory or that async uploads have already completed on the CPU. Small
+descriptor chunks use at most 4 KiB of constant data per dispatch. Materialized
+row descriptors and row-table storage are reused on the warmed path.
+
+Ordinary GPU readers materialize deferred rows before consumption. Full row
+overwrites discard superseded data; partial/strided writes preserve old bytes
+first. CPU get/set/memset, batch get/set/copy, asynchronous get/set/copy and buffer
+clear/free paths have coherence hooks. Buffer teardown fences packet resources
+before releasing them. Eviction materializes still-referenced rows before a
+packet is reused. Implemented hooks are not a blanket proof of every transfer
+variant or model lifecycle.
+
+### Actual native GPU comparisons
+
+The custom native fixture runs four verification windows while moving active
+states among five cache cells. It covers inactive history, reordered and
+duplicate gathers, input graph/buffer destruction between windows, packet
+eviction, partial state export, partial/batch writes, batch/async exports, async
+writes, full-cache export and allocation after cache destruction. Feature-off
+writes a control proof; feature-on compares every emitted byte against it.
+Counters must prove that recording, replay gathering and materialization execute.
+
+Five comparisons pass on the local M5 Max: one contiguous 8-token/2-sequence
+case and all four strided QKV combinations of 8/16 tokens and 1/2 sequences.
+Each has twelve exact proof blocks. The aggregate is twenty recording events,
+thirty replay-gather operations and 243 materialized rows. The metadata suite
+also passes address/undefined-behavior sanitizers and 10,000 eager-cache oracle
+operations. Existing graph-policy tests and five native GDN/cache-fusion CPU
+reference cases pass with the feature both disabled and enabled.
+
+The same source qualifies on M4 through Jianyang at $0. Source/build job
+`job_1byyz92xhy6wfge`, run `run_5adjxc5h3qxbazt`, completes native, shape,
+policy and fallback tests, then its evidence audit stops because the sanitizer
+output was not saved to the expected filename. Recovery job
+`job_gptfx8m8cttmwf8`, run `run_dmke3hjhdmq5xmy`, preserves that completed
+build, saves a fresh sanitizer log and completes the independent audit. Both
+the original source run and recovery provenance are retained. An earlier job
+`job_zcht6ahxd5d6agz` stopped during bootstrap on an incorrect Ruby stdin option
+before native building/testing and is excluded.
+
+All five M4 comparisons pass with active counters. The M4/M5 full native tree,
+new source files, patch, embedded shader and all sixty proof-record hashes
+match. The tested embedded shader SHA-256 is
+`288e4952fc880b164e7242061f609b3c6d2c4a9743e4a40ef0cbcc20461378d9`.
+The audit confirms that complete generated shader bytes occur in the tested
+executable. Compiler caching is disabled for these native builds: a local
+iteration found that cached assembly objects could retain an older `.incbin`
+payload despite regenerated shader text. The stale iteration is excluded.
+Another early fixture only exercised fallback until its graph-output alias was
+fixed; active-path counters prevented that from being accepted as qualification.
+
+Twenty-seven selected M4 artifacts are retrieved with SHA-256 verification.
+Returned sources and patch match the submitted version, and the complete native
+audit comparisons match local results. These native fixtures run without model
+weights, sampler, serving or performance measurement. They establish exactness
+for their inputs and cache operations, not full-model correctness or TPS.
+
+### Parallel encoding remains unfinished
+
+On-the-fly cache metadata updates cannot safely follow CPU threads that encode
+different graph chunks out of order. This prototype temporarily encodes eligible
+or cache-touching graphs with one CPU thread, restoring the requested setting
+afterward. Draft and unrelated graphs retain ordinary encoding concurrency.
+The small native fixture does not prove parallel command-buffer boundaries.
+
+The next required change is immutable state-effect preplanning in logical graph
+order before parallel encoders run. Per-node plans must capture packet bindings,
+argument bytes and generations by value, preserve fusion boundaries, survive
+graph reuse and packet-slot reuse, and leave no duplicate metadata updates in
+operator encoders. `parallel-plan.json` records the design and required large
+graph/boundary tests. Model-level rollback/checkpoint/export qualification and
+fixed-file C1/C2 serving comparisons also remain required before promotion.
+Evidence and source are under `target/gdn-deferred-native-evidence/`; the active
+native checkout remains retained `57450b1e3fc0ad06c2060dfd994a4f3c9812e59a`.
+Nothing is pushed, no PR is raised, and no additional TPS or BaseRT parity is
+claimed.
+
+## Deferred-state parallel planner: local correctness milestone
+
+A separate default-off prototype now removes the ordered-encoding workaround.
+`target/gdn-deferred-parallel-evidence/native-stage` walks state-cache effects
+in logical graph order and captures pipeline, buffer, copied argument bytes,
+barrier and dispatch actions in a reusable context-owned plan. Encoder threads
+apply immutable per-node slices using real graph indices. Packet storage-slot
+reuse cannot change already captured bindings or arguments. Ordinary operator
+state hooks are skipped when the plan owns them. Per-class timing keeps its
+existing serial path because its class boundaries deliberately split fusions.
+The requested command-buffer encoding count is no longer temporarily changed.
+No active native queue/runtime has been replaced.
+
+The M5 Just qualification passes all five original exact-output/cache cases,
+metadata ASAN/UBSAN tests, graph-policy tests and five CPU-reference GDN cache
+fusion cases in each feature mode. Additional 352-node graphs place state
+operations across real command-buffer partitions, record four windows into the
+same cache region within one graph (reusing both packet slots), and reuse that
+graph with changed GPU row-ID uploads. Nine active comparisons cover requested
+extra encoder counts 0/1/2 for 8-token single/two-sequence and 16-token
+two-sequence cases. Three additional 16-token/two-sequence comparisons with
+fusion disabled establish coherent fallback. All 12 comparisons match all 22
+proof blocks exactly; active cases each require 12 records and nonzero gathers
+and materializations, while fusion-disabled controls require zero deferred
+operations. This adds 264 checked proof-block comparisons to the original 60.
+`native-audit.json` and `parallel-status.json` bind source, executable, shader,
+proof hashes and active-path counters; `native-prototype.patch` freezes source.
+
+This is native correctness evidence, not a new TPS result. The planner still
+requires cancellation/allocation/GPU-failure state-custody qualification, M4
+parallel qualification, model-level rollback/checkpoint/export and fixed-model
+C1/C2 serving comparisons. The prior 3–7% incremental TPS estimate is a working
+hypothesis, not a measurement or an additive claim over earlier results.
+Nothing is pushed and no PR is raised.
+
+### Parallel planner failure handling and M4 dispatch
+
+The isolated planner now owns a refcounted failure domain containing weak cache
+handles. Registration and invalidation are serialized; cache validity is atomic.
+Command-buffer completion handlers retain the domain rather than a backend,
+graph or plan pointer, and invalidate it on GPU error. Synchronous error checks,
+planning exceptions and cancelled/failed planned execution also mark the domain.
+A failed backend rejects further graphs; invalid cache read/write/export paths
+reject access. Buffer retirement remains permitted, and full buffer clearing
+resets cache metadata for explicit reconstruction. Weak handles avoid retaining
+retired packet storage. Serial per-class profiling observes cache ownership
+without using a full-graph fusion plan. Normal default-off operation has no
+failure domain or added completion handler.
+
+Local Just validation includes the five original exact comparisons and all 12
+large-graph comparisons after this change. Additional native probes inject the
+same failure entrypoint used by completion handlers, verify backend rejection,
+force an actual C++ allocation failure inside plan construction with a registered
+cache, and verify invalid exports terminate with SIGABRT rather than returning
+bytes. An ASAN/UBSAN failure-domain test covers scoped invalidation, weak cache
+retirement, reference lifetime and 1,000 concurrent registration/failure races.
+These are controlled injections, not a reproduced GPU-driver fault or captured
+hardware cancellation. That distinction remains an explicit audit limitation.
+
+Frozen candidate tree: `ddfbbb5a7eca96572d537f32901219b9c4ca9c25`.
+Local test executable SHA-256:
+`5fa2df7a58de43235d66f2f46a7c31797c9a628cb4533b28a4cc796d181f678b`.
+`audit-parallel.rb` independently checks the 264 additional proof-block records,
+active/fallback counters and failure artifacts. The exact source patch and test
+payload were dispatched as `job_n57d9exh01y55qp`, run
+`run_djjqq8bfhhd2wj2`, to idle Dan-lab M4 `macmini-764jw9` at a $0 cap.
+The run clones the retained native commit from its prior qualified node-local
+source and verifies base/candidate trees; no binary is copied between hosts.
+At dispatch, M4 validation remains running. Model-level state operations and
+fixed-model serving TPS remain unqualified. The active queue/runtime is retained,
+nothing is pushed, and no PR is raised.
+
+The M4 job subsequently succeeded at $0. Its returned native source tree, source
+patch, embedded shader, all 60 original proof records and all 264 parallel proof
+records/counters match M5. Eleven returned source files match local bytes.
+Artifacts were retrieved with SHA-256 verification; `m4-comparison.json` records
+the independent comparison. Failure probes and sanitizer race tests pass there
+as well. This supersedes the running-at-dispatch status above.
+
+A separate local serving source clone now pins the exact same qualified tree in
+unpublished native commit `8e1836a24a65c1981328523566dc4bef58dbe767`.
+`serving-state.json` records source identity. The Just `build-serving` recipe
+builds shared libraries and rollback/state/checkpoint probes in
+`target/gdn-deferred-parallel-evidence/serving-build`, with compiler caches
+explicitly disabled. It does not prepare or alter the active queue. The runtime
+package and model tests are the next gate; no serving gain is yet established.
+
+## Full-model state qualification of the parallel adapter
+
+The isolated shared-library runtime builds and its native package archive passes
+verification. Its local native source commit remains
+`8e1836a24a65c1981328523566dc4bef58dbe767` (tree
+`ddfbbb5a7eca96572d537f32901219b9c4ca9c25`); the packaged primary library SHA-256
+is `6e6d7a2956fe89313285f1cbecd35a6cd48882ca7e22cb96ebb53d315c6a521a`.
+The recurrent-state round-trip and checkpoint-retirement units pass.
+
+A separate, generated model probe adapts the existing verify-rollback test to
+Metal, eight-token windows and eight-token rollback retention (GDN K9), without
+changing the qualified native source tree. It runs the same fixed 23 GB affine
+target with feature off/on. Full-model forced rejections, in-place and host
+checkpoint rollback, pipelined windows, two shared lanes, shallow-retention
+fallback and delayed inactive-peer repair modes 0/1/2/7 all pass. Recurrent-only
+and full-state exports after resolved/rejected windows are reimported, and
+subsequent tokens continue to match one-token reference generation. All four
+exported snapshots match byte-for-byte across feature off/on: sizes
+65,864,420 / 66,520,820 / 65,864,420 / 66,520,820 bytes.
+
+Actual candidate counters are 1,110 records, 3,150 gathers and 1,500
+materializations. The deep two-lane phase independently requires activation and
+records 240 deferred operations / 270 gathers / zero materializations. The
+shallow-retention phase and the feature-off control report zero deferred
+operations. `audit-model.rb` binds probe source/executable, proof payload hashes,
+phase counters and dynamically loaded packaged library paths in
+`model-audit.json`. Two initial probe iterations are excluded: size queries
+needed BUFFER_TOO_SMALL handling, and the old five-token delayed-peer fixture's
+rejection index needed to be expressed relative to the new eight-token window.
+The engine did not change for those probe fixes.
+
+The retained runtime and candidate are now entering a local M5 C1/C2 serving
+comparison. The same fixed target/draft hashes, unchanged CLI, eight exact
+requests, runtime manifests and every runtime file are pinned before timing.
+The candidate alone enables the default-off adapter. Both arms keep DFlash cap7,
+f16 KV and caches disabled. Three warmup and three measured cycles use whole
+ABBA blocks with predefined CPU/thermal exclusions and loaded-library checks.
+This is incremental warmed HTTP serving throughput, including client validation
+and response writes, not isolated kernel TPS or BaseRT parity. At this point the
+comparison is still running and no new TPS gain is established.
+
+The local serving comparison is live as exec session 31465, using ports
+19741/19742. Periodic load from an existing unrelated MaxDaemon trips the
+predefined guard; affected complete blocks are discarded and retried after a
+quiet interval. Neither that process nor the exclusion policy is changed.
+Warmup has progressed, but measured C1/C2 coverage is still incomplete.
+A request to use the idle James-lab M3 Ultra `macstudio-4f19n3` at $0 is pending;
+that host is outside the prior Dan-lab and specifically approved M1 access.
+No M3 job is submitted without that approval. The local comparison continues
+independently. Do not broaden the synthetic/native proof into a TPS claim.
+
+### Separate ownership-filter edge case under review
+
+Read-only review found that the state-graph filter returns true for every graph
+once its registry contains more than 16 cache-owner buffers. An unapplied patch
+in `target/gdn-deferred-owner-filter-evidence/owner-filter.patch` replaces the
+fixed-size snapshot and overflow shortcut with allocation-free membership checks
+under one registry lock. It is unbuilt and untested while timing remains live.
+
+Do not equate the target's 30 recurrent layers with 30 cache-owner buffers.
+`llama-memory-recurrent.cpp` allocates recurrent tensor contexts by backend buffer
+type and places multiple layers in one buffer. No evidence currently establishes
+that this target triggers the >16-owner shortcut; the initial candidate note was
+corrected accordingly. This is a general edge-case candidate, not an established
+explanation of current serving overhead or a promoted optimization.
+
+## First complete deferred-state serving result: no reliable gain
+
+The guarded M5 comparison completed and its independent audit passes all 216
+batch records / 288 valid requests, including 192 measured requests. All measured
+texts match exactly. Twenty-one whole blocks were excluded and retried under the
+predefined CPU-load rule. Post-run target/draft/CLI/request/runtime pins equal
+pre-run pins. Both server processes exit when the driver completes.
+
+Relative to the retained portable-NR8 runtime:
+
+- C1: 214.6784 -> 213.2957 HTTP output tok/s, **-0.6441%**. All three measured
+  cycles show the same small regression.
+- Aggregate C2: 267.8971 -> 269.3394 HTTP output tok/s, **+0.5384% pooled**. This
+  is inconsistent across cycles: the first candidate cycle improves, while the
+  next two are slightly below control. It is not a reliable new gain.
+
+`serving-comparison-0/independent-audit.json`, the raw responses/guard records,
+`serving-pins-before.json`, `serving-pins-after.json` and `serving-result.json`
+record the result. This live Mac also had periodic unrelated MaxDaemon load;
+accepted samples satisfy the guard but are not evidence from an exclusive lab
+host. No isolated-kernel, BaseRT parity or other-host throughput claim follows.
+The earlier 3-7% incremental estimate is not supported by this run.
+
+The adapter remains default-off and unpromoted. Its native and full-model state
+correctness results still hold, but the current end-to-end result does not
+justify replacing the retained runtime. Next work must measure target verify
+GPU work and CPU submission/planning overhead, then improve the measured
+bottleneck. Nothing is pushed and no PR is raised.
+
+## Diagnosed pre-encoding cost and cache-relevance candidate
+
+A separate full-target diagnostic probe records native spans, CPU encoder
+intervals and GPU command execution with normal parallel encoding (class splitting
+is disabled). It exercises eight-token one/two-lane verify calls; the first two
+calls in each cohort are excluded. In the original adapter diagnostic, C2 median
+GPU execution falls 21.0791 -> 20.4760 ms, while work between native graph compute
+entry and first encoding grows 0.0362 -> 0.3640 ms. C1 grows 0.0272 -> 0.3143 ms
+before encoding. These diagnostic intervals overlap with device execution and
+must not be summed as disjoint serving phases. Callback instrumentation and
+synthetic proposal patterns prevent treating them as serving TPS.
+
+An eight-second warmed OS stack sample of 1,024 two-lane verify windows finds
+78 planner samples, 37 under fusion matching and 18 under state recording. This
+identifies duplicated generic fusion analysis as the largest sampled planner
+branch. The diagnostic completes 30,720 actual deferred records and 30,690
+gathers, with no materializations. Evidence is under
+`target/gdn-deferred-parallel-evidence/`: `profile-analysis.json`,
+`cpu-c2-sample.txt` and `cpu-c2-metadata.json`.
+
+The separate `target/gdn-deferred-relevance-evidence/` candidate classifies graph
+nodes by cache-owner access before planning. It includes owners that a GDN/cache
+copy can create later in the graph. Only a fusion window that may touch an owner
+runs full fusion analysis; nodes that cannot touch state skip metadata preflight.
+The maximum fusion length bounds the conservative lookahead. Candidate owners,
+flags and scratch arrays are rebuilt per invocation with retained capacity;
+there is no reuse of decisions across mutated graph invocations. GPU arithmetic,
+packet contents and the native ABI are unchanged.
+
+All original native/parallel/failure gates pass on M5 and M4. An additional
+14-block feature-off/on comparison admits an actual UNARY_MUL fusion whose first
+node is unrelated and whose second node reads deferred cache state, followed by
+aliased writeback. This protects the required lookahead/preflight behavior. Its
+arithmetic is checked within each host; cross-chip SiLU bit equality is not
+claimed. The original 60 plus 264 proof blocks/counters match across hosts;
+source and patch hashes match. M4 job `job_rdktb56nty1xsbw`, run
+`run_be63xybs018n1kt`, succeeds at $0.
+
+Frozen native tree: `128ca1e1ec87395e4e6ca36c3c8066f399754e70`.
+Unpublished serving native commit: `b302652228677db0ae85cd301b93eb3763d67d02`.
+The shared runtime package verifies. Full-model rollback, shared lanes,
+pipelined/checkpoint handling, delayed inactive-peer repair and four exact
+state export/import snapshots pass again. The entire state oracle equals the
+previous qualified oracle. Candidate counters remain 1,110 records / 3,150
+gathers / 1,500 materializations, including 240 deep shared-lane records.
+
+A new diagnostic shows C1 before-encoding median 0.1609 ms and C2 0.2443 ms,
+compared with the previous candidate's 0.3143 / 0.3640 ms. C2 verify-call median
+is 23.0630 ms control versus 22.6870 ms candidate in this diagnostic, with
+callbacks enabled. These are diagnostic improvements, not a serving headline.
+A second fixed-file C1/C2 serving comparison is now live as exec session 61552,
+with the same retained control, eight requests, warmup/ABBA roster and exclusions.
+No new end-to-end gain is yet established. The candidate remains default-off,
+the active runtime/queue is retained, and nothing is pushed or submitted as a PR.
+
+### Cache-relevance serving run: complete C1, incomplete C2
+
+Exec session 61552 terminates at its predefined deadline after repeated
+unrelated MaxDaemon load exclusions. The C1 roster completes: 144 valid C1
+requests, including 96 measured requests, all exact texts and accepted whole
+ABBA blocks. C2 does not complete and has no publishable aggregate. The independent
+C1-only audit reports 215.4427 -> 214.8701 HTTP output tok/s, **-0.2658%**.
+Before/after target, draft, CLI, requests and runtime pins match. The run excludes
+34 blocks in total; live-Mac guard compliance is not exclusive-host evidence.
+`c1-independent-audit.json` and `serving-result.json` preserve that limited scope.
+The candidate remains default-off and unpromoted; reduced diagnostic setup time
+does not establish an end-to-end gain.
+
+## Packet-reuse scan locality candidate
+
+The warmed CPU sample's `ggml_metal_state_record` offsets +4024/+4076 resolve in
+our own compiled library to std::map successor traversal in `packet_pending`.
+Each cache buffer can contain many layer roots; the original free-packet query
+walks all row-map entries, including other groups and retired rows.
+
+`target/gdn-packet-range-evidence/` adds a range-bounded query. Each packet group's
+interval only expands to contain every write ever published by that group; a
+later shifted or shrunken view cannot narrow protection of older states. The
+native selector keeps the original global query when only one group exists.
+No shader arithmetic, model weights, physical state format or public ABI change.
+
+M4 component job `job_vtt12w88f8n1ds8`, run `run_9kfh7gcfw3k3xa0`, passes
+ASAN/UBSAN range-boundary, partial-overlap, zero/overflow, stale-retirement and
+10,000 randomized oracle operations. A five-trial ABBA CPU component comparison
+uses 100,000 queries/arm. At 30 groups x 18 rows, median global query batch is
+86,774,208 ns versus 4,203,250 ns bounded (about 20.6x). The one-group range
+operation is slower, which is why the backend preserves the original operation
+there. These are component query timings, not model throughput or a TPS forecast.
+The original component spec is retained as `component-job.json` and its exact
+standalone build as `component.justfile`.
+
+Native candidate tree: `4cd722c90e9794386e96ddd6a363911f79578e47`.
+M4 native job `job_x1nqm504a7q712f`, run `run_4br116e6bs93sg6`, succeeds at $0.
+It retains the 60 original, 264 parallel and 14 fused-reader proof blocks and
+adds a 15-block shrinking-view case. Two recurrent roots share one Metal buffer;
+all old rows except the final old sequence/slot are materialized, then a
+single-sequence write has a narrower span. The retained old prefix must still
+gather exactly before later reuse/eviction. This exercises the multi-group range
+query and catches protection based only on the current smaller view.
+Returned source/header hashes and candidate tree match the local prepared source.
+
+M5 native and shared-runtime builds/qualification start as exec session 36278.
+Full-model state checks, profiling and complete serving measurements still remain
+for this candidate. No new TPS gain is established; active runtime/queue remains
+retained, the M3 permission request is unanswered, and nothing is pushed or opened
+as a PR.
+
+
+### Packet-range candidate: M5 completion and isolated M1 dispatch
+
+M5 sessions 36278 and 14466 both finished successfully. The 60 original,
+264 parallel/fallback, 14 fused-reader and 15 shrinking-packet proof comparisons
+pass. Shared-runtime packaging and verification, checkpoint retirement and
+recurrent roundtrip checks pass. Full fixed-model control/candidate probes
+produce four exact state snapshots (65,864,420 / 66,520,820 / 65,864,420 /
+66,520,820 bytes); enabled counters are 1,110 records, 3,150 gathers and
+1,500 materializations, including 240 records in the independent shared-lane
+check. `model-audit.json` verifies proof rosters, counters and packaged-library
+loading. These are correctness results, not a serving speedup.
+
+Normal parallel diagnostic profiles show candidate pre-encode medians of
+0.194 ms at C1 and 0.243 ms at C2. They do not demonstrate an additional setup
+gain over the relevance-filter candidate, despite the isolated component query
+speedup. A complete serving comparison remains necessary.
+
+The previously authorized 128 GB M1 Ultra `macstudio-2l0352` was online and idle
+at fresh dispatch. Job `job_2m18sh5j7j8xabr`, run `run_qrdqnf2kq4d5xba`, is
+running at a $0 cap with a two-hour deadline. It builds the exact candidate
+tree `4cd722c90e9794386e96ddd6a363911f79578e47` host-native from retained
+native base tree `68ac922e99396abf34ab969a26c64a7fda003fb5` plus digest-checked
+patch `a454a6b21669629b926eeefe67cc12278f88814695f5c99102a828f786e93bdf`.
+Native/failure and full-model correctness gates precede fixed-input C1/C2
+ABBA serving, using the resident M1 CLI and retained NR8 runtime as control.
+An EXIT trap preserves diagnostic artifacts on failure. No serving result exists
+yet; no active runtime or durable patch queue is changed, and nothing is pushed.
+
+
+The M1 job passed its native/failure gates, packaged-runtime verification,
+and full-model exact-state audit before reporting `QUALIFIED: entering
+isolated serving measurement`. Both frozen-runtime servers are ready; C1
+warmup cycles finished and measurement started at 2026-11-15 16:28:58 UTC.
+This is live job evidence only; downloaded proof hashes and complete serving
+results remain to be independently checked before any promotion.
+
+
+### Isolated M1 serving result: reject packet-range adapter
+
+Job `job_2m18sh5j7j8xabr` / run `run_qrdqnf2kq4d5xba` finished successfully
+at $0. All native gates (60 original, 264 parallel/fallback, 14 fused-reader,
+15 shrinking-view comparisons), full-model state proof, packaged runtime and
+failure checks passed. The complete fixed-input serving campaign accepted
+288 requests, including 192 measured, with zero excluded blocks. Three warmup
+and three measured cycles ran at C1/C2, within-prompt ABBA, same resident
+host-built CLI, target/draft, cap7, f16 KV and disabled caches.
+
+| Concurrency | Retained NR8 HTTP tok/s | Packet-range adapter HTTP tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 125.0492 | 121.6067 | -2.7529% |
+| 2 aggregate | 147.8449 | 146.1709 | -1.1323% |
+
+All measured completion text matches exactly. C1 regresses consistently in
+all three cycles; C2 is mixed with a negative pooled estimate. File, request,
+CLI and runtime pins match before/after. These are same-host full HTTP batch
+measurements, not kernel rates or cross-host/BaseRT parity claims.
+
+The artifact uploader did not include nested serving files from the original
+EXIT-trap directory layout. Read-only recovery job `job_4s2sefezgg39xmy`, run
+`run_gtx3qr1cjzeh35v`, copied 297 serving artifacts (288 raw responses) and the
+candidate manifest to top-level artifact files, with a recovery hash roster.
+Both jobs are terminal. All downloaded artifact SHA-256 hashes verified.
+`verify-m1-serving.rb` independently reruns the raw-response/guard/ABBA audit
+locally, checks exact transmitted driver/auditor source, fixed-file pins,
+loaded runtimes, native/model proof rosters, candidate manifest/source pins,
+and remote/local audit equality. `m1-serving-verification.json` records PASS
+for evidence integrity and `rejected_performance_regression` for promotion.
+
+The complete deferred-state adapter remains outside the durable patch queue
+and active runtime. Component scan savings did not produce a serving gain;
+this candidate is rejected as implemented. Retained baseline gains remain
+unchanged, and the broader BaseRT performance objective remains unachieved.
+No PR or push is made.
+
+
+## Fixed inner-dimension NR8 loop specialization screen
+
+After the deferred-state rejection, the next isolated kernel screen targets
+routed Q4_1 vector execution, the largest retained GPU category. Earlier
+routing compaction, grouped-token vectors, diagonal matrix work, row tiles,
+wider rows and lane-sharing variants are already rejected in their sections.
+This screen instead makes K512/K2048 a Metal function constant and requests
+full block-loop unrolling in the existing NR8 body. Weight bytes, lane mapping,
+per-output accumulation order, eight-row output tile and dispatch count stay
+the same. No route scratch, extra GPU kernel, barrier or public ABI change.
+
+`target/affine-fixed-k-evidence/prepare.rb` constructs the isolated prototype
+from the exact retained control body and the existing anonymous captured-
+occupancy component harness. The host builds through Just. Qualification
+requires all 48 paired full outputs to be bit-identical, plus 96 sampled FP64
+references and 48 poisoned-output/masked-entry checks across both geometries,
+3/8/16 tokens, broadcast/per-selection inputs and concentrated/reconstructed
+routes. Eight guarded ABBA timing blocks then test sixteen-token cases using
+both fixed and rotating route frames. Function constants and an unroll pragma
+are source requests, not independently verified compiler register/occupancy
+claims; this remains a component screen, not serving throughput.
+
+Dan-lab M4 mini `macmini-764jw9` was freshly checked online and idle before
+$0 submission. Job `job_ztzh71thsaxp8rx`, run `run_h3c8vz44m8xazgt`, is running;
+its native build and numerical gate passed before the first accepted timing
+blocks. No useful latency gain or native integration is established yet.
+The durable queue and active runtime remain unchanged.
+
+
+The fixed-K M4 job completes at $0. Its audit passes eight ABBA blocks,
+sixteen projection cases, 64 raw timing pairs, 338 mid-run guard samples,
+48 poisoned-output checks, 96 FP64 references and 48 bit-identical paired
+outputs. Rotating reconstructed-route GPU latency changes are -1.25% for
+K2048/M512 broadcast inputs and -1.53% for K512/M2048 per-selection inputs;
+fixed sparse-profile cases are roughly flat. Concentrated controls improve
+about 2.2–2.8%. Submitted/returned sources and artifact hashes match, and the
+raw numeric/timing/guard audit is rerun locally. The executable hash is verified
+by the completed remote audit only (no binary artifact exported). These small
+component gains do not establish a serving benefit or justify promotion.
+
+## Bounded relative-offset vector screen
+
+A distinct standalone variant keeps dynamic K and the original NR8 floating
+arithmetic but changes seven relative-offset type/cast occurrences from
+`uint64_t` to `uint`. Pointer bases retain native width. The host verifies the
+entire contiguous weight, activation and output allocation spans are below
+UINT32_MAX; the two tested expert geometries each have 167,772,160 weight
+bytes. Masked entries return before converting the expert ID. No model bytes,
+output-row tile, lane mapping, dispatch count or buffer synchronization changes.
+This is not admitted for arbitrary strides, oversized tensors or production
+runtime inputs; native admission and fallback would need separate proof.
+
+M4 job `job_w4hah4918vdayww`, run `run_4tsey94068swjp7`, succeeds at $0. Its
+source-custody and local raw audit pass the same eight-block / sixteen-case /
+64-pair roster and all 48 bit-identical paired outputs, 96 FP64 checks and
+48 poisoned-write checks. Rotating reconstructed-route GPU latency falls
+2.11% for K2048/M512 broadcast inputs and 5.51% for K512/M2048 per-selection
+inputs. Fixed sparse-profile cases remain roughly flat; concentrated controls
+improve about 4–11%. These are component timings, not TPS or exact route replay.
+The binary hash is verified remotely only; all exported artifact hashes and
+submitted/returned sources are checked locally.
+
+After a fresh online/idle check, the previously authorized M1 Ultra runs an
+independent host-native repeat as $0 job `job_xakwtfd78eqhtwj`, run
+`run_jbc9p92q51ptb67`. On M1, down-only NR8 is the relevant retained geometry;
+the gate/up NR8 screen is a synthetic cross-case, not its native NR4 baseline.
+No native integration, promotion, push or PR is made for either screen.
+
+
+The M1 offset-width repeat succeeds at $0. Its eight ABBA blocks / sixteen
+projection cases / 64 timing pairs and 152 mid-run guard samples pass. All
+48 paired full outputs remain bit-identical, all 96 FP64 references and
+48 poisoned-write checks pass, and submitted/returned sources match exactly.
+The raw numeric/timing/guard audit is rerun locally with the same executable-
+hash limitation stated above. Rotating reconstructed-route latency falls
+8.40% for K2048/M512 broadcast and 10.84% for K512/M2048 per-selection input;
+fixed sparse-profile cases also improve about 8.6% / 10.6% on this host.
+
+This warrants a small native integration prototype against retained tree
+`68ac922e99396abf34ab969a26c64a7fda003fb5`, independent of the rejected
+state adapter. It must narrow both the routed wrapper offsets and quantized
+row offsets only after proving complete relative byte spans fit uint32.
+Original strides, unsupported geometries/devices, oversized spans and old
+shader libraries require fallback. Shared-buffer/lifetime behavior, masked
+IDs, both broadcast/per-selection inputs, output rows, actual native arithmetic
+and loaded source must be tested. M1 down-only NR8 is the initially relevant
+retained geometry; do not silently replace its NR4 gate/up baseline based on
+this component cross-case. Full-model exact state/output checks and complete
+isolated serving measurement remain required. No additional TPS gain is yet
+established; active source/queue/runtime remain retained and nothing is pushed.
+
+
+## Native bounded-u32 routed-vector prototype
+
+`target/affine-u32-native-evidence/` implements the address-width idea against
+retained native tree `68ac922e99396abf34ab969a26c64a7fda003fb5`, independently
+of the rejected state adapter. The first direct standalone-body translation
+catches a missing quantization-header include during startup, then fails the
+strict native paired test (10,434 differing floats, NMSE 4.02e-15 in its first
+case). That version is not used for serving.
+
+The revised native implementation shares the existing quantized-vector dot and
+accumulation helper, extracted to `kernels/mul_mv_q_n.h`. Default instantiations
+retain uint64 offsets; the new private routed wrapper instantiates the same
+arithmetic with uint32 row offsets and narrows its proved relative input,
+weight and output spans. Each new module is below 1,000 lines. Embedded and
+precompiled builds both own the new shared-header dependency and shader.
+No floating arithmetic, model bytes, public ABI or dispatch-count change.
+
+Admission proves quantized-block-aware complete byte spans without overflow,
+requires contiguous weights/input/output and qualified sixteen-token/eight-
+selection NR8 shapes, and preserves strided/offset ID views. It keeps the
+existing device/shared-buffer/NR8 preference: on M1/M4 this is down-only
+K512/M2048; it does not promote their NR4 gate/up kernel. Oversized spans,
+unsupported dimensions/strides/devices and old shader libraries fall back.
+Actual function discovery is checked only on a cold candidate pipeline lookup;
+warm candidates reuse the normal pipeline cache. The private research flag
+`GGML_METAL_ROUTED_U32=1` is default off, outside the durable patch queue.
+
+M5 Just qualification passes 24 metadata/boundary policy checks, an actual
+old-combined-library fallback check, 26 native graphs / 52 full bit-identical
+paired outputs and 104 FP64 oracle checks. Every output is poisoned before
+execution and checked finite; masked IDs must yield exact zero. Cases cover
+both projection geometries, 128/256 experts, broadcast/per-selection input,
+contiguous and strided/offset IDs, changed GPU route frames, adjacent token
+fallbacks and strided-weight fallback. The actual new native pipeline compiles
+and executes. `m5-native-audit-summary.json` verifies the roster, staged source
+tree and embedded shader bytes in the tested executable.
+
+Qualified native tree is `1c798e488e71b4755b3142302709c65a2ae36bac`; full
+patch SHA-256 is `04b2460279d28135779837ab39730138b550cdb74bb2ad1c272a7a8580064a81`.
+The modified full-model probe passes a Just C++17 syntax check; it requires
+actual new-pipeline compilation, existing rejection/checkpoint/shared-lane/peer
+checks, and four exact state exports. After a fresh idle check, approved M1
+job `job_6tbh6g7mnth1nny`, run `run_pd5djgtt75y4ydt`, starts at $0.
+It cold-replays and builds host-native, runs native and full-model gates,
+then compares retained NR8 versus candidate using the frozen M1 CLI, target,
+draft, cap7/f16/caches-off inputs and complete C1/C2 ABBA campaign. No builds
+or correctness work run during timing. Artifact paths are flattened at export
+to preserve nested raw responses. No serving gain, promotion, push or PR yet.
+
+
+The M1 job reports `QUALIFIED: entering isolated serving measurement` after
+native/old-library/policy audits, shared package verification, recurrent and
+checkpoint unit checks, and full-model exact-state/active-pipeline proof all
+pass. The retained server is ready at 2026-11-15 17:08:58 UTC. Complete serving
+measurements and downloaded evidence audit remain outstanding; no TPS gain or
+promotion is claimed at this point.
+
+
+### Native u32 M1 serving gain and fresh-process confirmations
+
+M1 job `job_6tbh6g7mnth1nny`, run `run_pd5djgtt75y4ydt`, succeeds at $0.
+The complete C1/C2 campaign has 288 valid requests, 192 measured and zero
+excluded blocks. Every measured output matches exactly. The independent local
+raw-response/ABBA/guard audit passes, as do fixed input/runtime pre/post pins,
+loaded-library paths, native/model audit rosters, exact transmitted scripts,
+source tree and packaged manifest/source metadata.
+
+| Concurrency | Retained NR8 HTTP tok/s | Native u32 HTTP tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 125.2725 | 125.1203 | -0.1215% |
+| 2 aggregate | 148.6069 | 150.4488 | +1.2394% |
+
+All three C2 measured-cycle estimates are positive; C1 is mixed and roughly
+flat. The M1 admission targets sixteen-row down projections, so this is a C2
+result, not an established single-request gain or a percentage to add to the
+M5 headline. Native/state raw proof executables are not exported; their pinned
+job audits are recorded, while exported source/scripts/artifact hashes and all
+raw serving evidence are independently checked locally.
+
+A separate $0 job `job_e386m3fzqrzzfnp`, run `run_m5wgd2wbmftp6vv`, completes
+two newly started C2 server pairs using the identical frozen host-native
+libraries, CLI, weights and draft. Each has three warmup and three measured
+eight-prompt cycles, within-prompt ABBA, pre/post pins and whole-block guards.
+Remote audits report 144 valid requests / 96 measured per pair, exact text,
+and positive C2 point estimates: 148.7977 -> 149.8002 tok/s (+0.6737%, zero
+excluded blocks) and 146.8117 -> 149.6442 tok/s (+1.9293%, one excluded block).
+All corresponding cycle signs are positive. Download/local audit of those
+confirmation artifacts remains pending while local M5 performance work runs.
+
+The same candidate tree is separately committed and built host-native on M5
+at `aaed19b8f3a70ca32b46751cbef290b843afa1cd`. Package verification,
+checkpoint/recurrent unit checks and full-model four-snapshot/active-pipeline
+checks pass. Local serving session 44303 compares the frozen M5 CLI and
+retained NR8 with the candidate, testing C2 before C1 under the original
+whole-block CPU/thermal guards and a 30-minute deadline. It has paused several
+warmup blocks for unrelated maxd PID 72116; that process is untouched.
+No build, correctness test or heavy I/O runs locally during timing. No M5
+serving gain or promotion is established, and nothing is pushed or opened as a PR.
+
+
+A separate read-only M1 audit job `job_2snj8d4shxj6j0z`, run
+`run_96gghx7tfgt86y6`, succeeds at $0 while the M5 measurement is live.
+It reruns the digest-pinned raw response/ABBA/guard auditors on the original
+M1 files, verifies fixed pre/post input/runtime pins and loaded-library paths,
+checks exact measured text across all three independently started experiments,
+and directly recomputes each C2 rate from the saved batch timings. All nine
+measured-cycle estimates are positive. Pooling by summed equal-token elapsed
+time gives 148.0667 -> 149.9636 aggregate tok/s, +1.2811%, for the fixed eight
+prompts. The digest-verified returned summary is stored as
+`remote-confirmation-audit-downloads/confirmation-independent-audit.json`.
+This establishes the additional M1 C2 gain for the tested workload; no universal
+or cross-host gain is implied. Local verification of the bulk confirmation
+archive is deferred until local timing ends.
+
+M5 C2 timing has finished all prescribed cohorts; C1 remains in warmup under
+repeated unrelated maxd pauses. Its complete C1/C2 audit and pre/post pins are
+still outstanding. No queue/default change, promotion or push is made yet.
+
+## Retained bounded-u32 offsets
+
+The final M1-default build succeeds in $0 job `job_j83pb6bzkg8fx3h`, run
+`run_f97x6g862zmfwnw`. Its full independent local audit verifies 288 accepted
+requests (192 measured), all exact measured text, prescribed ABBA/guard/roster
+checks, unchanged input/runtime pins and loaded libraries. One complete block
+is excluded for fair thermal state and retried after nominal quiet samples.
+The actual default path runs with `GGML_METAL_ROUTED_U32` absent; full-model
+qualification requires positive compilation counts for the new pipeline.
+
+| Concurrency | Retained NR8 HTTP tok/s | Final M1-default HTTP tok/s | Change |
+| --- | ---: | ---: | ---: |
+| 1 | 125.0562 | 125.2206 | +0.1315% (flat) |
+| 2 aggregate | 147.4543 | 149.2763 | +1.2356% |
+
+All three final C2 cycle estimates are positive. This reproduces the preceding
+three-experiment +1.2811% pooled M1 result without establishing a universal
+speedup or adding to the older NR8/M5 percentages. Target/draft/model tuning,
+public ABI, output-row reuse geometry and GPU dispatch count are unchanged.
+
+Core 0042 owns the retained extension; no terminal cleanup or parallel patch
+queue is added. Its default enables bounded relative offsets only on the
+qualified M1 Ultra/shared-buffer/sixteen-token down-only NR8 geometry. Other
+devices keep original defaults, with the private diagnostic flag available.
+Both positive and negative shader-function discovery results are cached;
+combined, per-kind and old-library fallbacks use actual function availability.
+
+The all-lane cold replay succeeds from upstream
+`a4d4f2fd4ec85ec6a0a9ece4870416c1b6cc24f5` to native commit
+`045c9d63da5454bfe1d084ca9a60fb99b7d400ec`, tree
+`1903fe5d457f5791030c52dbbce65803f6c5d41a`.
+Production code matches the serving-qualified default tree
+`9c97357665c781e12680bf2e9217fc63031a4295` except removal of one blank line at
+EOF in the shared arithmetic header. Remaining differences only add a
+`--policy-only` mode and CPU-only CTest registration. The replayed native GPU
+fixture passes all 26 cases / 52 bit-identical pairs / 104 FP64 checks, graph
+policy checks pass, and `metal_routed_u32_policy` passes all 36 policy/default
+checks without initializing a GPU. Qualification log names are kept separate
+from the prototype; its unchanged-source native proof is also reconfirmed.
+
+The first local-mirror replay attempt stops because the preparation script
+fetches a `master` ref even in pinned mode and the source cache has only a
+detached HEAD. A task-owned bare mirror with `master` pointing to the actual
+pinned upstream fixes that transport issue; the successful replay uses the
+normal preparation script, and no active dependency checkout is changed.
+
+`just release-runtime-build metal` succeeds against the replayed queue with
+host-native sources. The runtime archive verifies, and the packaged Metal
+library contains the exact newly generated embedded shader bytes. ABI remains
+0.1.85; retained queue digest is
+`ab4a4ca8baec8ee3a7260ff5a7b15665eeddd09a182a6f59f1e91f52ca484f69`.
+Primary-library SHA-256 is
+`562736276b243a63fb5a2b269fa89ca5d2b0b9de364726e8ae8d467bb31ed3b1`.
+`retained-runtime-verification.json` records package/source/shader identity.
+
+The M5 run terminates at its 30-minute deadline after unrelated maxd load.
+Its complete C2 portion independently audits 144 valid requests, including
+96 measured, with exact text, unchanged pins and twelve excluded/retried
+blocks: 270.5334 -> 272.0392 aggregate tok/s (+0.5566%). All three C2 cycle
+signs are positive. C1 is incomplete; no full M5 qualification or fresh-start
+confirmation is established, so M5 is not enabled by default. Original raw
+files remain intact; `m5-c2-audit-input` is an explicitly scoped copy of the
+complete C2 cohort, and `m5-serving-result.json` records the limitation.
+
+Only the owning patch and evidence ledger change in the repository. Runtime
+artifacts are local; no running service/fleet installation, push or PR occurs.
+The broader engine-speed objective and BaseRT parity remain unachieved.

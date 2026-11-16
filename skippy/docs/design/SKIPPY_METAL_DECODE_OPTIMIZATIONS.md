@@ -5028,3 +5028,32 @@ production tree. No numerical or throughput retest is inferred or claimed.
 The M1 parallel-encoding policy remains outside the retained queue while its
 fresh-process serving confirmations run on the separately frozen M1 artifacts.
 No fleet installation, running user service, push or PR is changed.
+
+### Initial command-buffer prefix: correctness-qualified diagnostic
+
+A separate experiment tests the time until the first GPU submission. The
+retained Metal encoder submits its initial buffer after encoding the larger
+of 64 nodes or 10% of the graph, then encodes the remainder on its workers.
+The diagnostic compares 1%, 5% and 20% against 10%, separately with one or
+two extra encoding workers. The 64-node minimum and existing traversal to
+preserve fusion groups remain unchanged. The 10% control executes the original
+calculation verbatim. No shader, weight representation or retained queue changes.
+
+The diagnostic source tree is `6516cb5c5ccde5ef8f8fecd5a8c30559501d7d34`,
+based on the retained M5-qualified tree. A cold application of its complete
+source patch to the pinned upstream reproduces that full tree exactly.
+Local M5 qualification passes all 36 combinations of prefix, worker count,
+token width (1/3/8) and lane count (1/2): full serialized state and all-row
+logits match exactly, total graph-node coverage matches, and actual command
+records show every candidate boundary moving in the intended direction.
+For one-token, one-lane graphs, the 1% prefix moves the first buffer from
+405 to 67 nodes per graph without changing the graph or its results.
+The graph-policy and batch-allocator suites and the existing 40 routed cases /
+80 exact pairs / 160 FP64 checks also pass.
+
+Evidence and the independent local audit are under
+`target/metal-first-submit-evidence/`. The prepared $0 M1 screen qualifies
+every combination before guarded ABBA forward timing; it is not submitted
+while the separate serving confirmations occupy that host. No latency or
+serving gain is established. Any positive native signal still needs a fresh
+process repeat and actual serving qualification before retention.

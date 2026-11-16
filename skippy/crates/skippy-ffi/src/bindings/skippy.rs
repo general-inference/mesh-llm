@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 84;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 85;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
@@ -1255,6 +1255,26 @@ pub struct skippy_iteration_request {
     pub sample_last: bool,
     #[doc = " Optional final-row readout; mutually exclusive with sample_last."]
     pub readout: *const skippy_token_score_request,
+}
+#[doc = " @brief One independently sampled speculative window in a shared forward."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_verify_request {
+    pub session: *mut skippy_session,
+    pub token_ids: *const llama_token,
+    pub token_count: usize,
+    pub sampling: *const skippy_sampling_config,
+    pub output_tokens: *mut llama_token,
+    pub output_capacity: usize,
+    pub out_token_count: *mut usize,
+}
+unsafe extern "C" {
+    #[doc = " @brief Verify equal-length windows on independent lanes of one terminal model.\n\n Every window retains its own rollback checkpoint and sampler history. Sampling\n stops at the first rejected proposal in each lane. The caller must trim or\n retire every window before reusing that lane. The combined windows must fit\n one native microbatch. Activation-frontier stages are not supported here."]
+    pub fn skippy_verify_batch_sampled(
+        requests: *const skippy_verify_request,
+        request_count: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
 }
 unsafe extern "C" {
     #[doc = " @brief Executes mixed prefill chunks and decode tokens in one model iteration.\n\n Requests may have different token counts. Activation outputs are request-major.\n Sampled outputs are compact and explicitly map back to the request indexes\n whose final rows requested logits. GLM-DSA inputs in one iteration must use\n the same sideband width and stream count."]

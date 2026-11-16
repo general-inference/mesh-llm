@@ -53,7 +53,7 @@ index 856c98f97..10ea60e7c 100644
  
  /** @brief Sentinel for `skippy_runtime_config` tri-state fields: keep the derived default. */
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index cfd896714..75cb30503 100644
+index 4869c0e34..11210a3d8 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -435,6 +435,32 @@ if (LLAMA_STAGE_BUILD_TESTS)
@@ -88,7 +88,7 @@ index cfd896714..75cb30503 100644
 +
      add_executable(skippy-sampling-history
          skippy/tests/sampling_history.cpp
-         skippy/tests/resident_checkpoint_gpu.cpp
+         skippy/tests/resident_attention.cpp
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 index 8a1b320ff..965880071 100644
 --- a/src/skippy/execution-single.cpp

@@ -1,0 +1,417 @@
+From d51465fa9375660b369105b7387fc3f90e926f5e Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 22:15:39 +1100
+Subject: [PATCH] memory: preserve peer recurrent rollback history
+
+---
+ src/CMakeLists.txt                   |   1 +
+ src/llama-memory-recurrent-copy.cpp  |  96 +++++++++++++++++++
+ src/llama-memory-recurrent-copy.h    |  20 ++++
+ src/llama-memory-recurrent.cpp       |  10 +-
+ src/llama-memory-recurrent.h         |   6 +-
+ src/skippy/tests/verify_rollback.cpp | 137 ++++++++++++++++++++++++++-
+ 6 files changed, 266 insertions(+), 4 deletions(-)
+ create mode 100644 src/llama-memory-recurrent-copy.cpp
+ create mode 100644 src/llama-memory-recurrent-copy.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 752ef6cbf..7b05ab31d 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -34,6 +34,7 @@ set(LLAMA_CORE_SOURCES
+     llama-memory-hybrid-iswa.cpp
+     llama-memory-hybrid-idx.cpp
+     llama-memory-recurrent.cpp
++    llama-memory-recurrent-copy.cpp
+     llama-mmap.cpp
+     llama-model-loader.cpp
+     llama-model-saver.cpp
+diff --git a/src/llama-memory-recurrent-copy.cpp b/src/llama-memory-recurrent-copy.cpp
+new file mode 100644
+index 000000000..9c269200b
+--- /dev/null
++++ b/src/llama-memory-recurrent-copy.cpp
+@@ -0,0 +1,96 @@
++#include "llama-memory-recurrent-copy.h"
++#include "llama-memory-recurrent.h"
++#include "ggml-backend.h"
++
++#include <cstring>
++
++void llama_recurrent_copy_rows(
++        const std::vector<ggml_tensor *> & tensors,
++        const std::vector<std::vector<llama_recurrent_copy_row>> & groups,
++        std::vector<uint8_t> & scratch) {
++    for (auto * tensor : tensors) {
++        if (!tensor || !tensor->buffer) {
++            continue;
++        }
++        const size_t row_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
++        for (const auto & rows : groups) {
++            if (rows.empty()) continue;
++            const size_t needed = rows.size() * row_bytes;
++            if (scratch.size() < needed) scratch.resize(needed);
++            for (size_t i = 0; i < rows.size(); ++i) {
++                const auto & row = rows[i];
++                GGML_ASSERT(row.destination < tensor->ne[1]);
++                auto * output = scratch.data() + i * row_bytes;
++                if (row.zero) {
++                    std::memset(output, 0, row_bytes);
++                } else {
++                    GGML_ASSERT(row.source < tensor->ne[1]);
++                    ggml_backend_tensor_get(tensor, output, row.source * tensor->nb[1], row_bytes);
++                }
++            }
++            for (size_t i = 0; i < rows.size(); ++i) {
++                ggml_backend_tensor_set(tensor, scratch.data() + i * row_bytes,
++                        rows[i].destination * tensor->nb[1], row_bytes);
++            }
++        }
++    }
++}
++
++void llama_memory_recurrent::preserve_peer_rollback(uint32_t first, uint32_t last, uint32_t n_seqs) {
++    std::vector<uint32_t> pending(last - first + 1, 0);
++    bool preserve = false;
++    for (uint32_t i = first; i <= last; ++i) {
++        auto & cell = cells[i];
++        if (cell.seq_id.empty()) {
++            cell.rs_max = 0;
++        } else {
++            const auto seq = *cell.seq_id.begin();
++            if (seq >= 0 && (size_t) seq < rs_idx.size()) {
++                pending[i - first] = rs_idx[seq];
++            }
++        }
++        if (i < first + n_seqs) {
++            continue; // the new forward replaces active lanes' snapshot history
++        }
++        const uint32_t consumed = pending[i - first];
++        GGML_ASSERT(consumed <= cell.rs_max);
++        cell.rs_max -= consumed;
++        preserve |= cell.rs_max > 0 && (cell.src0 != (int32_t) i || consumed > 0);
++    }
++    if (!preserve) {
++        return;
++    }
++
++    // Moving an inactive lane's current state alone loses its live snapshots.
++    // Materialize the whole working range first, including pending rollbacks,
++    // so a snapshot write cannot clobber an active lane's source state.
++    std::vector<std::vector<llama_recurrent_copy_row>> groups(n_rs_seq + 1);
++    for (uint32_t i = first; i <= last; ++i) {
++        const auto & cell = cells[i];
++        const uint32_t consumed = pending[i - first];
++        groups[0].push_back({(uint32_t) cell.src0 + consumed * size, i, cell.src0 == rs_z});
++        if (i < first + n_seqs || (cell.src0 == (int32_t) i && consumed == 0)) {
++            continue;
++        }
++        for (uint32_t plane = 1; plane <= cell.rs_max; ++plane) {
++            groups[plane].push_back({(uint32_t) cell.src0 + (consumed + plane) * size, i + plane * size});
++        }
++    }
++    // Each plane is gathered before it is written. Pending rollback only
++    // shifts snapshots towards earlier planes, so ascending groups are safe.
++    llama_recurrent_copy_rows(r_l, groups, rollback_copy_scratch);
++    llama_recurrent_copy_rows(s_l, groups, rollback_copy_scratch);
++    llama_recurrent_copy_rows(p_l, groups, rollback_copy_scratch);
++    for (uint32_t i = first; i <= last; ++i) {
++        auto & cell = cells[i];
++        cell.src0 = i;
++        for (const auto seq : cell.seq_id) {
++            if (seq >= 0 && (size_t) seq < rs_idx.size()) {
++                rs_idx[seq] = 0;
++            }
++        }
++    }
++    // New/empty rows were zero-filled above. The old zero source may now be
++    // a materialized destination and must not be cleared by the graph.
++    rs_z = -1;
++}
+diff --git a/src/llama-memory-recurrent-copy.h b/src/llama-memory-recurrent-copy.h
+new file mode 100644
+index 000000000..6577e206d
+--- /dev/null
++++ b/src/llama-memory-recurrent-copy.h
+@@ -0,0 +1,20 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++struct ggml_tensor;
++
++struct llama_recurrent_copy_row {
++    uint32_t source;
++    uint32_t destination;
++    bool zero = false;
++};
++
++// Groups must be ordered by destination snapshot plane. Sources are from the
++// same or a later plane; gather each group before writing to preserve aliases.
++void llama_recurrent_copy_rows(
++        const std::vector<ggml_tensor *> & tensors,
++        const std::vector<std::vector<llama_recurrent_copy_row>> & groups,
++        std::vector<uint8_t> & scratch);
+diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
+index c488e921c..a670a7712 100644
+--- a/src/llama-memory-recurrent.cpp
++++ b/src/llama-memory-recurrent.cpp
+@@ -1,5 +1,6 @@
+ #include "llama-memory-recurrent.h"
+ #include "skippy/trace_scope.h"
++#include "llama-memory-recurrent-copy.h"
+ 
+ #include "ggml-backend.h"
+ #include "llama-impl.h"
+@@ -535,7 +536,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
+     bool success = true;
+ 
+     for (const auto & ubatch : ubatches) {
+-        if (!find_slot(ubatch)) {
++        if (!find_slot(ubatch, true)) {
+             success = false;
+             break;
+         }
+@@ -549,7 +550,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
+     return success;
+ }
+ 
+-bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
++bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch, bool planning) {
+     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
+     const uint32_t n_seqs       = ubatch.n_seqs;
+ 
+@@ -682,6 +683,7 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+ 
+             std::swap(dst_cell.pos, src_cell.pos);
+             std::swap(dst_cell.src, src_cell.src);
++            std::swap(dst_cell.rs_max, src_cell.rs_max);
+             std::swap(dst_cell.seq_id, src_cell.seq_id);
+ 
+             // swap tails
+@@ -751,6 +753,10 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
+         }
+     }
+ 
++    if (!planning && n_rs_seq > 0) {
++        preserve_peer_rollback(min, max, n_seqs);
++    }
++
+     // allow getting the range of used cells, from head to head + n
+     head = min;
+     n    = max - min + 1;
+diff --git a/src/llama-memory-recurrent.h b/src/llama-memory-recurrent.h
+index 97fcc2c7c..d3b51efc9 100644
+--- a/src/llama-memory-recurrent.h
++++ b/src/llama-memory-recurrent.h
+@@ -58,7 +58,7 @@ public:
+     bool prepare(const std::vector<llama_ubatch> & ubatches);
+ 
+     // find a contiguous slot of memory cells and emplace the ubatch there
+-    bool find_slot(const llama_ubatch & ubatch);
++    bool find_slot(const llama_ubatch & ubatch, bool planning = false);
+ 
+     bool get_can_shift() const override;
+ 
+@@ -127,6 +127,10 @@ public:
+     std::vector<ggml_tensor *> graph_p_l;
+ 
+ private:
++    // Reused only when a peer update relocates live rollback history.
++    std::vector<uint8_t> rollback_copy_scratch;
++    void preserve_peer_rollback(uint32_t first, uint32_t last, uint32_t n_seqs);
++
+     //const llama_model & model;
+     const llama_hparams & hparams;
+ 
+diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
+index 08439cd22..d49e445f7 100644
+--- a/src/skippy/tests/verify_rollback.cpp
++++ b/src/skippy/tests/verify_rollback.cpp
+@@ -7,6 +7,9 @@
+ #include "log_gate.h"
+ static const skippy::log_gate::installer skippy_log_gate_installer{};
+ #include "../runtime_types.h"
++#include "../state_memory.h"
++#include "llama-memory-recurrent.h"
++#include "ggml-backend.h"
+ 
+ #include <cstdio>
+ #include <cstdlib>
+@@ -23,6 +26,7 @@ constexpr size_t WINDOW = 5;
+ constexpr size_t GENERATED = 48;
+ // Proposal index rejected in successive windows; -1 accepts every row.
+ constexpr int REJECTIONS[] = {-1, 0, 3, 1, -1, 2};
++const char * test_device = "CPU";
+ 
+ void ok(skippy_status status, skippy_error * error) {
+     if (status != SKIPPY_STATUS_OK) {
+@@ -34,7 +38,8 @@ void ok(skippy_status status, skippy_error * error) {
+ 
+ skippy_model * open(const char * path, uint32_t rollback_tokens, uint32_t lanes = 1) {
+     auto config = skippy_runtime_config_default();
+-    config.selected_backend_device = "CPU";
++    config.selected_backend_device = test_device;
++    if (std::strcmp(test_device, "CPU") != 0) config.n_gpu_layers = 999;
+     config.ctx_size = 256;
+     config.recurrent_rollback_tokens = rollback_tokens;
+     config.lane_count = lanes;
+@@ -52,6 +57,7 @@ skippy_session * create(skippy_model * model) {
+ }
+ 
+ void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
++    if (tokens.empty()) return;
+     size_t bytes = 0;
+     skippy_error * error = nullptr;
+     ok(skippy_prefill_chunk(session, tokens.data(), tokens.size(), nullptr, 0, nullptr, 0, &bytes, &error), error);
+@@ -419,9 +425,137 @@ void speculate_shared(const char * path, uint32_t depth) {
+     release(model);
+ }
+ 
++std::vector<uint8_t> recurrent_row(skippy_session * session, uint32_t plane) {
++    auto * memory = skippy_memory_recurrent_adapter(session->ctx->get_memory());
++    CHECK(memory != nullptr);
++    const int32_t tail = memory->cells[session->seq_id].tail;
++    CHECK(tail >= 0);
++    const size_t row = plane * memory->size + static_cast<size_t>(tail);
++    std::vector<uint8_t> bytes;
++    for (const auto * tensors : {&memory->r_l, &memory->s_l, &memory->p_l}) {
++        for (auto * tensor : *tensors) {
++            if (!tensor) continue;
++            const size_t size = ggml_row_size(tensor->type, tensor->ne[0]);
++            const size_t offset = bytes.size();
++            bytes.resize(offset + size);
++            ggml_backend_tensor_get(tensor, bytes.data() + offset, row * tensor->nb[1], size);
++        }
++    }
++    return bytes;
++}
++
++// Repair of B is delayed while A+C decode and move C into B's previous cell.
++// Inactive recurrent state must retain its rollback history across that move.
++void delayed_peer_repair(const char * path, unsigned mode) {
++    auto * model = open(path, WINDOW + 2, 3);
++    const std::vector<llama_token> prompts[3] = {
++        PROMPT, {1, 6, 10, 2, 8, 11, 3, 13},
++        (mode & 4) ? std::vector<llama_token>{7} :
++            std::vector<llama_token>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1, 2, 3, 4, 5, 6, 7},
++    };
++    const Reference expected[3] = {
++        reference(model, prompts[0]), reference(model, prompts[1]), reference(model, prompts[2]),
++    };
++    skippy_session * sessions[3] = {create(model), create(model), create(model)};
++    if (std::strcmp(test_device, "CPU") != 0) {
++        auto * memory = skippy_memory_recurrent_adapter(sessions[0]->ctx->get_memory());
++        bool gpu_state = false;
++        for (auto * tensor : memory->s_l) {
++            if (!tensor || !tensor->buffer) continue;
++            auto * device = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
++            gpu_state |= device && ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_GPU;
++        }
++        CHECK(gpu_state);
++    }
++    for (size_t lane = 0; lane < 3; ++lane) {
++        prefill(sessions[lane], std::vector<llama_token>(prompts[lane].begin(), prompts[lane].end() - 1));
++    }
++    std::vector<llama_token> inputs[2] = {
++        window_of(prompts[0].back(), expected[0].tokens, 0, WINDOW - 1, (mode & 1) ? 1 : -1),
++        window_of(prompts[1].back(), expected[1].tokens, 0, WINDOW - 1, (mode & 2) ? 3 : 0),
++    };
++    llama_token outputs[2][WINDOW] = {};
++    size_t counts[2] = {};
++    skippy_verify_request requests[2] = {
++        {sessions[0], inputs[0].data(), WINDOW, nullptr, outputs[0], WINDOW, &counts[0]},
++        {sessions[1], inputs[1].data(), WINDOW, nullptr, outputs[1], WINDOW, &counts[1]},
++    };
++    skippy_error * error = nullptr;
++    ok(skippy_verify_batch_sampled(requests, 2, &error), error);
++    CHECK(counts[0] == ((mode & 1) ? 2 : WINDOW) && counts[1] == ((mode & 2) ? WINDOW - 1 : 1));
++    const bool in_place = sessions[1]->inplace_verify_window.valid;
++    const auto snapshot = in_place ? recurrent_row(sessions[1], WINDOW - 1) : std::vector<uint8_t>{};
++    error = nullptr;
++    if (counts[0] == WINDOW) {
++        ok(skippy_retire_verify_checkpoint(sessions[0], prompts[0].size() - 1, WINDOW, &error), error);
++    } else {
++        ok(skippy_trim_session(sessions[0], prompts[0].size() - 1 + counts[0], &error), error);
++    }
++    if ((mode & 2) && in_place) {
++        error = nullptr;
++        ok(skippy_trim_session(sessions[1], prompts[1].size() - 1 + counts[1], &error), error);
++    }
++    auto * memory = skippy_memory_recurrent_adapter(sessions[1]->ctx->get_memory());
++    std::vector<std::vector<uint8_t>> history;
++    if (in_place) {
++        const auto pending = memory->rs_idx[sessions[1]->seq_id];
++        const auto depth = memory->cells[memory->cells[sessions[1]->seq_id].tail].rs_max;
++        for (uint32_t plane = pending; plane <= depth; ++plane) {
++            history.push_back(recurrent_row(sessions[1], plane));
++        }
++    }
++
++    llama_token current[2] = {outputs[0][counts[0] - 1], prompts[2].back()};
++    skippy_iteration_request peers[2] = {};
++    for (size_t i = 0; i < 2; ++i) {
++        peers[i].session = sessions[i == 0 ? 0 : 2];
++        peers[i].token_ids = &current[i];
++        peers[i].token_count = 1;
++        peers[i].sample_last = true;
++    }
++    size_t indexes[2] = {}, count = 0;
++    llama_token predictions[2] = {};
++    error = nullptr;
++    ok(skippy_iteration_batch_sampled(peers, 2, nullptr, nullptr, nullptr, nullptr,
++            indexes, predictions, 2, &count, &error), error);
++    CHECK(count == 2 && predictions[0] == expected[0].tokens[counts[0]] && predictions[1] == expected[2].tokens[0]);
++    if (in_place) {
++        const auto pending = memory->rs_idx[sessions[1]->seq_id];
++        for (size_t plane = 0; plane < history.size(); ++plane) {
++            CHECK(recurrent_row(sessions[1], pending + plane) == history[plane]);
++        }
++    }
++
++    error = nullptr;
++    ok(skippy_trim_session(sessions[1], prompts[1].size(), &error), error);
++    if (in_place) {
++        auto * memory = skippy_memory_recurrent_adapter(sessions[1]->ctx->get_memory());
++        CHECK(recurrent_row(sessions[1], memory->rs_idx[sessions[1]->seq_id]) == snapshot);
++    }
++    llama_token token = outputs[1][0];
++    for (size_t i = 1; i < 16; ++i) {
++        token = decode(sessions[1], token);
++        CHECK(token == expected[1].tokens[i]);
++    }
++    for (auto * session : sessions) {
++        error = nullptr;
++        ok(skippy_session_free(session, &error), error);
++    }
++    release(model);
++    std::fprintf(stderr, "delayed peer repair: mode=%u independent recurrent rollback preserved\n", mode);
++}
++
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
++    if (argc == 3 && std::strcmp(argv[2], "peer-gpu") == 0) {
++        ggml_backend_load_all();
++        auto * device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
++        CHECK(device != nullptr);
++        test_device = ggml_backend_dev_name(device);
++        for (unsigned mode : {0u, 1u, 2u, 7u}) delayed_peer_repair(argv[1], mode);
++        return 0;
++    }
+     // `sliding-window`: the fixture's attention slides, so no window may roll
+     // back in place and every one takes a host checkpoint.
+     // `native-rollback`: the memory rewinds through its own seq_rm.
+@@ -456,6 +590,7 @@ int main(int argc, char ** argv) {
+     if (!native_rollback) {
+         speculate_shared(argv[1], WINDOW + 2);
+         speculate_shared(argv[1], 1);
++        for (unsigned mode : {0u, 1u, 2u, 7u}) delayed_peer_repair(argv[1], mode);
+     }
+     return 0;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

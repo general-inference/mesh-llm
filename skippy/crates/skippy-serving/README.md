@@ -29,6 +29,50 @@ library's ABI as well. This entry point uses local bundles/cache only; acquisiti
 is explicit. Static native test builds retain their existing linked-runtime path.
 This adds native startup, not model-reference resolution or clean-install proof.
 
+## Shared speculative execution
+
+The iteration scheduler combines equal-length
+verification windows from independent sessions on a complete causal target.
+The combined implementation requires native ABI `0.1.85`. Each lane keeps its own sampler, checkpoint,
+rejection boundary and repair. Unsupported models and batches exceeding the
+actual native microbatch capacity use independent verification.
+
+The scheduler waits at most 300 microseconds of idle time to collect a wave;
+useful draft and repair work does not consume that waiting budget. Repairs are
+barriers for their own session; unscoped runtime mutations remain global
+barriers. Cancellation and stale-position checks run before target execution.
+`stage.shared_verification` telemetry records actual shared forwards and their
+batch size. Mesh embeds this same scheduler. Sharing is enabled by default;
+`SKIPPY_SHARED_VERIFY=0` retains independent verification for diagnostics.
+
+The scheduler also collects ready DFlash proposals for one draft
+forward. It accepts different block lengths, checks cancellation and target
+positions before submission, and uses the same 300-microsecond idle waiting
+budget. `stage.shared_draft` records the number of lanes actually sharing a
+forward; unsupported draft heads or excess capacity run independently. The
+draft path is enabled by default; `SKIPPY_SHARED_DRAFT=0` retains independent
+submissions. The two switches can be disabled separately for comparison.
+Selector/convolution drafts share only equal-width blocks; different widths
+run independently, while ordinary independent-row drafts retain ragged batching.
+With shared drafting, adaptive sizing learns each lane's share of execution
+cost for drafting, verification, repair and measured serial steps. Queue time
+remains in request latency telemetry; it is excluded from the cost fit, so a
+peer's work cannot be mistaken for a more expensive draft width. These
+estimates are stored separately from the existing local and split estimates.
+
+With shared drafting, shared verification and adaptive sizing, concurrent lanes use
+aggregate acceptance and keep one width for eight observed windows per lane.
+This lets the target batch their verification rather than fragmenting it with
+independent width choices. Request tails retain their own smaller limits, and
+serial choices are reconsidered after a draft probe. Single-lane and split
+requests keep the existing per-request policy. Sampling, checkpoint and repair
+ownership remain per session.
+
+Batch geometry can change the native backend's floating-point reductions, so
+greedy text need not be identical to independent execution. Every proposal is
+still checked by its lane's target sampler. Use the zero-valued switches above
+to compare independent execution when investigating a numerical difference.
+
 ## Architecture Role
 
 Each embedded server or server process owns one contiguous layer range. Mesh

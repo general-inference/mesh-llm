@@ -1,0 +1,440 @@
+From e9bf03c5e7a1aab45caaafcba8db401fa5455434 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 15:48:34 +1100
+Subject: [PATCH] feat(skippy): share target forwards across speculative lanes
+
+---
+ include/skippy/execution.h            |  24 +++++
+ src/skippy/execution-batch.cpp        | 121 ++++++++++++++++++++++++--
+ src/skippy/tests/sampling_history.cpp |  43 +++++++++
+ src/skippy/tests/verify_rollback.cpp  |  77 +++++++++++++++-
+ 4 files changed, 252 insertions(+), 13 deletions(-)
+
+diff --git a/include/skippy/execution.h b/include/skippy/execution.h
+index bf9fb497c..5acc63909 100644
+--- a/include/skippy/execution.h
++++ b/include/skippy/execution.h
+@@ -100,6 +100,30 @@ struct skippy_iteration_request {
+         const struct skippy_token_score_request * readout;
+ };
+ 
++/** @brief One independently sampled speculative window in a shared forward. */
++struct skippy_verify_request {
++        struct skippy_session * session;
++        const llama_token * token_ids;
++        size_t token_count;
++        const struct skippy_sampling_config * sampling;
++        llama_token * output_tokens;
++        size_t output_capacity;
++        size_t * out_token_count;
++};
++
++/**
++ * @brief Verify equal-length windows on independent lanes of one terminal model.
++ *
++ * Every window retains its own rollback checkpoint and sampler history. Sampling
++ * stops at the first rejected proposal in each lane. The caller must trim or
++ * retire every window before reusing that lane. The combined windows must fit
++ * one native microbatch. Activation-frontier stages are not supported here.
++ */
++LLAMA_API enum skippy_status skippy_verify_batch_sampled(
++        const struct skippy_verify_request * requests,
++        size_t request_count,
++        struct skippy_error ** out_error);
++
+ /**
+  * @brief Executes mixed prefill chunks and decode tokens in one model iteration.
+  *
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 83c290ee2..280f174e1 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -244,7 +244,7 @@ bool skippy_model_supports_causal_readout(const struct skippy_model * model) {
+             model->model->hparams.causal_attn && !llama_model_is_diffusion(model->model);
+ }
+ 
+-enum skippy_status skippy_iteration_batch_sampled(
++static enum skippy_status skippy_iteration_batch_impl(
+         const struct skippy_iteration_request * requests,
+         size_t request_count,
+         struct skippy_activation_desc * output_descs,
+@@ -255,7 +255,9 @@ enum skippy_status skippy_iteration_batch_sampled(
+         llama_token * out_predicted_tokens,
+         size_t sampled_output_capacity,
+         size_t * out_sampled_output_count,
+-        struct skippy_error ** out_error) {
++        struct skippy_error ** out_error,
++        bool verify_all,
++        bool * execution_started = nullptr) {
+     // validation, output frames, the batched frontier and the llama batch
+     skippy_trace::scope prepare_trace("skippy.batch_prepare", "requests", static_cast<int64_t>(request_count));
+     if (requests == nullptr || request_count == 0 || out_sampled_output_count == nullptr) {
+@@ -345,7 +347,11 @@ enum skippy_status skippy_iteration_batch_sampled(
+             return SKIPPY_STATUS_INVALID_ARGUMENT;
+         }
+         offsets[index + 1] = offsets[index] + request.token_count;
+-        if (request.sample_last && request_logits) ++sampled_count;
++        if (request.sample_last && request_logits) sampled_count += verify_all ? request.token_count : 1;
++    }
++    if (offsets.back() > first->ctx->n_batch()) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "iteration exceeds native batch capacity");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
+     }
+     // Batched exports are sliced by request offset, which is the microbatch row
+     // order only when llama decodes the batch with split_simple, so a stage that
+@@ -390,22 +396,26 @@ enum skippy_status skippy_iteration_batch_sampled(
+     // preserves sampler history and does not accept or generate a token.
+     for (size_t index = 0; index < request_count; ++index) {
+         auto * session = requests[index].session;
+-        if (requests[index].readout != nullptr && session->sampling_backend_enabled) {
++        if (verify_all || (requests[index].readout != nullptr && session->sampling_backend_enabled)) {
+             if (!skippy_retire_backend_sampling(session, out_error)) {
+                 return SKIPPY_STATUS_RUNTIME_ERROR;
+             }
+         }
++        if (verify_all) session->sampling_backend_verifying = true;
+     }
+ 
+     // This decode overwrites any pending verify window's rollback snapshots.
+     for (size_t index = 0; index < request_count; ++index) {
+-        const enum skippy_status settle_status =
+-                skippy_settle_inplace_verify_window(requests[index].session, out_error);
++        const auto & request = requests[index];
++        const enum skippy_status settle_status = verify_all
++                ? skippy_checkpoint_verify_window(request.session, request.token_ids,
++                        request.token_count, nullptr, nullptr, out_error)
++                : skippy_settle_inplace_verify_window(request.session, out_error);
+         if (settle_status != SKIPPY_STATUS_OK) return settle_status;
+     }
+ 
+     skippy_graph_build_inputs graph_inputs = skippy_graph_build_inputs_from_config(
+-            &first->stage_model->config, SKIPPY_GLM_DSA_PHASE_HINT_AUTO);
++            &first->stage_model->config, verify_all ? SKIPPY_GLM_DSA_PHASE_HINT_VERIFY : SKIPPY_GLM_DSA_PHASE_HINT_AUTO);
+     std::vector<std::vector<uint8_t>> frontier_storage;
+     enum skippy_status status = skippy_build_batched_frontier(
+             requests, request_count, offsets, graph_inputs, frontier_storage, out_error);
+@@ -428,7 +438,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+             seq_ids[flat] = &seq_values[flat];
+             logits[flat] = request_exports ||
+                     (request_logits && (request.sample_last || request.readout != nullptr) &&
+-                     token + 1 == request.token_count);
++                     (verify_all || token + 1 == request.token_count));
+             for (int32_t axis = 0; axis < n_pos_per_embd; ++axis) {
+                 const size_t destination = static_cast<size_t>(axis)*total_tokens + flat;
+                 if (request.positions != nullptr) {
+@@ -454,6 +464,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+     };
+     prepare_trace.end();
+     int32_t decode_rc = 0;
++    if (execution_started != nullptr) *execution_started = true;
+     if (!skippy_contain_native_failure(
+                 out_error, [&] { decode_rc = first->ctx->decode(batch, graph_inputs); })) {
+         return SKIPPY_STATUS_RUNTIME_ERROR;
+@@ -472,6 +483,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+     // once every request's outputs are recorded
+     std::vector<skippy_sample_request> samples;
+     std::vector<size_t> sample_request_indexes;
++    size_t sampled_index = 0;
+     for (size_t request_index = 0; request_index < request_count; ++request_index) {
+         const auto & request = requests[request_index];
+         status = skippy_copy_batched_exports(
+@@ -485,7 +497,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+         }
+         request.session->sampling_backend_row_invalid = false;
+         request.session->n_past += static_cast<int32_t>(request.token_count);
+-        skippy_record_tokens(request.session, request.token_ids, request.token_count);
++        if (!verify_all) skippy_record_tokens(request.session, request.token_ids, request.token_count);
+         if (request.readout != nullptr && request_logits) {
+             const auto & readout = *request.readout;
+             const int32_t row = static_cast<int32_t>(offsets[request_index + 1] - 1);
+@@ -497,6 +509,20 @@ enum skippy_status skippy_iteration_batch_sampled(
+             }
+         }
+         if (request.sample_last && request_logits) {
++            if (verify_all) {
++                for (size_t token = 0; token < request.token_count; ++token) {
++                    skippy_record_tokens(request.session, &request.token_ids[token], 1);
++                    status = skippy_store_sampled_token(skippy_sample_token_ith(
++                                request.session, request.sampling,
++                                static_cast<int32_t>(offsets[request_index] + token)),
++                            &out_predicted_tokens[sampled_index], out_error);
++                    if (status != SKIPPY_STATUS_OK) return status;
++                    out_sampled_request_indexes[sampled_index] = request_index;
++                    const auto predicted = out_predicted_tokens[sampled_index++];
++                    if (token + 1 < request.token_count && predicted != request.token_ids[token + 1]) break;
++                }
++                continue;
++            }
+             // Logits are indexed by the original batch row; llama.cpp handles
+             // sparse output-row translation internally.
+             samples.push_back({ request.session, request.sampling,
+@@ -504,6 +530,10 @@ enum skippy_status skippy_iteration_batch_sampled(
+             sample_request_indexes.push_back(request_index);
+         }
+     }
++    if (verify_all) {
++        *out_sampled_output_count = sampled_index;
++        return skippy_success(out_error);
++    }
+     const std::vector<llama_token> sampled = skippy_sample_requests(samples);
+     const auto exhausted = std::find_if(sampled.begin(), sampled.end(), [](llama_token token) { return token < 0; });
+     if (exhausted != sampled.end()) {
+@@ -515,6 +545,79 @@ enum skippy_status skippy_iteration_batch_sampled(
+     return skippy_success(out_error);
+ }
+ 
++enum skippy_status skippy_iteration_batch_sampled(
++        const struct skippy_iteration_request * requests, size_t request_count,
++        struct skippy_activation_desc * output_descs, void * const * output_payloads,
++        const size_t * output_payload_capacities, size_t * out_output_payload_bytes,
++        size_t * out_sampled_request_indexes, llama_token * out_predicted_tokens,
++        size_t sampled_output_capacity, size_t * out_sampled_output_count,
++        struct skippy_error ** out_error) {
++    return skippy_iteration_batch_impl(requests, request_count, output_descs, output_payloads,
++            output_payload_capacities, out_output_payload_bytes, out_sampled_request_indexes,
++            out_predicted_tokens, sampled_output_capacity, out_sampled_output_count, out_error, false);
++}
++
++enum skippy_status skippy_verify_batch_sampled(
++        const struct skippy_verify_request * requests, size_t request_count,
++        struct skippy_error ** out_error) {
++    if (requests == nullptr || request_count == 0 || requests[0].session == nullptr ||
++            requests[0].session->ctx == nullptr || requests[0].session->stage_model == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "active verification requests are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const auto * first = requests[0].session;
++    const auto * model = first->stage_model;
++    if (!skippy_model_supports_causal_readout(model) || skippy_emits_activation_frame(first) ||
++            (skippy_runtime_has_stage_plan(&model->config) &&
++             (model->config.layer_start != 0 || model->config.layer_end < llama_model_n_layer(model->model)))) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "shared verification requires a complete terminal model");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    const size_t width = requests[0].token_count;
++    const size_t capacity = std::min(first->ctx->n_batch(), first->ctx->n_ubatch());
++    if (width == 0 || request_count > capacity / width) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verification must fit one native microbatch");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    std::vector<skippy_iteration_request> iteration(request_count);
++    for (size_t index = 0; index < request_count; ++index) {
++        const auto & request = requests[index];
++        if (request.token_count != width || request.output_tokens == nullptr ||
++                request.output_capacity < width || request.out_token_count == nullptr ||
++                request.session == nullptr || request.session->n_past < 0 ||
++                width > static_cast<size_t>(std::numeric_limits<int32_t>::max() - request.session->n_past)) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "invalid equal-length verification window");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const auto status = skippy_require_usable_session(request.session, out_error);
++        if (status != SKIPPY_STATUS_OK) return status;
++        iteration[index] = {request.session, request.token_ids, width, nullptr, 0,
++                request.sampling, nullptr, nullptr, true, nullptr};
++    }
++    const size_t total = width * request_count;
++    std::vector<size_t> indexes(total);
++    std::vector<llama_token> predictions(total);
++    for (size_t index = 0; index < request_count; ++index) *requests[index].out_token_count = 0;
++    size_t count = 0;
++    bool execution_started = false;
++    const auto status = skippy_iteration_batch_impl(iteration.data(), request_count,
++            nullptr, nullptr, nullptr, nullptr, indexes.data(), predictions.data(), total, &count,
++            out_error, true, &execution_started);
++    if (status != SKIPPY_STATUS_OK) {
++        // A partial forward or sampling failure may have changed every lane's
++        // native state. None may continue from a stale Rust/scheduler position.
++        if (execution_started) {
++            for (size_t index = 0; index < request_count; ++index) requests[index].session->reset_required = true;
++        }
++        return status;
++    }
++    for (size_t index = 0; index < count; ++index) {
++        const auto & request = requests[indexes[index]];
++        request.output_tokens[(*request.out_token_count)++] = predictions[index];
++    }
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_decode_step_frame_batch_sampled(
+         struct skippy_session * const * sessions,
+         const llama_token * token_ids,
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index 1d0ef71f1..8ce722206 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -879,6 +879,48 @@ void dense_resident_configuration(const char * path, skippy_runtime_config confi
+     }
+ }
+ 
++void shared_verify_preserves_independent_grammars(const char * path) {
++    auto config = skippy_runtime_config_default();
++    config.selected_backend_device = "CPU";
++    config.ctx_size = 512;
++    config.lane_count = 2;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    ok(skippy_model_open(path, &config, &model, &error), error);
++    auto * first = create(model);
++    auto * second = create(model);
++    const auto sampling = sampling_config();
++    const std::vector<llama_token> prefix[2] = {{1, 2, 3, 4}, {1, 4, 3, 2, 5}};
++    configure(first, sampling, false, prefix[0].size() + 1);
++    configure(second, sampling, false, prefix[1].size() + 1);
++    prefill(first, prefix[0]);
++    prefill(second, prefix[1]);
++    auto * second_sampler = second->sampler;
++    const llama_token inputs[2][3] = {{2, 42, 43}, {3, 42, 0}};
++    llama_token outputs[2][3] = {};
++    size_t counts[2] = {};
++    const skippy_verify_request requests[2] = {
++        {first, inputs[0], 3, &sampling, outputs[0], 3, &counts[0]},
++        {second, inputs[1], 3, &sampling, outputs[1], 3, &counts[1]},
++    };
++    error = nullptr;
++    ok(skippy_verify_batch_sampled(requests, 2, &error), error);
++    CHECK(counts[0] == 3 && counts[1] == 2);
++    CHECK(outputs[0][0] == 42 && outputs[0][1] == 43 && outputs[0][2] == 44);
++    CHECK(outputs[1][0] == 42 && outputs[1][1] == 43);
++    error = nullptr;
++    ok(skippy_retire_verify_checkpoint(first, prefix[0].size(), 3, &error), error);
++    error = nullptr;
++    ok(skippy_trim_session(second, prefix[1].size() + 2, &error), error);
++    CHECK(second->sampler == second_sampler && second->sampling_has_grammar);
++    CHECK(second->sampling_accepted_token_count == prefix[1].size() + 2);
++    CHECK(decode(second, sampling, 43) == 44);
++    release(first);
++    release(second);
++    error = nullptr;
++    ok(skippy_model_free(model, &error), error);
++}
++
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
+@@ -970,5 +1012,6 @@ int main(int argc, char ** argv) {
+     if (resident && !require_recurrent) {
+         dense_resident_configuration(argv[1], config);
+     }
++    if (grammar) shared_verify_preserves_independent_grammars(argv[1]);
+     return 0;
+ }
+diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
+index f479a8e4e..08439cd22 100644
+--- a/src/skippy/tests/verify_rollback.cpp
++++ b/src/skippy/tests/verify_rollback.cpp
+@@ -32,11 +32,12 @@ void ok(skippy_status status, skippy_error * error) {
+     skippy_error_free(error);
+ }
+ 
+-skippy_model * open(const char * path, uint32_t rollback_tokens) {
++skippy_model * open(const char * path, uint32_t rollback_tokens, uint32_t lanes = 1) {
+     auto config = skippy_runtime_config_default();
+     config.selected_backend_device = "CPU";
+     config.ctx_size = 256;
+     config.recurrent_rollback_tokens = rollback_tokens;
++    config.lane_count = lanes;
+     skippy_model * model = nullptr;
+     skippy_error * error = nullptr;
+     ok(skippy_model_open(path, &config, &model, &error), error);
+@@ -78,13 +79,13 @@ struct Reference {
+     std::vector<size_t> state_sizes;
+ };
+ 
+-Reference reference(skippy_model * model) {
++Reference reference(skippy_model * model, const std::vector<llama_token> & prompt = PROMPT) {
+     skippy_session * session = create(model);
+-    prefill(session, std::vector<llama_token>(PROMPT.begin(), PROMPT.end() - 1));
++    prefill(session, std::vector<llama_token>(prompt.begin(), prompt.end() - 1));
+     Reference result;
+     result.state_sizes.assign(static_cast<size_t>(session->n_past) + 1, 0);
+     result.state_sizes[static_cast<size_t>(session->n_past)] = partial_state_size(session);
+-    llama_token current = PROMPT.back();
++    llama_token current = prompt.back();
+     while (result.tokens.size() < GENERATED + 2 * WINDOW) {
+         current = decode(session, current);
+         result.tokens.push_back(current);
+@@ -354,6 +355,70 @@ void release(skippy_model * model) {
+     ok(skippy_model_free(model, &error), error);
+ }
+ 
++// Different prompts and rejection points must leave both lanes independent.
++void speculate_shared(const char * path, uint32_t depth) {
++    auto * model = open(path, depth, 2);
++    const std::vector<llama_token> prompts[2] = {PROMPT, {1, 6, 10, 2, 8, 11, 3, 13}};
++    const Reference expected[2] = {reference(model, prompts[0]), reference(model, prompts[1])};
++    skippy_session * sessions[2] = {create(model), create(model)};
++    size_t committed[2] = {};
++    llama_token current[2] = {prompts[0].back(), prompts[1].back()};
++    for (size_t lane = 0; lane < 2; ++lane) {
++        prefill(sessions[lane], std::vector<llama_token>(prompts[lane].begin(), prompts[lane].end() - 1));
++    }
++    for (size_t step = 0; step < 8; ++step) {
++        std::vector<llama_token> inputs[2];
++        std::vector<llama_token> outputs[2] = {std::vector<llama_token>(WINDOW), std::vector<llama_token>(WINDOW)};
++        size_t counts[2] = {};
++        skippy_verify_request requests[2];
++        for (size_t lane = 0; lane < 2; ++lane) {
++            const auto reject = REJECTIONS[(step + lane) % (sizeof(REJECTIONS) / sizeof(REJECTIONS[0]))];
++            inputs[lane] = window_of(current[lane], expected[lane].tokens, committed[lane], WINDOW - 1, reject);
++            requests[lane] = {sessions[lane], inputs[lane].data(), WINDOW, nullptr,
++                    outputs[lane].data(), WINDOW, &counts[lane]};
++        }
++        if (step == 0) {
++            const int32_t before[2] = {sessions[0]->n_past, sessions[1]->n_past};
++            const auto saved = requests[1].session;
++            requests[1].session = requests[0].session;
++            skippy_error * error = nullptr;
++            CHECK(skippy_verify_batch_sampled(requests, 2, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++            skippy_error_free(error);
++            requests[1].session = saved;
++            CHECK(sessions[0]->n_past == before[0] && sessions[1]->n_past == before[1]);
++            requests[1].token_count = WINDOW - 1;
++            error = nullptr;
++            CHECK(skippy_verify_batch_sampled(requests, 2, &error) == SKIPPY_STATUS_INVALID_ARGUMENT);
++            skippy_error_free(error);
++            requests[1].token_count = WINDOW;
++            CHECK(sessions[0]->n_past == before[0] && sessions[1]->n_past == before[1]);
++        }
++        skippy_error * error = nullptr;
++        ok(skippy_verify_batch_sampled(requests, 2, &error), error);
++        for (size_t lane = 0; lane < 2; ++lane) {
++            CHECK(counts[lane] > 0 && counts[lane] <= WINDOW);
++            for (size_t row = 0; row < counts[lane]; ++row) {
++                CHECK(outputs[lane][row] == expected[lane].tokens[committed[lane] + row]);
++            }
++            const uint64_t base = prompts[lane].size() - 1 + committed[lane];
++            error = nullptr;
++            if (counts[lane] == WINDOW) {
++                ok(skippy_retire_verify_checkpoint(sessions[lane], base, WINDOW, &error), error);
++            } else {
++                ok(skippy_trim_session(sessions[lane], base + counts[lane], &error), error);
++            }
++            committed[lane] += counts[lane];
++            current[lane] = outputs[lane][counts[lane] - 1];
++        }
++    }
++    for (size_t lane = 0; lane < 2; ++lane) {
++        CHECK(decode(sessions[lane], current[lane]) == expected[lane].tokens[committed[lane]]);
++        skippy_error * error = nullptr;
++        ok(skippy_session_free(sessions[lane], &error), error);
++    }
++    release(model);
++}
++
+ } // namespace
+ 
+ int main(int argc, char ** argv) {
+@@ -388,5 +453,9 @@ int main(int argc, char ** argv) {
+         speculate_pipelined(shallow, shallow_reference);
+     }
+     release(shallow);
++    if (!native_rollback) {
++        speculate_shared(argv[1], WINDOW + 2);
++        speculate_shared(argv[1], 1);
++    }
+     return 0;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

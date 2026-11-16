@@ -102,6 +102,7 @@ pub struct SystemOneReadSlot {
 struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
+    complete_terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
     /// External DFlash draft that borrows this model's context. Freed before
     /// the native model.
@@ -170,6 +171,7 @@ impl StageModel {
             inner: Arc::new(StageModelInner {
                 raw: std::ptr::null_mut(),
                 terminal_stage: true,
+                complete_terminal_stage: true,
                 capability: None,
                 dflash: None,
                 dflash_capture: None,
@@ -225,6 +227,11 @@ impl StageModel {
         unsafe { skippy_ffi::skippy_model_supports_causal_readout(self.inner.raw) }
     }
 
+    /// Independent speculative windows can share a complete causal target.
+    pub fn supports_shared_verification(&self) -> bool {
+        self.inner.complete_terminal_stage && self.supports_causal_readout()
+    }
+
     fn from_opened_raw(
         raw: *mut RawModel,
         config: &RuntimeConfig,
@@ -243,6 +250,7 @@ impl StageModel {
             inner: Arc::new(StageModelInner {
                 raw,
                 terminal_stage: config.is_terminal_stage(),
+                complete_terminal_stage: config.layer_start == 0 && config.is_terminal_stage(),
                 capability,
                 dflash: None,
                 dflash_capture: None,

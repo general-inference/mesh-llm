@@ -1,0 +1,136 @@
+From af7ac35d2fa8f9487e6a8b67c0c850f596fd1b90 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 15:16:21 +1100
+Subject: [PATCH] feat(skippy): declare auxiliary device capture outputs
+
+---
+ src/llama-graph.cpp                  |  9 ++++++++-
+ src/skippy/state_effects.cpp         |  1 +
+ src/skippy/state_effects.h           |  4 ++++
+ src/skippy/state_memory.cpp          |  1 +
+ tests/test-skippy-kv-page-export.cpp | 25 ++++++++++++++++++++-----
+ 5 files changed, 34 insertions(+), 6 deletions(-)
+
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+index 17081e041..c4f22d0d3 100644
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -5004,6 +5004,11 @@ void llm_graph_context::build_layer_inp_dev() const {
+ 
+     // row layout: [layer_0 | layer_1 | ...] in ascending layer id order
+     int64_t col = 0;
++    // These rows are auxiliary outputs for a separate speculative context,
++    // not inputs or authoritative recurrent state of this target context.
++    // Declare their storage and exact writes rather than hiding them from
++    // graph admission by tensor name or weakening unknown-state validation.
++    state_read(skippy_state_kind::auxiliary_output, layer_inp_dev, n_layer);
+     for (size_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
+         if (!cparams.embeddings_layer_inp[il]) {
+             continue;
+@@ -5014,7 +5019,9 @@ void llm_graph_context::build_layer_inp_dev() const {
+         GGML_ASSERT(src->ne[0] == n_embd);
+ 
+         ggml_tensor * dst = ggml_view_2d(ctx0, layer_inp_dev, n_embd, layer_inp_dev->ne[1], layer_inp_dev->nb[1], col*n_embd*ggml_element_size(layer_inp_dev));
+-        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, dst, ggml_reshape_2d(ctx0, src, n_embd, n_tokens), inp->idxs));
++        ggml_tensor * write = ggml_set_rows(ctx0, dst, ggml_reshape_2d(ctx0, src, n_embd, n_tokens), inp->idxs);
++        state_write(skippy_state_kind::auxiliary_output, layer_inp_dev, write, n_layer);
++        ggml_build_forward_expand(gf, write);
+         col++;
+     }
+     GGML_ASSERT(col*n_embd == layer_inp_dev->ne[0]);
+diff --git a/src/skippy/state_effects.cpp b/src/skippy/state_effects.cpp
+index b33ed2d5d..ba47e4fec 100644
+--- a/src/skippy/state_effects.cpp
++++ b/src/skippy/state_effects.cpp
+@@ -44,6 +44,7 @@ static bool state_kind_known(skippy_state_kind kind) {
+         case skippy_state_kind::recurrent_conv:
+         case skippy_state_kind::recurrent_ssm:
+         case skippy_state_kind::derived_persistent:
++        case skippy_state_kind::auxiliary_output:
+             return true;
+     }
+     return false;
+diff --git a/src/skippy/state_effects.h b/src/skippy/state_effects.h
+index 5bb6b779b..a051e5dbd 100644
+--- a/src/skippy/state_effects.h
++++ b/src/skippy/state_effects.h
+@@ -24,6 +24,10 @@ enum class skippy_state_kind : int32_t {
+     recurrent_conv = 2,
+     recurrent_ssm  = 3,
+     derived_persistent = 4,
++    // Caller-visible output scratch, never an input to a later forward of
++    // this context. It is not authoritative model/cache state. Writes still
++    // require exact-graph destination and ordering validation.
++    auxiliary_output = 5,
+ };
+ 
+ enum class skippy_state_access : int32_t {
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+index c62b1e629..a83f1534c 100644
+--- a/src/skippy/state_memory.cpp
++++ b/src/skippy/state_memory.cpp
+@@ -131,6 +131,7 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
+         switch (effect.kind) {
+             case skippy_state_kind::kv_key:
+             case skippy_state_kind::kv_value:
++            case skippy_state_kind::auxiliary_output:
+                 break;
+             case skippy_state_kind::recurrent_conv:
+             case skippy_state_kind::recurrent_ssm:
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 30c88b490..90b39ee11 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -23,13 +23,18 @@ static bool graph_cache_capabilities_cover_complete_state() {
+     auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+     auto * state = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+     ggml_set_input(input);
+-    auto * output = ggml_cpy(ctx.get(), input, state);
++    auto * block_output = ggml_scale(ctx.get(), input, 2.0f);
++    auto * output = ggml_cpy(ctx.get(), block_output, state);
+     auto * graph = ggml_new_graph_custom(ctx.get(), 32, false);
+     ggml_build_forward_expand(graph, output);
++    std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)> buffer(
++            ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), ggml_backend_cpu_buffer_type()),
++            ggml_backend_buffer_free);
++    if (!buffer) { return false; }
+     llm_graph_result result(32);
+     result.block_boundaries = {
+         {skippy_block_boundary_kind::entry, 0, input},
+-        {skippy_block_boundary_kind::exit, 0, output},
++        {skippy_block_boundary_kind::exit, 0, block_output},
+     };
+     const auto capabilities = [&](skippy_state_kind kind) {
+         result.replace_with_stage_graph(graph, {}, {}, {
+@@ -38,15 +43,25 @@ static bool graph_cache_capabilities_cover_complete_state() {
+         });
+         return skippy_graph_cache_capabilities(result);
+     };
+-    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION |
++            SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
+             SKIPPY_MEMORY_CACHE_FULL_STATE;
+     if (capabilities(skippy_state_kind::kv_key) != dense ||
+             capabilities(skippy_state_kind::kv_value) != dense ||
+-            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
+-            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::auxiliary_output) != dense ||
++            capabilities(skippy_state_kind::recurrent_conv) != dense ||
++            capabilities(skippy_state_kind::recurrent_ssm) != dense ||
+             capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
+         return false;
+     }
++    // Declared auxiliary outputs still validate their exact write target.
++    capabilities(skippy_state_kind::auxiliary_output);
++    result.state_effects.back().storage = input;
++    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
++    // An unregistered external write cannot become cache-safe merely because
++    // it looks like output scratch. Outside a block it remains inadmissible.
++    result.replace_with_stage_graph(graph, {}, {}, {});
++    if (skippy_graph_cache_capabilities(result) != 0) { return false; }
+     capabilities(skippy_state_kind::kv_key);
+     // Malformed ownership and missing graph admission must never advertise a
+     // partial exporter, even when the underlying memory supports KV pages.
+-- 
+2.54.0 (Apple Git-157)
+

@@ -13,7 +13,9 @@ use skippy_runtime::{
     StageSession,
 };
 
+mod concurrent_dflash;
 mod dflash;
+mod verify_reference;
 
 const DEFAULT_CORPUS: &str = "skippy/evals/corpora/kv_mixed_prompts.jsonl";
 
@@ -49,6 +51,21 @@ struct Args {
     /// Treat the draft as a DFlash/DFlash2 block drafter attached to the target.
     #[arg(long)]
     dflash: bool,
+    /// Target rollback snapshots; DFlash defaults to window + anchor.
+    #[arg(long)]
+    recurrent_rollback_tokens: Option<u32>,
+    /// Diagnose batched verification on the serial baseline's exact inputs.
+    #[arg(long)]
+    verify_reference: bool,
+    /// Concurrent DFlash lanes; provide exactly one prompt per lane.
+    #[arg(long, default_value_t = 1)]
+    dflash_lanes: usize,
+    /// Combine equal-length concurrent verify windows in one target forward.
+    #[arg(long)]
+    shared_verify: bool,
+    /// Combine concurrent noise blocks in one draft forward.
+    #[arg(long)]
+    shared_draft: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +77,11 @@ struct PromptCase {
 
 #[derive(Debug, Serialize)]
 struct Report {
+    target_recurrent_rollback_tokens: u32,
+    draft_backend_readout: bool,
+    draft_backend_token_rows: u64,
+    draft_host_fallback_rows: u64,
+    draft_device_feature_rows: u64,
     target_model_path: String,
     draft_model_path: String,
     ctx_size: u32,
@@ -73,6 +95,13 @@ struct Report {
 
 #[derive(Debug, Default, Serialize)]
 struct Summary {
+    verify_windows_in_place: u64,
+    verify_windows_checkpointed: u64,
+    baseline_decode_wall_ms: f64,
+    speculative_decode_wall_ms: f64,
+    baseline_wall_tokens_per_second: f64,
+    speculative_wall_tokens_per_second: f64,
+    speculative_wall_speedup_vs_baseline: f64,
     correct_prompts: usize,
     mismatched_prompts: usize,
     prompt_tokens_total: usize,
@@ -96,6 +125,10 @@ struct Summary {
 
 #[derive(Debug, Serialize)]
 struct PromptReport {
+    verify_windows_in_place: u64,
+    verify_windows_checkpointed: u64,
+    baseline_decode_wall_ms: f64,
+    speculative_decode_wall_ms: f64,
     id: String,
     category: Option<String>,
     prompt_tokens: usize,
@@ -118,10 +151,13 @@ struct PromptReport {
     speculative_ttft_ms: f64,
     baseline_text_preview: String,
     speculative_text_preview: String,
+    baseline_output_tokens: Vec<i32>,
+    speculative_output_tokens: Vec<i32>,
 }
 
 #[derive(Debug)]
 struct Generation {
+    decode_wall_ms: f64,
     tokens: Vec<i32>,
     prefill_ms: f64,
     decode_ms: f64,
@@ -130,6 +166,9 @@ struct Generation {
 
 #[derive(Debug)]
 struct SpecGeneration {
+    verify_windows_in_place: u64,
+    verify_windows_checkpointed: u64,
+    decode_wall_ms: f64,
     tokens: Vec<i32>,
     stats: SpecStats,
     target_prefill_ms: f64,
@@ -149,6 +188,8 @@ struct SpecStats {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    #[cfg(feature = "dynamic-native-runtime")]
+    skippy_runtime::test_support::require_native_runtime();
     if args.max_new_tokens == 0 {
         bail!("--max-new-tokens must be greater than zero");
     }
@@ -172,6 +213,21 @@ fn main() -> Result<()> {
     if prompts.is_empty() {
         bail!("prompt set is empty");
     }
+    if args.dflash_lanes == 0
+        || (args.dflash_lanes > 1
+            && ((!args.dflash && !args.verify_reference) || prompts.len() != args.dflash_lanes))
+    {
+        bail!("multiple lanes require --dflash or --verify-reference, and one prompt per lane");
+    }
+    if args.shared_verify && args.dflash_lanes < 2 {
+        bail!("--shared-verify requires multiple DFlash lanes");
+    }
+    if args.shared_draft && args.dflash_lanes < 2 {
+        bail!("--shared-draft requires multiple DFlash lanes");
+    }
+    if args.shared_draft && args.verify_reference {
+        bail!("--verify-reference does not run a draft model");
+    }
 
     eprintln!(
         "loading target={} draft={} prompts={} ctx={} max_new_tokens={} window={}",
@@ -185,11 +241,12 @@ fn main() -> Result<()> {
 
     let mut target_config =
         full_model_config(&args.target_model_path, args.ctx_size, args.n_gpu_layers)?;
-    // This context later verifies drafts, even though its first run is serial.
-    // DFlash includes the current-token anchor; reserve that bound for both
-    // benchmark modes rather than relying on a native default.
-    target_config.recurrent_rollback_tokens =
-        u32::try_from(args.speculative_window.saturating_add(1)).unwrap_or(u32::MAX);
+    target_config.lane_count =
+        u32::try_from(args.dflash_lanes).context("lane count exceeds u32")?;
+    // Both DFlash and native MTP verify drafts after the serial baseline.
+    target_config.recurrent_rollback_tokens = args.recurrent_rollback_tokens.unwrap_or_else(|| {
+        u32::try_from(args.speculative_window.saturating_add(1)).unwrap_or(u32::MAX)
+    });
     let mut target = StageModel::open(&args.target_model_path, &target_config)
         .with_context(|| format!("open target model {}", args.target_model_path.display()))?;
     // Baselines run before any draft exists: an attached DFlash draft makes
@@ -199,7 +256,18 @@ fn main() -> Result<()> {
         eprintln!("baseline {}/{} {}", index + 1, prompts.len(), prompt.id);
         baselines.push(run_baseline(&args, &target, prompt)?);
     }
+    if args.verify_reference {
+        // Capture can change target graph fusion. Exercise that graph when
+        // requested, while still never proposing or rolling back draft tokens.
+        if args.dflash {
+            load_draft(&args, &mut target, &target_config)?;
+        }
+        return verify_reference::run(&args, &target, &baselines);
+    }
     let draft = load_draft(&args, &mut target, &target_config)?;
+    if args.dflash_lanes > 1 {
+        return concurrent_dflash::run(&args, &target, &prompts, &baselines);
+    }
 
     let mut reports = Vec::with_capacity(prompts.len());
     for (index, (prompt, baseline)) in prompts.iter().zip(baselines).enumerate() {
@@ -214,7 +282,13 @@ fn main() -> Result<()> {
     }
 
     let summary = summarize(&reports);
+    let (draft_backend_token_rows, draft_host_fallback_rows) = target.dflash_backend_readout_rows();
     let report = Report {
+        target_recurrent_rollback_tokens: target_config.recurrent_rollback_tokens,
+        draft_backend_readout: target.dflash_backend_readout_enabled(),
+        draft_backend_token_rows,
+        draft_host_fallback_rows,
+        draft_device_feature_rows: target.dflash_device_feature_rows(),
         target_model_path: args.target_model_path.display().to_string(),
         draft_model_path: args.draft_model_path.display().to_string(),
         ctx_size: args.ctx_size,
@@ -414,6 +488,10 @@ fn run_prompt_pair(
     };
 
     Ok(PromptReport {
+        verify_windows_in_place: speculative.verify_windows_in_place,
+        verify_windows_checkpointed: speculative.verify_windows_checkpointed,
+        baseline_decode_wall_ms: baseline.decode_wall_ms,
+        speculative_decode_wall_ms: speculative.decode_wall_ms,
         id: prompt.id.clone(),
         category: prompt.category.clone(),
         prompt_tokens: target_tokens.len(),
@@ -436,6 +514,8 @@ fn run_prompt_pair(
         speculative_ttft_ms: speculative.ttft_ms,
         baseline_text_preview: preview_text(target, &baseline.tokens)?,
         speculative_text_preview: preview_text(target, &speculative.tokens)?,
+        baseline_output_tokens: baseline.tokens,
+        speculative_output_tokens: speculative.tokens,
     })
 }
 
@@ -447,7 +527,7 @@ fn generate_baseline(
     let mut session = model.create_session()?;
     let prefill_started = Instant::now();
     if prompt_tokens.len() > 1 {
-        session.prefill_chunk(&prompt_tokens[..prompt_tokens.len() - 1])?;
+        session.prefill_chunked(&prompt_tokens[..prompt_tokens.len() - 1])?;
     }
     let prefill_ms = elapsed_ms(prefill_started);
     let mut current = *prompt_tokens.last().expect("checked non-empty prompt");
@@ -468,6 +548,7 @@ fn generate_baseline(
         }
     }
     Ok(Generation {
+        decode_wall_ms: elapsed_ms(started),
         tokens: generated,
         prefill_ms,
         decode_ms,
@@ -490,7 +571,7 @@ fn generate_speculative(
     let mut draft_session = draft.create_session()?;
     let target_prefill_started = Instant::now();
     if run.prompt_tokens.len() > 1 {
-        target_session.prefill_chunk(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
+        target_session.prefill_chunked(&run.prompt_tokens[..run.prompt_tokens.len() - 1])?;
     }
     let target_prefill_ms = elapsed_ms(target_prefill_started);
     let draft_prefill_started = Instant::now();
@@ -561,6 +642,9 @@ fn generate_speculative(
     }
 
     Ok(SpecGeneration {
+        verify_windows_in_place: 0,
+        verify_windows_checkpointed: 0,
+        decode_wall_ms: elapsed_ms(started),
         tokens: generated,
         stats,
         target_prefill_ms,
@@ -574,7 +658,7 @@ fn generate_speculative(
 fn reset_draft_to_context(session: &mut StageSession, context_tokens: &[i32]) -> Result<()> {
     session.reset()?;
     if context_tokens.len() > 1 {
-        session.prefill_chunk(&context_tokens[..context_tokens.len() - 1])?;
+        session.prefill_chunked(&context_tokens[..context_tokens.len() - 1])?;
     }
     Ok(())
 }
@@ -597,6 +681,10 @@ fn preview_text(model: &StageModel, tokens: &[i32]) -> Result<String> {
 fn summarize(prompts: &[PromptReport]) -> Summary {
     let mut summary = Summary::default();
     for prompt in prompts {
+        summary.verify_windows_in_place += prompt.verify_windows_in_place;
+        summary.verify_windows_checkpointed += prompt.verify_windows_checkpointed;
+        summary.baseline_decode_wall_ms += prompt.baseline_decode_wall_ms;
+        summary.speculative_decode_wall_ms += prompt.speculative_decode_wall_ms;
         summary.correct_prompts += usize::from(prompt.correct);
         summary.mismatched_prompts += usize::from(!prompt.correct);
         summary.prompt_tokens_total += prompt.prompt_tokens;
@@ -610,6 +698,18 @@ fn summarize(prompts: &[PromptReport]) -> Summary {
         summary.speculative_target_decode_ms += prompt.speculative_target_decode_ms;
         summary.speculative_draft_decode_ms += prompt.speculative_draft_decode_ms;
     }
+    summary.baseline_wall_tokens_per_second = tokens_per_second(
+        summary.baseline_generated_total,
+        summary.baseline_decode_wall_ms,
+    );
+    summary.speculative_wall_tokens_per_second = tokens_per_second(
+        summary.speculative_generated_total,
+        summary.speculative_decode_wall_ms,
+    );
+    summary.speculative_wall_speedup_vs_baseline = speedup(
+        summary.baseline_decode_wall_ms,
+        summary.speculative_decode_wall_ms,
+    );
     summary.accept_rate = if summary.draft_tokens == 0 {
         0.0
     } else {
@@ -639,8 +739,6 @@ fn summarize(prompts: &[PromptReport]) -> Summary {
 
 fn print_human_summary(report: &Report) {
     let summary = &report.summary;
-    let current_spec_total_ms =
-        summary.speculative_target_decode_ms + summary.speculative_draft_decode_ms;
     eprintln!("speculative pair benchmark:");
     eprintln!(
         "  prompts       total={} correct={} mismatched={}",
@@ -670,18 +768,18 @@ fn print_human_summary(report: &Report) {
     eprintln!(
         "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10}",
         "target baseline",
-        summary.baseline_decode_ms,
-        summary.baseline_tokens_per_second,
+        summary.baseline_decode_wall_ms,
+        summary.baseline_wall_tokens_per_second,
         1.0,
-        "actual"
+        "wall"
     );
     eprintln!(
         "{:<28} {:>12.2} {:>12.2} {:>10.2}x {:>10}",
         "target/draft speculative",
-        current_spec_total_ms,
-        summary.speculative_total_tokens_per_second,
-        summary.speculative_speedup_vs_baseline,
-        "actual"
+        summary.speculative_decode_wall_ms,
+        summary.speculative_wall_tokens_per_second,
+        summary.speculative_wall_speedup_vs_baseline,
+        "wall"
     );
     eprintln!();
     eprintln!(

@@ -13,9 +13,17 @@
 //! than through the Skippy model ABI. Draft state is advisory: a failed draft
 //! operation clears that lane's draft cache and never fails the target.
 
+mod backend_readout;
 mod context;
+mod device_features;
 mod draft_batch;
+mod draft_tensors;
 mod feature_wire;
+#[cfg(test)]
+mod head_isolation_tests;
+mod heads;
+mod noise_blocks;
+pub mod proposal_batch;
 mod readout;
 mod split;
 
@@ -37,6 +45,8 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
+use draft_tensors::{DraftTensors, inspect_draft_tensors};
+use noise_blocks::NoiseBlock;
 use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
@@ -108,6 +118,7 @@ pub struct DFlashProposal {
     pub tokens: Vec<i32>,
     /// Draft time for this block: the block decode, plus the feature rows of
     /// the last decode when their injection was deferred to it.
+    /// A shared forward charges each active block an equal share of its time.
     pub proposal_compute_us: u64,
 }
 
@@ -118,6 +129,8 @@ pub struct DFlashProposal {
 pub struct DFlashDraftStats {
     /// Block drafts, including empty ones from a draft without context.
     pub proposals: u64,
+    /// Proposals whose noise block shared a forward with another lane.
+    pub shared_proposals: u64,
     /// Time in block decodes.
     pub propose_us: u64,
     /// Feature injections of decode rows, and the time they took.
@@ -166,7 +179,10 @@ pub(crate) struct DFlashDraft {
     mask_token: i32,
     mrope: bool,
     layout: BlockLayout,
+    noise_batch_layout: heads::NoiseBatchLayout,
     batch: DraftBatch,
+    backend_readout: Option<backend_readout::BackendReadout>,
+    device_features: Option<device_features::DeviceFeatures>,
 }
 
 // The draft model and context are only touched behind the owning Mutex, and
@@ -227,10 +243,13 @@ impl DFlashDraft {
             mask_token: -1,
             mrope: false,
             layout: BlockLayout::BonusAnchor,
+            noise_batch_layout: heads::NoiseBatchLayout::Independent,
             batch: DraftBatch::default(),
+            backend_readout: None,
+            device_features: None,
         };
         // From here the Drop impl owns the native handles.
-        draft.configure(target_model, options, config, tensors.markov)?;
+        draft.configure(target_model, options, config, &tensors)?;
         Ok(draft)
     }
 
@@ -239,7 +258,7 @@ impl DFlashDraft {
         target_model: *const Opaque,
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
-        markov: bool,
+        tensors: &DraftTensors,
     ) -> Result<()> {
         let api = self.api;
         let architecture =
@@ -323,7 +342,7 @@ impl DFlashDraft {
                 self.info.block_size
             );
         }
-        self.select_variant(markov)?;
+        self.select_variant(tensors)?;
         self.info.max_draft_tokens = self.layout.capacity(
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
@@ -335,6 +354,15 @@ impl DFlashDraft {
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "dflash.attention.causal") }
                 .is_some_and(|value| value == "true");
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
+        if !dflash2 && backend_readout::enabled() {
+            self.backend_readout = api.sampling.and_then(|sampling| {
+                backend_readout::BackendReadout::attach(sampling, self.ctx, self.lanes)
+            });
+            write_native_log_note(format!(
+                "dflash backend readout enabled={}",
+                self.backend_readout.is_some()
+            ));
+        }
         unsafe {
             // DFlash2 reads its lattice from every row of the nextn output.
             (api.set_embeddings_nextn)(self.ctx, true, !dflash2);
@@ -344,6 +372,32 @@ impl DFlashDraft {
                     (api.set_embeddings_layer_inp)(self.target_ctx, lid, true);
                 }
             }
+        }
+        if device_features::enabled()
+            && device_features::eligible(
+                config.layer_start,
+                config.layer_end,
+                target_layers,
+                &self.local_layers,
+                &self.info.target_layer_ids,
+            )
+        {
+            self.device_features = api.device_features.and_then(|device| {
+                device_features::DeviceFeatures::attach(
+                    device,
+                    self.target_ctx,
+                    self.ctx,
+                    device_features::FeatureShape {
+                        ubatch: self.n_ubatch,
+                        capacity: self.target_n_batch,
+                        mrope: self.mrope,
+                    },
+                )
+            });
+            write_native_log_note(format!(
+                "dflash device features enabled={}",
+                self.device_features.is_some()
+            ));
         }
         write_native_log_note(format!(
             "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} input_layer={:?} mask_token={} causal={causal} mrope={}",
@@ -356,35 +410,6 @@ impl DFlashDraft {
             self.mask_token,
             self.mrope,
         ));
-        Ok(())
-    }
-
-    /// Picks the draft family and its block layout: DSpark when the draft has
-    /// a Markov head, DFlash2 when it has a selector lattice, else DFlash.
-    fn select_variant(&mut self, markov: bool) -> Result<()> {
-        let selector_top_k = unsafe { (self.api.model_dflash_selector_top_k)(self.model) };
-        if markov {
-            if selector_top_k > 0 {
-                bail!(
-                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
-                );
-            }
-            self.info.variant = DFlashVariant::DSpark;
-            let anchor_first = unsafe {
-                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
-            }
-            .is_none_or(|value| value == "true");
-            if anchor_first {
-                self.layout = BlockLayout::AnchorFirst;
-            }
-        } else if selector_top_k > 0 {
-            self.info.variant = DFlashVariant::DFlash2;
-            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
-            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
-            if row_used > self.n_embd_draft {
-                bail!("draft hidden size is too small for the DFlash2 selector lattice");
-            }
-        }
         Ok(())
     }
 
@@ -409,6 +434,9 @@ impl DFlashDraft {
     ) -> Result<()> {
         if positions.is_empty() {
             return Ok(());
+        }
+        if let Some(device) = self.device_features.as_mut() {
+            return device.ingest(seq_id, first_row, positions);
         }
         let layers = self.feature_layers(first_row, positions.len(), remote)?;
         let n_embd = self.n_embd_target;
@@ -542,81 +570,13 @@ impl DFlashDraft {
             (self.api.memory_seq_rm)(memory, seq_id, -1, -1);
         }
     }
-
-    /// Drafts up to `max_tokens` tokens that follow `anchor`, the token the
-    /// target will consume next at `anchor_position`.
-    pub(crate) fn propose(
-        &mut self,
-        seq_id: i32,
-        anchor_position: i32,
-        anchor: i32,
-        max_tokens: usize,
-    ) -> Result<Vec<i32>> {
-        let draft_tokens = max_tokens.min(self.info.max_draft_tokens);
-        if draft_tokens == 0 {
-            return Ok(Vec::new());
-        }
-        let dflash2 = self.info.variant == DFlashVariant::DFlash2;
-        // Rows a split final stage verified past the anchor are still cached.
-        self.truncate(seq_id, anchor_position);
-        // Every block row is an output, as upstream requests: marking only the
-        // mask rows returns logits shifted by one row. DFlash2 reads its
-        // lattice from the nextn output instead and needs no logits. A DSpark
-        // block is never longer than its trained block, past which the draft
-        // graph leaves out the Markov head.
-        self.batch.clear();
-        for index in 0..self.layout.block_tokens(draft_tokens) {
-            let token = if index == 0 { anchor } else { self.mask_token };
-            let position = anchor_position
-                .checked_add(i32::try_from(index).context("draft index exceeds i32")?)
-                .context("draft position overflow")?;
-            self.batch.push_token(token, position, seq_id, !dflash2);
-        }
-        let rc = unsafe { (self.api.decode)(self.ctx, self.batch.as_raw(self.mrope)) };
-        let tokens = if rc == 0 {
-            self.read_block(draft_tokens)
-        } else {
-            Err(anyhow!("draft block decode failed with status {rc}"))
-        };
-        // The noise block is scratch; only target features persist.
-        self.truncate(seq_id, anchor_position);
-        tokens
-    }
-
-    fn read_block(&self, draft_tokens: usize) -> Result<Vec<i32>> {
-        if self.info.variant == DFlashVariant::DFlash2 {
-            let lattice = unsafe { (self.api.get_embeddings_nextn)(self.ctx) };
-            if lattice.is_null() {
-                bail!("DFlash2 selector produced no lattice");
-            }
-            let rows = draft_tokens + 1;
-            let lattice = unsafe {
-                std::slice::from_raw_parts(lattice.cast_const(), rows * self.n_embd_draft)
-            };
-            let draft_rows = lattice.chunks_exact(self.n_embd_draft).skip(1);
-            return Ok(walk_dflash2_lattice(
-                draft_rows,
-                self.info.selector_top_k,
-                self.n_vocab,
-            ));
-        }
-        let mut tokens = Vec::with_capacity(draft_tokens);
-        let first = self.layout.first_draft_row();
-        for row in first..first + draft_tokens {
-            let row = i32::try_from(row).context("draft row exceeds i32")?;
-            let logits = unsafe { (self.api.get_logits_ith)(self.ctx, row) };
-            if logits.is_null() {
-                bail!("draft produced no logits for block row {row}");
-            }
-            let logits = unsafe { std::slice::from_raw_parts(logits.cast_const(), self.n_vocab) };
-            tokens.push(argmax_token(logits).context("draft logits row is empty")?);
-        }
-        Ok(tokens)
-    }
 }
 
 impl Drop for DFlashDraft {
     fn drop(&mut self) {
+        // Detach/free samplers before their borrowed context is destroyed.
+        self.backend_readout.take();
+        self.device_features.take();
         unsafe {
             for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
                 if local {
@@ -675,25 +635,6 @@ fn check_lilicorr_draft(model: *const Opaque) -> Result<()> {
 
 fn lilicorr_headless_enabled_by(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("1" | "true"))
-}
-
-/// What a draft's tensors say about how it runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DraftTensors {
-    /// The draft carries its own token embeddings.
-    embeds: bool,
-    /// The draft is a DSpark draft with a Markov head.
-    markov: bool,
-}
-
-fn inspect_draft_tensors(path: &Path) -> Result<DraftTensors> {
-    let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
-        .with_context(|| format!("read draft GGUF {}", path.display()))?;
-    let has = |name: &str| catalog.tensors.iter().any(|tensor| tensor.name == name);
-    Ok(DraftTensors {
-        embeds: has(DFLASH_BORROWED_TARGET_TENSOR),
-        markov: has(DSPARK_MARKOV_TENSOR),
-    })
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -804,7 +745,17 @@ fn load_draft(
         device_name,
         model_params.n_gpu_layers
     ));
-    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
+    let mut context_params = draft_context_params(api, target_ctx, config, lanes)?;
+    if backend_readout::enabled() && api.sampling.is_some() {
+        // Reserve only the allowed noise block, rather than the full prefill
+        // batch. Anchor-first blocks need no additional row, but reserving it
+        // is harmless and keeps both layouts within the trained block bound.
+        context_params.n_outputs_max_per_seq = options
+            .max_draft_tokens
+            .unwrap_or(MAX_BLOCK_SIZE - 1)
+            .saturating_add(1)
+            .clamp(1, MAX_BLOCK_SIZE) as u32;
+    }
     let model = unsafe { (api.model_load_from_file)(path.as_ptr(), model_params) };
     if model.is_null() {
         bail!(
@@ -1296,7 +1247,12 @@ impl StageSession {
             }
         };
         let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
-        if defer && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
+        // Device rows borrow the current capture buffer. Consume them now;
+        // deferred host rows instead own a copy that survives another decode.
+        let device_rows = link
+            .with_draft(|draft, _| draft.device_features.is_some())
+            .unwrap_or(false);
+        if defer && !device_rows && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
             let gathered =
                 link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
             match gathered {
@@ -1513,6 +1469,34 @@ impl StageModel {
         let draft = self.dflash_draft()?;
         Some(lock_draft(draft).info().clone())
     }
+
+    /// Whether the attached draft uses backend sampling rather than requesting
+    /// host logits. DFlash2's lattice readout is independent of this path.
+    pub fn dflash_backend_readout_enabled(&self) -> bool {
+        self.dflash_draft()
+            .is_some_and(|draft| lock_draft(draft).backend_readout.is_some())
+    }
+
+    /// Observed backend token rows and rows that fell back to host logits for
+    /// the attached draft's lifetime. Attachment alone does not prove offload.
+    pub fn dflash_backend_readout_rows(&self) -> (u64, u64) {
+        self.dflash_draft().map_or((0, 0), |draft| {
+            lock_draft(draft)
+                .backend_readout
+                .as_ref()
+                .map_or((0, 0), backend_readout::BackendReadout::rows)
+        })
+    }
+
+    /// Feature rows consumed directly from the target's device capture buffer.
+    pub fn dflash_device_feature_rows(&self) -> u64 {
+        self.dflash_draft().map_or(0, |draft| {
+            lock_draft(draft)
+                .device_features
+                .as_ref()
+                .map_or(0, device_features::DeviceFeatures::rows)
+        })
+    }
 }
 
 /// Reinstalls a stage program after layer capture changed the target's
@@ -1679,53 +1663,6 @@ mod tests {
         let mut with_embeddings = final_stage.to_vec();
         with_embeddings.push("token_embd.weight".to_string());
         assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
-    }
-
-    /// A GGUF holding one-float tensors named `names`.
-    fn gguf_with_tensors(names: &[&str]) -> tempfile::NamedTempFile {
-        use std::io::Write;
-        let mut bytes = b"GGUF".to_vec();
-        bytes.extend_from_slice(&3u32.to_le_bytes());
-        bytes.extend_from_slice(&(names.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        for (index, name) in names.iter().enumerate() {
-            bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.extend_from_slice(&1u32.to_le_bytes());
-            bytes.extend_from_slice(&1u64.to_le_bytes());
-            bytes.extend_from_slice(&0u32.to_le_bytes()); // f32
-            bytes.extend_from_slice(&(32 * index as u64).to_le_bytes());
-        }
-        bytes.resize(bytes.len().next_multiple_of(32), 0);
-        bytes.resize(bytes.len() + 32 * names.len(), 0);
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        file.write_all(&bytes).unwrap();
-        file
-    }
-
-    #[test]
-    fn a_markov_head_marks_a_dspark_draft() {
-        let dflash = gguf_with_tensors(&["blk.0.attn_q.weight", "fc.weight"]);
-        assert_eq!(
-            inspect_draft_tensors(dflash.path()).unwrap(),
-            DraftTensors {
-                embeds: false,
-                markov: false
-            }
-        );
-        let dspark = gguf_with_tensors(&[
-            "blk.0.attn_q.weight",
-            "token_embd.weight",
-            "markov_w1.weight",
-            "markov_w2.weight",
-        ]);
-        assert_eq!(
-            inspect_draft_tensors(dspark.path()).unwrap(),
-            DraftTensors {
-                embeds: true,
-                markov: true
-            }
-        );
     }
 
     #[test]

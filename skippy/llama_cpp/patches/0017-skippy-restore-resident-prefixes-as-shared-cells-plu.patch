@@ -1,7 +1,7 @@
-From e9b83dde5443d312b392a00adde5a787109d9ca7 Mon Sep 17 00:00:00 2001
+From cdf7d52e05d7dc2dce032599f3f990d0ab79d5a8 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Tue, 10 Nov 2026 21:00:00 +1100
-Subject: [PATCH 17/35] skippy: restore resident prefixes as shared cells plus
+Subject: [PATCH] skippy: restore resident prefixes as shared cells plus
  recurrent checkpoints
 
 The move to the new llama.cpp pin rebuilt the native queue from an older
@@ -47,6 +47,31 @@ follow from there.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ include/skippy/common.h                       |   2 +-
+ include/skippy/runtime.h                      |   2 +-
+ include/skippy/state.h                        |  46 +-
+ src/CMakeLists.txt                            |  11 +-
+ src/llama-context.cpp                         |   4 +
+ src/llama-io.h                                |   6 +
+ src/skippy/model_loading.cpp                  |   6 +-
+ src/skippy/resident_prefix.cpp                | 438 +++++++++++++++++
+ src/skippy/runtime_types.h                    |  13 +-
+ src/skippy/session.cpp                        |  22 +-
+ src/skippy/state.cpp                          | 443 +-----------------
+ src/skippy/state_memory.cpp                   |  21 +-
+ src/skippy/tests/resident_attention.cpp       | 105 +++++
+ src/skippy/tests/resident_attention.h         |  15 +
+ src/skippy/tests/resident_checkpoint_gpu.cpp  | 287 ++++++++++++
+ .../tests/resident_checkpoint_writer.cpp      | 126 +++++
+ src/skippy/tests/sampling_history.cpp         | 325 ++++++++++++-
+ tests/test-skippy-kv-page-export.cpp          |   4 +-
+ 18 files changed, 1379 insertions(+), 497 deletions(-)
+ create mode 100644 src/skippy/resident_prefix.cpp
+ create mode 100644 src/skippy/tests/resident_attention.cpp
+ create mode 100644 src/skippy/tests/resident_attention.h
+ create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
+ create mode 100644 src/skippy/tests/resident_checkpoint_writer.cpp
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 3448095a1..cbba91849 100644
@@ -166,7 +191,7 @@ index e8d0874a1..6d9028a18 100644
  LLAMA_API enum skippy_status skippy_session_memory_used_cells(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 4f4fc1cd1..cfd896714 100644
+index 4f4fc1cd1..4869c0e34 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -89,6 +89,7 @@ add_library(llama
@@ -177,13 +202,14 @@ index 4f4fc1cd1..cfd896714 100644
              skippy/state_memory.cpp
              skippy/state_effects.cpp
              skippy/speculative_decoding.cpp
-@@ -434,12 +435,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -434,12 +435,18 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
      # lfm2's fixture slides its attention window, so it checkpoints every window.
      add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
 -    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
 +    add_executable(skippy-sampling-history
 +        skippy/tests/sampling_history.cpp
++        skippy/tests/resident_attention.cpp
 +        skippy/tests/resident_checkpoint_gpu.cpp
 +        skippy/tests/resident_checkpoint_writer.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
@@ -1320,6 +1346,138 @@ index e271852ff..806e79d72 100644
 +    }
 +    return capabilities;
  }
+diff --git a/src/skippy/tests/resident_attention.cpp b/src/skippy/tests/resident_attention.cpp
+new file mode 100644
+index 000000000..b7028c357
+--- /dev/null
++++ b/src/skippy/tests/resident_attention.cpp
+@@ -0,0 +1,105 @@
++// Typed resident-prefix proofs: stored cache types and the actual attention
++// graph must agree on the selected backend, including physical row lists.
++#include "resident_attention.h"
++#include "../runtime_types.h"
++#include "llama-model.h"
++#include "llama-graph.h"
++#include "ggml-backend.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <iterator>
++#include <vector>
++
++#define CHECK(condition) do { if (!(condition)) { \
++    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
++    std::exit(1); } } while (0)
++
++namespace skippy_test {
++namespace resident_attention {
++
++int32_t cache_type(const char * name) {
++    for (const auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
++            GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
++        if (std::strcmp(name, ggml_type_name(type)) == 0) { return type; }
++    }
++    CHECK(false && "unsupported test KV type");
++    return -1;
++}
++
++static ggml_type verify_attention_read(skippy_model * model, ggml_tensor * input, int32_t stored_type) {
++    if (stored_type != GGML_TYPE_F32) {
++        CHECK(input->type == stored_type);
++        return input->type;
++    }
++    // Ordinary FA reads explicitly convert an F32 cache on its selected backend.
++    CHECK(input->type == GGML_TYPE_F16 && input->op == GGML_OP_CPY);
++    CHECK(input->src[0] && input->src[0]->type == GGML_TYPE_F32);
++    auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), input);
++    CHECK(backend && std::strcmp(ggml_backend_name(backend), model->config.selected_backend_device) == 0);
++    return input->type;
++}
++
++void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page) {
++    const auto & config = model->config;
++    const auto check_types = [&](uint32_t k, uint32_t v) {
++        CHECK(k == static_cast<uint32_t>(config.cache_type_k));
++        CHECK(v == static_cast<uint32_t>(config.cache_type_v));
++    };
++    if (page.component_count) {
++        CHECK(page.component_count <= std::size(page.components));
++        for (uint32_t i = 0; i < page.component_count; ++i) {
++            check_types(page.components[i].k_type, page.components[i].v_type);
++        }
++    } else {
++        check_types(page.k_type, page.v_type);
++    }
++    auto * result = model->ctx->get_gf_res_prev_active();
++    CHECK(result && result->get_gf());
++    auto * graph = result->get_gf();
++    int attention = 0;
++    int row_attention = 0;
++    ggml_type actual_k = GGML_TYPE_COUNT;
++    ggml_type actual_v = GGML_TYPE_COUNT;
++    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
++        auto * node = ggml_graph_node(graph, i);
++        if (node->op != GGML_OP_FLASH_ATTN_EXT) { continue; }
++        auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), node);
++        CHECK(backend && std::strcmp(ggml_backend_name(backend), config.selected_backend_device) == 0);
++        CHECK(node->src[6] == nullptr);
++        CHECK(ggml_backend_supports_op(backend, node));
++        if (const auto * rows = node->src[5]) {
++            CHECK(rows->type == GGML_TYPE_I32 && rows->buffer && rows->data);
++            CHECK(rows->ne[0] > 0 && rows->ne[0] % 256 == 0);
++            CHECK(rows->ne[1] == node->src[0]->ne[3] && rows->ne[2] == 1 && rows->ne[3] == 1);
++            CHECK(rows->ne[0] <= node->src[1]->ne[1]);
++            CHECK(node->src[1]->ne[3] == 1 && node->src[2]->ne[3] == 1);
++            CHECK(node->src[3] && node->src[3]->type == GGML_TYPE_F16);
++            CHECK(node->src[3]->ne[0] == rows->ne[0]);
++            CHECK(node->src[3]->ne[3] == node->src[0]->ne[3]);
++            CHECK(rows->nb[0] == sizeof(int32_t) && ggml_is_contiguous(rows));
++            std::vector<int32_t> physical(ggml_nelements(rows));
++            ggml_backend_tensor_get(rows, physical.data(), 0, ggml_nbytes(rows));
++            for (const auto row : physical) {
++                CHECK(row >= -1 && row < node->src[1]->ne[1]);
++            }
++            ++row_attention;
++        }
++        actual_k = verify_attention_read(model, node->src[1], config.cache_type_k);
++        actual_v = verify_attention_read(model, node->src[2], config.cache_type_v);
++        ++attention;
++    }
++    int expected_attention = 0;
++    for (uint32_t layer = 0; layer < model->model->hparams.n_layer(); ++layer) {
++        expected_attention += !model->model->hparams.is_recr(layer);
++    }
++    CHECK(attention > 0 && attention == expected_attention);
++    std::fprintf(stderr, "typed resident: backend=%s stored_K=%s stored_V=%s FA_K=%s FA_V=%s attention=%d expected=%d components=%u ordinary_nodes=%d rows_nodes=%d\n",
++            config.selected_backend_device, ggml_type_name(static_cast<ggml_type>(config.cache_type_k)),
++            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), ggml_type_name(actual_k), ggml_type_name(actual_v),
++            attention, expected_attention, page.component_count, attention - row_attention, row_attention);
++}
++
++} // namespace resident_attention
++} // namespace skippy_test
+diff --git a/src/skippy/tests/resident_attention.h b/src/skippy/tests/resident_attention.h
+new file mode 100644
+index 000000000..72a6d3c7b
+--- /dev/null
++++ b/src/skippy/tests/resident_attention.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++#include <cstdint>
++
++struct skippy_model;
++struct skippy_kv_page_desc;
++
++namespace skippy_test {
++namespace resident_attention {
++
++int32_t cache_type(const char * name);
++void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page);
++
++} // namespace resident_attention
++} // namespace skippy_test
 diff --git a/src/skippy/tests/resident_checkpoint_gpu.cpp b/src/skippy/tests/resident_checkpoint_gpu.cpp
 new file mode 100644
 index 000000000..691e92c37
@@ -1746,10 +1904,15 @@ index 000000000..d08029062
 +    return 0;
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index 0c81c9d47..1d0ef71f1 100644
+index 0c81c9d47..cf4e1312d 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -5,17 +5,21 @@
+@@ -1,30 +1,39 @@
+ #include "skippy.h"
++#include "resident_attention.h"
+ #include "../runtime_types.h"
+ #include "../sampling_internal.h"
+ #include "../sampling_argmax.h"
  #include "../runtime_support.h"
  #include "../verify_window.h"
  #include "llama-model.h"
@@ -1771,17 +1934,20 @@ index 0c81c9d47..1d0ef71f1 100644
  
  #define CHECK(condition) do { if (!(condition)) { \
      std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
-@@ -25,6 +29,9 @@ namespace {
- 
- bool require_recurrent = false;
+     std::exit(1); } } while (0)
  
 +int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
 +int skippy_test_resident_checkpoint_writer();
 +
+ namespace {
+ 
+ bool require_recurrent = false;
+ 
++
  void ok(skippy_status status, skippy_error * error) {
      if (status != SKIPPY_STATUS_OK) {
          std::fprintf(stderr, "native failure: %s\n", error ? error->message : "no detail");
-@@ -33,6 +40,31 @@ void ok(skippy_status status, skippy_error * error) {
+@@ -33,6 +42,31 @@ void ok(skippy_status status, skippy_error * error) {
      skippy_error_free(error);
  }
  
@@ -1813,7 +1979,62 @@ index 0c81c9d47..1d0ef71f1 100644
  void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
      size_t bytes = 0;
      skippy_error * error = nullptr;
-@@ -570,6 +602,174 @@ void state_round_trip(skippy_model * model) {
+@@ -465,24 +499,24 @@ std::vector<uint8_t> export_page(skippy_session * session, size_t token_count) {
+     return payload;
+ }
+ 
+-std::vector<uint8_t> export_recurrent(skippy_session * session) {
++std::vector<uint8_t> export_stage_state(skippy_session * session) {
+     skippy_error * error = nullptr;
+     size_t bytes = 0;
+-    auto status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
++    auto status = skippy_export_state(session, 0, stage_layers(session), nullptr, 0, &bytes, &error);
+     CHECK(status == SKIPPY_STATUS_BUFFER_TOO_SMALL || status == SKIPPY_STATUS_OK);
+     skippy_error_free(error);
+     error = nullptr;
+     std::vector<uint8_t> payload(bytes);
+-    status = skippy_export_recurrent_state(session, payload.data(), payload.size(), &bytes, &error);
++    status = skippy_export_state(session, 0, stage_layers(session), payload.data(), payload.size(), &bytes, &error);
+     ok(status, error);
+     payload.resize(bytes);
+     return payload;
+ }
+ 
+-void restore_recurrent(skippy_session * session, const std::vector<uint8_t> & payload,
++void restore_stage_state(skippy_session * session, const std::vector<uint8_t> & payload,
+         const std::vector<llama_token> & prefix) {
+     skippy_error * error = nullptr;
+-    auto status = skippy_import_recurrent_state(session, payload.data(), payload.size(), &error);
++    auto status = skippy_import_state(session, 0, stage_layers(session), payload.data(), payload.size(), &error);
+     ok(status, error);
+     error = nullptr;
+     status = skippy_session_set_position(session, prefix.size(), &error);
+@@ -533,12 +567,12 @@ void state_round_trip(skippy_model * model) {
+     prefill(source, prefix);
+     const auto source_page = export_page(source, prefix.size());
+     CHECK(!source_page.empty());
+-    const auto recurrent = export_recurrent(source);
+-    CHECK(!recurrent.empty());
++    const auto checkpoint = export_stage_state(source);
++    CHECK(!checkpoint.empty());
+     release(source);
+ 
+     auto * restored = create(model);
+-    restore_recurrent(restored, recurrent, prefix);
++    restore_stage_state(restored, checkpoint, prefix);
+     const auto restored_page = export_page(restored, prefix.size());
+     CHECK(restored_page.size() == source_page.size());
+     CHECK(std::memcmp(restored_page.data(), source_page.data(), source_page.size()) == 0);
+@@ -551,7 +585,7 @@ void state_round_trip(skippy_model * model) {
+     const auto cold_logits = decode_logits(cold, suffix.back());
+     release(cold);
+     auto * warm = create(model);
+-    restore_recurrent(warm, recurrent, prefix);
++    restore_stage_state(warm, checkpoint, prefix);
+     prefill(warm, suffix);
+     const auto warm_logits = decode_logits(warm, suffix.back());
+     release(warm);
+@@ -570,6 +604,174 @@ void state_round_trip(skippy_model * model) {
      CHECK(max_delta == 0.0f);
  }
  
@@ -1842,7 +2063,7 @@ index 0c81c9d47..1d0ef71f1 100644
 +    CHECK(checkpoint_bytes >= prefix.size() * sizeof(llama_token));
 +    const auto source_page = export_page(source, prefix.size());
 +    snapshot persistent(source, false);
-+    if (typed) { verify_typed_attention(model, persistent.page); }
++    if (typed) { skippy_test::resident_attention::verify_typed_attention(model, persistent.page); }
 +    if (require_recurrent) {
 +        CHECK(checkpoint_bytes > prefix.size() * sizeof(llama_token));
 +        error = nullptr;
@@ -1988,7 +2209,7 @@ index 0c81c9d47..1d0ef71f1 100644
  void adapter_contracts(skippy_model * model) {
      auto * session = create(model);
      prefill(session, {1, 2});
-@@ -626,24 +826,118 @@ void adapter_contracts(skippy_model * model) {
+@@ -626,24 +828,118 @@ void adapter_contracts(skippy_model * model) {
      release(session);
  }
  
@@ -2079,8 +2300,8 @@ index 0c81c9d47..1d0ef71f1 100644
      config.selected_backend_device = "CPU";
 +    configure_test_gpu(config);
 +    if (argc == 6) {
-+        config.cache_type_k = cache_type(argv[4]);
-+        config.cache_type_v = cache_type(argv[5]);
++        config.cache_type_k = skippy_test::resident_attention::cache_type(argv[4]);
++        config.cache_type_v = skippy_test::resident_attention::cache_type(argv[5]);
 +        config.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
 +    }
      config.ctx_size = 512;
@@ -2111,7 +2332,7 @@ index 0c81c9d47..1d0ef71f1 100644
          // A dense stage's page already carries its whole checkpoint, so the
          // partial side payload is intentionally empty there.
          CHECK(require_recurrent);
-@@ -673,5 +967,8 @@ int main(int argc, char ** argv) {
+@@ -673,5 +969,8 @@ int main(int argc, char ** argv) {
      error = nullptr;
      const auto freed = skippy_model_free(model, &error);
      ok(freed, error);
@@ -2120,3 +2341,22 @@ index 0c81c9d47..1d0ef71f1 100644
 +    }
      return 0;
  }
+diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
+index 30c88b490..19e3828b0 100644
+--- a/tests/test-skippy-kv-page-export.cpp
++++ b/tests/test-skippy-kv-page-export.cpp
+@@ -118,8 +118,10 @@ int main() {
+             {});
+ 
+     if (skippy_memory_cache_capabilities(&kv) !=
+-            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION |
++             SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
+             skippy_model_memory_cache_capabilities(nullptr) != 0) {
++        fprintf(stderr, "dense attention memory cache capabilities differ from complete exporters\n");
+         return 1;
+     }
+     unknown_kv_memory unknown(*model, false, hparams, GGML_TYPE_F32, GGML_TYPE_F32,
+-- 
+2.54.0 (Apple Git-157)
+

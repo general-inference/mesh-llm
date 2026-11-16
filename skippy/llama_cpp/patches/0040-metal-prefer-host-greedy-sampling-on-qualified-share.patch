@@ -1,0 +1,154 @@
+From ab8eb34e53720f2b50e33cfd56bcbeef1b8643e2 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 14 Nov 2026 20:05:07 +1100
+Subject: [PATCH] metal: prefer host greedy sampling on qualified shared-memory
+ devices
+
+---
+ ggml/src/ggml-metal/ggml-metal-tuning.cpp |  4 ++++
+ ggml/src/ggml-metal/ggml-metal-tuning.h   |  5 +++++
+ ggml/src/ggml-metal/ggml-metal.cpp        |  8 ++++++++
+ src/skippy/sampling.cpp                   | 19 +++++++++++++++++++
+ tests/test-metal-graph-optimize.cpp       | 13 ++++++++++++-
+ 5 files changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.cpp b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
+index 0fe50277e..f8ff94114 100644
+--- a/ggml/src/ggml-metal/ggml-metal-tuning.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-tuning.cpp
+@@ -6,6 +6,10 @@
+ 
+ namespace ggml_metal_tuning {
+ 
++bool prefer_host_greedy(ggml_metal_device_id device, bool shared_buffers) {
++    return device == GGML_METAL_DEVICE_M5_MAX && shared_buffers;
++}
++
+ int fa_vec_ne11_bucket(int64_t ne11) {
+     for (int i = 0; i < (int) std::size(FA_VEC_NE11_BUCKETS); ++i) {
+         if (ne11 < FA_VEC_NE11_BUCKETS[i]) {
+diff --git a/ggml/src/ggml-metal/ggml-metal-tuning.h b/ggml/src/ggml-metal/ggml-metal-tuning.h
+index d36a0b639..3d858b56f 100644
+--- a/ggml/src/ggml-metal/ggml-metal-tuning.h
++++ b/ggml/src/ggml-metal/ggml-metal-tuning.h
+@@ -1,12 +1,17 @@
+ #pragma once
+ 
+ #include "ggml.h"
++#include "ggml-metal-device.h"
+ 
+ #include <cstdint>
+ #include <vector>
+ 
+ namespace ggml_metal_tuning {
+ 
++// Qualified on M5 Max with shared graph buffers; leave other devices and
++// private-buffer configurations on their existing sampling path.
++bool prefer_host_greedy(ggml_metal_device_id device, bool shared_buffers);
++
+ // FA vec selection buckets. ne01 (query rows) splits decode (==1) from batch (>=2), the
+ // batch side refined into {2,3,4,5}: Q>1 reuses one K/V load across rows, so it only pays
+ // off once ne01 aligns with Q. ne11 (KV length) is bucketed too, as the Q>1 crossover is
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index 833fe8549..8dc54b26a 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -1013,7 +1013,15 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
+     ggml_metal_fusion_info_set_enabled((struct ggml_metal_fusion_info *) finfo, enabled);
+ }
+ 
++static bool ggml_backend_metal_prefers_host_greedy(ggml_backend_dev_t dev) {
++    const auto * props = ggml_metal_device_get_props((ggml_metal_device_t) dev->context);
++    return ggml_metal_tuning::prefer_host_greedy(props->device_id, props->use_shared_buffers);
++}
++
+ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
++    if (strcmp(name, "ggml_backend_dev_prefers_host_greedy") == 0) {
++        return (void *) ggml_backend_metal_prefers_host_greedy;
++    }
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_metal_get_features;
+     }
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index d9f980c39..06f9a4735 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -10,6 +10,7 @@
+ #include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
++#include "llama-model.h"
+ #include "../vendor/nlohmann/json.hpp"
+ 
+ #include <algorithm>
+@@ -579,6 +580,21 @@ bool skippy_prepare_concurrent_sample(
+     return session->sampler != nullptr && !session->sampling_backend_enabled;
+ }
+ 
++static bool skippy_backend_prefers_host_greedy(const skippy_session * session) {
++    if (!session->stage_model || !session->stage_model->model) {
++        return false;
++    }
++    auto * dev = session->stage_model->model->dev_output();
++    auto * reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
++    if (!reg) {
++        return false;
++    }
++    using preference_fn = bool (*)(ggml_backend_dev_t);
++    auto preference = (preference_fn) ggml_backend_reg_get_proc_address(
++            reg, "ggml_backend_dev_prefers_host_greedy");
++    return preference && preference(dev);
++}
++
+ void skippy_refresh_backend_sampling(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
+@@ -592,6 +608,9 @@ void skippy_refresh_backend_sampling(
+         // must likewise never be re-attached.
+         return;
+     }
++    if (session->ctx && skippy_backend_prefers_host_greedy(session)) {
++        return;
++    }
+     session->sampling_backend_enabled = false;
+     if (session->ctx != nullptr &&
+             // Activation-export and embedding contexts require every output
+diff --git a/tests/test-metal-graph-optimize.cpp b/tests/test-metal-graph-optimize.cpp
+index 29e700cd8..e9ebdb8df 100644
+--- a/tests/test-metal-graph-optimize.cpp
++++ b/tests/test-metal-graph-optimize.cpp
+@@ -7,6 +7,7 @@
+ #include "ggml-metal-common.h"
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
++#include "ggml-metal-tuning.h"
+ 
+ #include <cstdio>
+ #include <vector>
+@@ -342,12 +343,22 @@ static int run_unary_mul_cases() {
+ }
+ 
+ int main() {
++    int preference_failures = 0;
++    for (auto device : { GGML_METAL_DEVICE_M5_MAX, GGML_METAL_DEVICE_M5_PRO,
++                         GGML_METAL_DEVICE_M4_MAX, GGML_METAL_DEVICE_GENERIC }) {
++        for (bool shared : { false, true }) {
++            const bool expected = device == GGML_METAL_DEVICE_M5_MAX && shared;
++            const bool ok = ggml_metal_tuning::prefer_host_greedy(device, shared) == expected;
++            std::printf("host greedy preference: device=%d shared=%d: %s\n", device, shared, ok ? "OK" : "FAIL");
++            preference_failures += !ok;
++        }
++    }
+     const std::vector<device_case> devices = {
+         { "native simdgroup matrices",       true,  true },
+         { "probed or no simdgroup matrices", false, true },
+     };
+     const int failures = run_pack_cases(devices) + (check_chained_pack_reader() ? 0 : 1) + run_row_independent_pack_cases() +
+-        (check_encoder_skips_weight_residual() ? 0 : 1) + run_unary_mul_cases();
++        (check_encoder_skips_weight_residual() ? 0 : 1) + run_unary_mul_cases() + preference_failures;
+ 
+     return failures == 0 ? 0 : 1;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

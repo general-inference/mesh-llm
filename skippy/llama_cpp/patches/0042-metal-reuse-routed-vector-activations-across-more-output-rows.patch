@@ -1,0 +1,1440 @@
+From 4b2811efb1ae66065568c3746e3116963f0d8c98 Mon Sep 17 00:00:00 2001
+From: Codex <codex@localhost>
+Date: Mon, 16 Nov 2026 05:06:29 +1100
+Subject: [PATCH] metal: tune routed vector reuse and bounded offsets
+
+Retain the qualified output-row reuse specializations. Add checked uint32
+relative offsets for qualified shared-buffer R4 and R8 geometries. Enable R8
+by default on M1 Ultra and M5 Max, and R4 on M1 Ultra. Keep other devices on
+the original default and preserve private diagnostic overrides.
+
+Share the existing quantized-vector arithmetic between both offset widths.
+Preserve unsupported-shape, stride, byte-span and old-library fallbacks, with
+cached positive and negative function discovery. Add CPU-only policy CTest
+coverage and explicit native paired/FP64/masked/view/fallback qualification.
+The public Skippy ABI and stored model bytes remain unchanged.
+---
+ ggml/src/ggml-metal/CMakeLists.txt              |  13 +-
+ ggml/src/ggml-metal/ggml-metal-device.cpp       |  28 +++
+ ggml/src/ggml-metal/ggml-metal-device.h         |   1 +
+ ggml/src/ggml-metal/ggml-metal-device.m         |  30 +++
+ ggml/src/ggml-metal/ggml-metal-routed-offsets.h |  70 +++++++
+ ggml/src/ggml-metal/ggml-metal-routed-tuning.h  |  27 +++
+ ggml/src/ggml-metal/kernels/mul_mv.metal        | 264 +-----------------------
+ ggml/src/ggml-metal/kernels/mul_mv_q_n.h        | 262 +++++++++++++++++++++++
+ ggml/src/ggml-metal/kernels/routed_u32.metal    |  75 +++++++
+ ggml/src/ggml-metal/kernels/routed_u32_r4.metal |  75 +++++++
+ tests/CMakeLists.txt                            |   4 +
+ tests/test-backend-ops.cpp                      |   5 +
+ tests/test-backend-portable-routed.h            |  43 ++++
+ tests/test-metal-graph-optimize.cpp             |  43 ++++
+ tests/test-metal-routed-u32.cpp                 | 237 +++++++++++++++++++++
+ 15 files changed, 915 insertions(+), 262 deletions(-)
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-offsets.h
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+ create mode 100644 ggml/src/ggml-metal/kernels/mul_mv_q_n.h
+ create mode 100644 ggml/src/ggml-metal/kernels/routed_u32.metal
+ create mode 100644 ggml/src/ggml-metal/kernels/routed_u32_r4.metal
+ create mode 100644 tests/test-backend-portable-routed.h
+ create mode 100644 tests/test-metal-routed-u32.cpp
+
+diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
+index b36e3b56b..95a6f6a97 100644
+--- a/ggml/src/ggml-metal/CMakeLists.txt
++++ b/ggml/src/ggml-metal/CMakeLists.txt
+@@ -30,6 +30,7 @@ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
+ set(METALLIB_KERNELS_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.h")
+ set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.h")
+ set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
++set(METALLIB_KERNELS_MUL_MV_Q_N "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mul_mv_q_n.h")
+ set(METALLIB_KERNELS_FA_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_common.metal")
+ set(METALLIB_KERNELS_FA_VEC_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_vec_common.metal")
+ set(METALLIB_KERNELS_FA_SHARED
+@@ -56,6 +57,8 @@ set(METALLIB_KERNEL_SOURCES
+     kernels/fa_vec_q5_1.metal
+     kernels/fa_vec_q8_0.metal
+     kernels/mul_mv.metal
++    kernels/routed_u32.metal
++    kernels/routed_u32_r4.metal
+     kernels/mul_mv_mma.metal
+     kernels/mul_mm.metal
+     kernels/quantize.metal
+@@ -115,12 +118,17 @@ if (GGML_METAL_EMBED_LIBRARY)
+             list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_VEC_COMMON})
+         endif()
+ 
++        file(STRINGS ${SRC} _has_mv_q_n REGEX "#include \"mul_mv_q_n\\.h\"")
++        if(_has_mv_q_n)
++            list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_MUL_MV_Q_N})
++        endif()
++
+         add_custom_command(
+             OUTPUT "${ASM}"
+             # Step 1: concatenate shared headers + this kernel source
+             COMMAND cat ${HEADERS_FOR_SRC} ${SRC} > "${EMBED}.tmp1"
+             # Step 2: remove internal #include and #pragma once
+-            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#include \"fa_common.metal\"/d" -e "/\#include \"fa_vec_common.metal\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
++            COMMAND sed -e "/\#include \"mul_mv_q_n.h\"/d" -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#include \"fa_common.metal\"/d" -e "/\#include \"fa_vec_common.metal\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
+             # Step 3: inline ggml-common.h (replacing __embed_ggml-common.h__ sentinel)
+             COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}" -e "/__embed_ggml-common.h__/d" < "${EMBED}.tmp2" > "${EMBED}.tmp3"
+             # Step 4: inline ggml-metal-impl.h
+@@ -154,6 +162,7 @@ else()
+     configure_file(kernels/common.h     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/common.h     COPYONLY)
+     configure_file(kernels/dequantize.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/dequantize.h COPYONLY)
+     configure_file(kernels/quantize.h   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/quantize.h   COPYONLY)
++    configure_file(kernels/mul_mv_q_n.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mv_q_n.h COPYONLY)
+     foreach(hdr ${METALLIB_KERNELS_FA_SHARED})
+         get_filename_component(hdr_name ${hdr} NAME)
+         configure_file(${hdr} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/${hdr_name} COPYONLY)
+@@ -215,7 +224,7 @@ else()
+         add_custom_command(
+             OUTPUT ${AIR}
+             COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
+-            DEPENDS ${src} ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
++            DEPENDS ${src} ${METALLIB_KERNELS_MUL_MV_Q_N} ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+             COMMENT "Compiling ${src}"
+             VERBATIM
+         )
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index e6c95c3af..2e5413e07 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -3,6 +3,10 @@
+ 
+ #include "ggml-metal-impl.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-routed-tuning.h"
++#include "ggml-metal-routed-offsets.h"
++#include <cstdlib>
++#include <cstring>
+ 
+ #include "ggml-impl.h"
+ 
+@@ -1540,10 +1544,34 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
+             }
+     };
+ 
++    const auto * props = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
++    const int tuned_rows = ggml_metal_routed_tuning::rows(
++            props->device_id, props->use_shared_buffers, tsrc0, ne00, ne01, op->src[2]->ne[1], nsg, nr0, op->src[2]->ne[0]);
++    if (tuned_rows != nr0) {
++        nr0 = tuned_rows;
++        suffix = tsrc0 == GGML_TYPE_Q4_K ? "_r4" : tsrc0 == GGML_TYPE_Q4_1 ? "_r8" : "_r2";
++    }
++    const char * enable_u32 = std::getenv("GGML_METAL_ROUTED_U32");
++    const bool use_u32 = ggml_metal_routed_offsets::requested_r8(enable_u32, props->device_id) &&
++            ggml_metal_routed_offsets::eligible(op, props->device_id, props->use_shared_buffers, nr0, nsg);
++    const char * enable_r4 = std::getenv("GGML_METAL_ROUTED_U32_R4");
++    const bool use_r4 = ggml_metal_routed_offsets::requested(enable_r4, props->device_id) &&
++            ggml_metal_routed_offsets::eligible_r4(op, props->device_id, props->use_shared_buffers, nr0, nsg);
++    const char * fallback_suffix = suffix;
++
++    if (use_u32) suffix = "_r8_u32";
++    if (use_r4) suffix = "_r4_u32";
+     snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
+     snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
+ 
+     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
++    // Availability is checked only on a cold candidate-pipeline lookup. An
++    // old combined or override library keeps its established vector kernel.
++    if (!res.pipeline && (use_u32 || use_r4) && !ggml_metal_library_has_function(lib, base)) {
++        snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), fallback_suffix);
++        snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
++        res = ggml_metal_library_get_pipeline(lib, name);
++    }
+     if (!res.pipeline) {
+         ggml_metal_cv_t cv = ggml_metal_cv_init();
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 817049494..fe499b3e5 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -104,6 +104,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
+ void ggml_metal_library_free(ggml_metal_library_t lib);
+ 
+ ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib);
++bool ggml_metal_library_has_function(ggml_metal_library_t lib, const char * name);
+ 
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline    (ggml_metal_library_t lib, const char * name);
+ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv);
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 7c42724af..8ccb88939 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -131,6 +131,8 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+     X(FA_VEC_Q5_1,     fa_vec_q5_1)    \
+     X(FA_VEC_Q8_0,     fa_vec_q8_0)    \
+     X(MUL_MV,          mul_mv)         \
++    X(ROUTED_U32,      routed_u32)     \
++    X(ROUTED_U32_R4,   routed_u32_r4)  \
+     X(MUL_MV_MMA,      mul_mv_mma)     \
+     X(MUL_MM,          mul_mm)         \
+     X(QUANTIZE,        quantize)       \
+@@ -181,6 +183,9 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+     // kernels from a second metallib, resolved ahead of the combined library
+     NSSet<NSString *> * override_fns;
+ 
++    // Immutable library contents; cache both positive and negative cold lookups.
++    NSMutableDictionary<NSString *, NSNumber *> * available_fns;
++
+     ggml_metal_device_t dev;
+     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
+ 
+@@ -850,6 +855,10 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+         [lib->override_fns release];
+     }
+ 
++    if (lib->available_fns) {
++        [lib->available_fns release];
++    }
++
+     ggml_metal_pipelines_free(lib->pipelines);
+ 
+     if (lib->pso_archive) {
+@@ -869,6 +878,27 @@ ggml_metal_device_t ggml_metal_library_get_device(ggml_metal_library_t lib) {
+     return lib->dev;
+ }
+ 
++bool ggml_metal_library_has_function(ggml_metal_library_t lib, const char * name) {
++    [lib->lock lock];
++    if (!lib->available_fns) lib->available_fns = [NSMutableDictionary new];
++    NSString * function_name = [NSString stringWithUTF8String:name];
++    NSNumber * cached = lib->available_fns[function_name];
++    if (cached) {
++        const bool found = [cached boolValue];
++        [lib->lock unlock];
++        return found;
++    }
++    bool found = lib->override_fns && [lib->override_fns containsObject:function_name];
++    if (!found && lib->single_library) {
++        found = [[lib->objs[0] functionNames] containsObject:function_name];
++    } else if (!found) {
++        found = lib->fn_to_lib[function_name] != nil;
++    }
++    lib->available_fns[function_name] = @(found);
++    [lib->lock unlock];
++    return found;
++}
++
+ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline(ggml_metal_library_t lib, const char * name) {
+     [lib->lock lock];
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-routed-offsets.h b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
+new file mode 100644
+index 000000000..30fc69a5d
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-routed-offsets.h
+@@ -0,0 +1,70 @@
++#pragma once
++
++#include "ggml-metal-device.h"
++#include <cstdint>
++#include <cstring>
++
++namespace ggml_metal_routed_offsets {
++
++// M1 has complete repeated serving qualification. Other admitted chips retain
++// the original path by default; the private flag permits explicit diagnostics.
++inline bool requested(const char * value, ggml_metal_device_id device) {
++    return value ? std::strcmp(value, "1") == 0 : device == GGML_METAL_DEVICE_M1_ULTRA;
++}
++
++// R8 has separate qualification; enabling it does not enable the R4 diagnostic.
++inline bool requested_r8(const char * value, ggml_metal_device_id device) {
++    return value ? std::strcmp(value, "1") == 0 :
++            device == GGML_METAL_DEVICE_M1_ULTRA || device == GGML_METAL_DEVICE_M5_MAX;
++}
++
++// Inclusive bound on every byte touched relative to the tensor's bound base.
++// Handle quantized block strides and padded ID views without size_t overflow.
++inline bool fits_u32(const ggml_tensor * tensor) {
++    if (!tensor) return false;
++    uint64_t bytes = ggml_type_size(tensor->type);
++    const uint64_t limit = UINT32_MAX;
++    for (int dim = 0; dim < GGML_MAX_DIMS; ++dim) {
++        const int64_t blocks = dim == 0 ? ggml_blck_size(tensor->type) : 1;
++        if (tensor->ne[dim] <= 0 || tensor->ne[dim] % blocks != 0) return false;
++        const uint64_t steps = uint64_t(tensor->ne[dim]/blocks - 1);
++        if (bytes > limit || (steps && tensor->nb[dim] > (limit - bytes)/steps)) return false;
++        bytes += steps*tensor->nb[dim];
++    }
++    return bytes <= limit;
++}
++
++inline bool eligible_geometry(const ggml_tensor * op, ggml_metal_device_id device,
++                              bool shared, int rows, int simdgroups, int required_rows,
++                              int64_t min_tokens, int64_t max_tokens) {
++    if (!op || op->op != GGML_OP_MUL_MAT_ID || !shared || rows != required_rows || simdgroups != 2) return false;
++    if (device != GGML_METAL_DEVICE_M1_ULTRA && device != GGML_METAL_DEVICE_M4 &&
++            device != GGML_METAL_DEVICE_M5_MAX) return false;
++    const auto * weights = op->src[0];
++    const auto * input = op->src[1];
++    const auto * ids = op->src[2];
++    if (!weights || !input || !ids || weights->type != GGML_TYPE_Q4_1 ||
++            input->type != GGML_TYPE_F32 || ids->type != GGML_TYPE_I32 || op->type != GGML_TYPE_F32) return false;
++    const int64_t inner = weights->ne[0], output = weights->ne[1];
++    if (!((inner == 512 && output == 2048) || (inner == 2048 && output == 512))) return false;
++    if (weights->ne[2] != 128 && weights->ne[2] != 256) return false;
++    if (weights->ne[3] != 1 || input->ne[3] != 1 || op->ne[3] != 1 ||
++            ids->ne[2] != 1 || ids->ne[3] != 1) return false;
++    if (ids->ne[0] != 8 || ids->ne[1] < min_tokens || ids->ne[1] > max_tokens || ids->nb[0] != sizeof(int32_t) ||
++            input->ne[0] != inner || (input->ne[1] != 1 && input->ne[1] != 8) ||
++            input->ne[2] != ids->ne[1] || op->ne[0] != output || op->ne[1] != 8 || op->ne[2] != ids->ne[1]) return false;
++    if (!ggml_is_contiguous(weights) || !ggml_is_contiguous(input) || !ggml_is_contiguous(op)) return false;
++    return fits_u32(weights) && fits_u32(input) && fits_u32(ids) && fits_u32(op);
++}
++
++inline bool eligible(const ggml_tensor * op, ggml_metal_device_id device,
++                     bool shared, int rows, int simdgroups) {
++    return eligible_geometry(op, device, shared, rows, simdgroups, 8, 3, 16);
++}
++
++inline bool eligible_r4(const ggml_tensor * op, ggml_metal_device_id device,
++                        bool shared, int rows, int simdgroups) {
++    return eligible_geometry(op, device, shared, rows, simdgroups, 4, 1, 16);
++}
++
++} // namespace ggml_metal_routed_offsets
+diff --git a/ggml/src/ggml-metal/ggml-metal-routed-tuning.h b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+new file mode 100644
+index 000000000..d65eb01aa
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-routed-tuning.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++#include "ggml-metal-device.h"
++
++namespace ggml_metal_routed_tuning {
++
++// Reuse the per-lane activation registers across more output rows. Preserve
++// complete SIMDgroup row tiles: the vector bodies load every unrolled row.
++inline int rows(ggml_metal_device_id device, bool shared_buffers, ggml_type type, int64_t inner,
++                int64_t output, int64_t tokens, int nsg, int fallback, int64_t selections = 8) {
++    // Portable screen supports this down-projection shape only. Gate/up
++    // remains faster at the existing width on these two measured devices.
++    if ((device == GGML_METAL_DEVICE_M1_ULTRA || device == GGML_METAL_DEVICE_M4) &&
++            shared_buffers && type == GGML_TYPE_Q4_1 && inner == 512 && output == 2048 &&
++            tokens == 16 && selections == 8 && nsg == 2) {
++        return 8;
++    }
++    if (device != GGML_METAL_DEVICE_M5_MAX || !shared_buffers || tokens < 3 || inner < 512 || inner > 4096 ||
++            output < 512 || tokens > 31 || nsg <= 0) {
++        return fallback;
++    }
++    const int candidate = type == GGML_TYPE_Q4_K ? 4 : type == GGML_TYPE_Q5_K ? 2 :
++            type == GGML_TYPE_Q4_1 ? 8 : fallback;
++    return output % (candidate * nsg) == 0 ? candidate : fallback;
++}
++
++} // namespace ggml_metal_routed_tuning
+diff --git a/ggml/src/ggml-metal/kernels/mul_mv.metal b/ggml/src/ggml-metal/kernels/mul_mv.metal
+index 5d012e484..64a040c09 100644
+--- a/ggml/src/ggml-metal/kernels/mul_mv.metal
++++ b/ggml/src/ggml-metal/kernels/mul_mv.metal
+@@ -1,171 +1,5 @@
+ #include "common.h"
+ #include "dequantize.h"
+-// Q1_0 dot product: dot = d * (2 * Σ(yl[i] where bit=1) - sumy)
+-inline float block_q_n_dot_y(device const block_q1_0 * qb_curr, float sumy, thread float * yl, int il) {
+-    device const uint8_t * qs = qb_curr->qs + il / 8;
+-    const uint8_t b0 = qs[0];
+-    const uint8_t b1 = qs[1];
+-
+-    float acc = 0.0f;
+-
+-    acc += select(0.0f, yl[ 0], bool(b0 & 0x01));
+-    acc += select(0.0f, yl[ 1], bool(b0 & 0x02));
+-    acc += select(0.0f, yl[ 2], bool(b0 & 0x04));
+-    acc += select(0.0f, yl[ 3], bool(b0 & 0x08));
+-    acc += select(0.0f, yl[ 4], bool(b0 & 0x10));
+-    acc += select(0.0f, yl[ 5], bool(b0 & 0x20));
+-    acc += select(0.0f, yl[ 6], bool(b0 & 0x40));
+-    acc += select(0.0f, yl[ 7], bool(b0 & 0x80));
+-
+-    acc += select(0.0f, yl[ 8], bool(b1 & 0x01));
+-    acc += select(0.0f, yl[ 9], bool(b1 & 0x02));
+-    acc += select(0.0f, yl[10], bool(b1 & 0x04));
+-    acc += select(0.0f, yl[11], bool(b1 & 0x08));
+-    acc += select(0.0f, yl[12], bool(b1 & 0x10));
+-    acc += select(0.0f, yl[13], bool(b1 & 0x20));
+-    acc += select(0.0f, yl[14], bool(b1 & 0x40));
+-    acc += select(0.0f, yl[15], bool(b1 & 0x80));
+-
+-    return qb_curr->d * (2.0f * acc - sumy);
+-}
+-
+-// Q2_0 dot: d * (sum_lo(y) + 2*sum_hi(y) - sumy) via per-bit conditional adds
+-inline float block_q_n_dot_y(device const block_q2_0 * qb_curr, float sumy, thread float * yl, int il) {
+-    device const uint8_t * qs = qb_curr->qs + (il / 4);
+-    const uint8_t b0 = qs[0];
+-    const uint8_t b1 = qs[1];
+-    const uint8_t b2 = qs[2];
+-    const uint8_t b3 = qs[3];
+-
+-    // Accumulate where low bit is set (bits 0,2,4,6 of each byte)
+-    float acc_lo = 0.0f;
+-    acc_lo += select(0.0f, yl[ 0], bool(b0 & 0x01));
+-    acc_lo += select(0.0f, yl[ 1], bool(b0 & 0x04));
+-    acc_lo += select(0.0f, yl[ 2], bool(b0 & 0x10));
+-    acc_lo += select(0.0f, yl[ 3], bool(b0 & 0x40));
+-    acc_lo += select(0.0f, yl[ 4], bool(b1 & 0x01));
+-    acc_lo += select(0.0f, yl[ 5], bool(b1 & 0x04));
+-    acc_lo += select(0.0f, yl[ 6], bool(b1 & 0x10));
+-    acc_lo += select(0.0f, yl[ 7], bool(b1 & 0x40));
+-    acc_lo += select(0.0f, yl[ 8], bool(b2 & 0x01));
+-    acc_lo += select(0.0f, yl[ 9], bool(b2 & 0x04));
+-    acc_lo += select(0.0f, yl[10], bool(b2 & 0x10));
+-    acc_lo += select(0.0f, yl[11], bool(b2 & 0x40));
+-    acc_lo += select(0.0f, yl[12], bool(b3 & 0x01));
+-    acc_lo += select(0.0f, yl[13], bool(b3 & 0x04));
+-    acc_lo += select(0.0f, yl[14], bool(b3 & 0x10));
+-    acc_lo += select(0.0f, yl[15], bool(b3 & 0x40));
+-
+-    // Accumulate where high bit is set (bits 1,3,5,7 of each byte)
+-    float acc_hi = 0.0f;
+-    acc_hi += select(0.0f, yl[ 0], bool(b0 & 0x02));
+-    acc_hi += select(0.0f, yl[ 1], bool(b0 & 0x08));
+-    acc_hi += select(0.0f, yl[ 2], bool(b0 & 0x20));
+-    acc_hi += select(0.0f, yl[ 3], bool(b0 & 0x80));
+-    acc_hi += select(0.0f, yl[ 4], bool(b1 & 0x02));
+-    acc_hi += select(0.0f, yl[ 5], bool(b1 & 0x08));
+-    acc_hi += select(0.0f, yl[ 6], bool(b1 & 0x20));
+-    acc_hi += select(0.0f, yl[ 7], bool(b1 & 0x80));
+-    acc_hi += select(0.0f, yl[ 8], bool(b2 & 0x02));
+-    acc_hi += select(0.0f, yl[ 9], bool(b2 & 0x08));
+-    acc_hi += select(0.0f, yl[10], bool(b2 & 0x20));
+-    acc_hi += select(0.0f, yl[11], bool(b2 & 0x80));
+-    acc_hi += select(0.0f, yl[12], bool(b3 & 0x02));
+-    acc_hi += select(0.0f, yl[13], bool(b3 & 0x08));
+-    acc_hi += select(0.0f, yl[14], bool(b3 & 0x20));
+-    acc_hi += select(0.0f, yl[15], bool(b3 & 0x80));
+-
+-    return qb_curr->d * (acc_lo + 2.0f * acc_hi - sumy);
+-}
+-
+-// function for calculate inner product between half a q4_0 block and 16 floats (yl), sumy is SUM(yl[i])
+-// il indicates where the q4 quants begin (0 or QK4_0/4)
+-// we assume that the yl's have been multiplied with the appropriate scale factor
+-// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
+-inline float block_q_n_dot_y(device const block_q4_0 * qb_curr, float sumy, thread float * yl, int il) {
+-    float d = qb_curr->d;
+-
+-    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+-
+-    device const uint16_t * qs = ((device const uint16_t *) qb_curr + 1 + il/2);
+-
+-    for (int i = 0; i < 8; i += 2) {
+-        acc[0] += yl[i + 0] * (qs[i / 2] & 0x000F);
+-        acc[1] += yl[i + 1] * (qs[i / 2] & 0x0F00);
+-        acc[2] += yl[i + 8] * (qs[i / 2] & 0x00F0);
+-        acc[3] += yl[i + 9] * (qs[i / 2] & 0xF000);
+-    }
+-
+-    return d * (sumy * -8.f + acc[0] + acc[1] + acc[2] + acc[3]);
+-}
+-
+-// function for calculate inner product between half a q4_1 block and 16 floats (yl), sumy is SUM(yl[i])
+-// il indicates where the q4 quants begin (0 or QK4_0/4)
+-// we assume that the yl's have been multiplied with the appropriate scale factor
+-// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
+-inline float block_q_n_dot_y(device const block_q4_1 * qb_curr, float sumy, thread float * yl, int il) {
+-    float d = qb_curr->d;
+-    float m = qb_curr->m;
+-
+-    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+-
+-    device const uint16_t * qs = ((device const uint16_t *) qb_curr + 2 + il/2);
+-
+-    for (int i = 0; i < 8; i+=2) {
+-        acc[0] += yl[i + 0] * (qs[i / 2] & 0x000F);
+-        acc[1] += yl[i + 1] * (qs[i / 2] & 0x0F00);
+-        acc[2] += yl[i + 8] * (qs[i / 2] & 0x00F0);
+-        acc[3] += yl[i + 9] * (qs[i / 2] & 0xF000);
+-    }
+-
+-    return d * (acc[0] + acc[1] + acc[2] + acc[3]) + sumy * m;
+-}
+-
+-// function for calculate inner product between half a q5_0 block and 16 floats (yl), sumy is SUM(yl[i])
+-// il indicates where the q5 quants begin (0 or QK5_0/4)
+-// we assume that the yl's have been multiplied with the appropriate scale factor
+-// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
+-inline float block_q_n_dot_y(device const block_q5_0 * qb_curr, float sumy, thread float * yl, int il) {
+-    float d = qb_curr->d;
+-
+-    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+-
+-    device const uint16_t * qs =  ((device const uint16_t *)qb_curr + 3 + il/2);
+-           const uint32_t   qh = *((device const uint32_t *)qb_curr->qh);
+-
+-    for (int i = 0; i < 8; i+=2) {
+-        acc[0] += yl[i + 0] * ((qs[i / 2] & 0x000F) | ((qh >> (i+0+il        ) << 4 ) & 0x00010));
+-        acc[1] += yl[i + 1] * ((qs[i / 2] & 0x0F00) | ((qh >> (i+1+il        ) << 12) & 0x01000));
+-        acc[2] += yl[i + 8] * ((qs[i / 2] & 0x00F0) | ((qh >> (i+0+il+QK5_0/2) << 8 ) & 0x00100));
+-        acc[3] += yl[i + 9] * ((qs[i / 2] & 0xF000) | ((qh >> (i+1+il+QK5_0/2) << 16) & 0x10000));
+-    }
+-
+-    return d * (sumy * -16.f + acc[0] + acc[1] + acc[2] + acc[3]);
+-}
+-
+-// function for calculate inner product between half a q5_1 block and 16 floats (yl), sumy is SUM(yl[i])
+-// il indicates where the q5 quants begin (0 or QK5_1/4)
+-// we assume that the yl's have been multiplied with the appropriate scale factor
+-// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
+-inline float block_q_n_dot_y(device const block_q5_1 * qb_curr, float sumy, thread float * yl, int il) {
+-    float d = qb_curr->d;
+-    float m = qb_curr->m;
+-
+-    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+-
+-    device const uint16_t * qs =  ((device const uint16_t *)qb_curr + 4 + il/2);
+-           const uint32_t   qh = *((device const uint32_t *)qb_curr->qh);
+-
+-    for (int i = 0; i < 8; i+=2) {
+-        acc[0] += yl[i + 0] * ((qs[i / 2] & 0x000F) | ((qh >> (i+0+il        ) << 4 ) & 0x00010));
+-        acc[1] += yl[i + 1] * ((qs[i / 2] & 0x0F00) | ((qh >> (i+1+il        ) << 12) & 0x01000));
+-        acc[2] += yl[i + 8] * ((qs[i / 2] & 0x00F0) | ((qh >> (i+0+il+QK5_0/2) << 8 ) & 0x00100));
+-        acc[3] += yl[i + 9] * ((qs[i / 2] & 0xF000) | ((qh >> (i+1+il+QK5_0/2) << 16) & 0x10000));
+-    }
+-
+-    return d * (acc[0] + acc[1] + acc[2] + acc[3]) + sumy * m;
+-}
+-
+ template<short NR0>
+ static inline void helper_mv_reduce_and_write(
+         device float * dst_f32,
+@@ -208,100 +42,7 @@ static inline void helper_mv_reduce_and_write(
+     }
+ }
+ 
+-constant short FC_mul_mv_nsg   [[function_constant(FC_MUL_MV + 0)]];
+-constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
+-constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
+-constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
+-constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
+-constant bool  FC_mul_mv_split [[function_constant(FC_MUL_MV + 5)]];
+-
+-template<typename block_q_type, short NR0, typename args_t>
+-void mul_vec_q_n_f32_impl(
+-        args_t args,
+-        device const char * src0,
+-        device const char * src1,
+-        device       char * dst,
+-        threadgroup  char * shmem,
+-        uint3  tgpig,
+-        ushort tiisg,
+-        ushort sgitg) {
+-    const short NSG = FC_mul_mv_nsg;
+-
+-    constexpr short NW = N_SIMDWIDTH;
+-    constexpr short NQ = 16;
+-
+-    const int nb = args.ne00/QK4_0;
+-
+-    const int r0 = (tgpig.x*NSG + sgitg)*NR0;
+-  //const int r0 =  tgpig.x*NR0;
+-    const int r1 =  tgpig.y;
+-    const int im =  tgpig.z;
+-
+-    const uint i12 = im%FC_mul_mv_ne12;
+-    const uint i13 = im/FC_mul_mv_ne12;
+-
+-  //const uint64_t offset0 = r0*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+-    const uint64_t offset1 = r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+-
+-  //device const block_q_type * x = (device const block_q_type *) (src0 + offset0);
+-    device const float        * y = (device const float        *) (src1 + offset1);
+-
+-    // pointers to src0 rows
+-    device const block_q_type * ax[NR0];
+-    FOR_UNROLL (int row = 0; row < NR0; ++row) {
+-        const uint64_t offset0 = (r0 + row)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+-
+-        ax[row] = (device const block_q_type *) ((device char *) src0 + offset0);
+-    }
+-
+-    float sumf[NR0] = {0.f};
+-
+-    const short ix = (tiisg/(NW/NQ));
+-    const short il = (tiisg%(NW/NQ))*8;
+-
+-    //const int ib0 = sgitg*NQ + ix;
+-    const int ib0 = ix;
+-
+-    float yl[16]; // src1 vector cache
+-
+-    //device const float * yb = y + ix*QK4_0 + il;
+-    device const float * yb = y + ib0*QK4_0 + il;
+-
+-    // each thread in a SIMD group deals with half a block.
+-    //for (int ib = ib0; ib < nb; ib += NSG*NQ) {
+-    for (int ib = ib0; ib < nb; ib += NQ) {
+-        float sumy[2] = { 0.f, 0.f };
+-
+-        FOR_UNROLL (short i = 0; i < 8; i += 2) {
+-            sumy[0]  += yb[i +  0] + yb[i +  1];
+-            yl[i + 0] = yb[i +  0];
+-            yl[i + 1] = yb[i +  1]/256.f;
+-
+-            sumy[1]  += yb[i + 16] + yb[i + 17];
+-            yl[i + 8] = yb[i + 16]/16.f;
+-            yl[i + 9] = yb[i + 17]/4096.f;
+-        }
+-
+-        FOR_UNROLL (short row = 0; row < NR0; row++) {
+-            sumf[row] += block_q_n_dot_y(ax[row] + ib, sumy[0] + sumy[1], yl, il);
+-        }
+-
+-        yb += QK4_0 * 16;
+-        //yb += NSG*NQ*QK4_0;
+-    }
+-
+-    device float * dst_f32 = (device float *) dst + im*args.ne0*args.ne1 + r1*args.ne0;
+-
+-    //helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+-
+-    for (int row = 0; row < NR0; ++row) {
+-        const float tot = simd_sum(sumf[row]);
+-
+-        if (tiisg == 0 && r0 + row < args.ne01) {
+-            dst_f32[r0 + row] = tot;
+-        }
+-    }
+-}
++#include "mul_mv_q_n.h"
+ 
+ template<int nr0, typename args_t>
+ void kernel_mul_mv_q1_0_f32_impl(
+@@ -3408,6 +3149,7 @@ template [[host_name("kernel_mul_mv_id_q1_0_f32")]]    kernel kernel_mul_mv_id_t
+ template [[host_name("kernel_mul_mv_id_q2_0_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q2_0_f32_impl<N_R0_Q2_0>>>;
+ template [[host_name("kernel_mul_mv_id_q4_0_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<mul_vec_q_n_f32_impl<block_q4_0, N_R0_Q4_0>>>;
+ template [[host_name("kernel_mul_mv_id_q4_1_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<mul_vec_q_n_f32_impl<block_q4_1, N_R0_Q4_1>>>;
++template [[host_name("kernel_mul_mv_id_q4_1_f32_r8")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<mul_vec_q_n_f32_impl<block_q4_1, 8>>>;
+ template [[host_name("kernel_mul_mv_id_q5_0_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<mul_vec_q_n_f32_impl<block_q5_0, N_R0_Q5_0>>>;
+ template [[host_name("kernel_mul_mv_id_q5_1_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<mul_vec_q_n_f32_impl<block_q5_1, N_R0_Q5_1>>>;
+ 
+@@ -3417,6 +3159,8 @@ template [[host_name("kernel_mul_mv_id_q2_K_f32")]]    kernel kernel_mul_mv_id_t
+ template [[host_name("kernel_mul_mv_id_q3_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q3_K_f32_impl   <N_R0_Q3_K>>>;
+ template [[host_name("kernel_mul_mv_id_q4_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q4_K_f32_impl   <N_R0_Q4_K>>>;
+ template [[host_name("kernel_mul_mv_id_q5_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q5_K_f32_impl   <N_R0_Q5_K>>>;
++template [[host_name("kernel_mul_mv_id_q4_K_f32_r4")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q4_K_f32_impl<4>>>;
++template [[host_name("kernel_mul_mv_id_q5_K_f32_r2")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q5_K_f32_impl<2>>>;
+ template [[host_name("kernel_mul_mv_id_q6_K_f32")]]    kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_q6_K_f32_impl   <N_R0_Q6_K>>>;
+ template [[host_name("kernel_mul_mv_id_iq1_s_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_s_f32_disp<ggml_metal_kargs_mul_mv>>>;
+ template [[host_name("kernel_mul_mv_id_iq1_m_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_m_f32_disp<ggml_metal_kargs_mul_mv>>>;
+diff --git a/ggml/src/ggml-metal/kernels/mul_mv_q_n.h b/ggml/src/ggml-metal/kernels/mul_mv_q_n.h
+new file mode 100644
+index 000000000..eb7dc0614
+--- /dev/null
++++ b/ggml/src/ggml-metal/kernels/mul_mv_q_n.h
+@@ -0,0 +1,262 @@
++#pragma once
++
++// Q1_0 dot product: dot = d * (2 * Σ(yl[i] where bit=1) - sumy)
++inline float block_q_n_dot_y(device const block_q1_0 * qb_curr, float sumy, thread float * yl, int il) {
++    device const uint8_t * qs = qb_curr->qs + il / 8;
++    const uint8_t b0 = qs[0];
++    const uint8_t b1 = qs[1];
++
++    float acc = 0.0f;
++
++    acc += select(0.0f, yl[ 0], bool(b0 & 0x01));
++    acc += select(0.0f, yl[ 1], bool(b0 & 0x02));
++    acc += select(0.0f, yl[ 2], bool(b0 & 0x04));
++    acc += select(0.0f, yl[ 3], bool(b0 & 0x08));
++    acc += select(0.0f, yl[ 4], bool(b0 & 0x10));
++    acc += select(0.0f, yl[ 5], bool(b0 & 0x20));
++    acc += select(0.0f, yl[ 6], bool(b0 & 0x40));
++    acc += select(0.0f, yl[ 7], bool(b0 & 0x80));
++
++    acc += select(0.0f, yl[ 8], bool(b1 & 0x01));
++    acc += select(0.0f, yl[ 9], bool(b1 & 0x02));
++    acc += select(0.0f, yl[10], bool(b1 & 0x04));
++    acc += select(0.0f, yl[11], bool(b1 & 0x08));
++    acc += select(0.0f, yl[12], bool(b1 & 0x10));
++    acc += select(0.0f, yl[13], bool(b1 & 0x20));
++    acc += select(0.0f, yl[14], bool(b1 & 0x40));
++    acc += select(0.0f, yl[15], bool(b1 & 0x80));
++
++    return qb_curr->d * (2.0f * acc - sumy);
++}
++
++// Q2_0 dot: d * (sum_lo(y) + 2*sum_hi(y) - sumy) via per-bit conditional adds
++inline float block_q_n_dot_y(device const block_q2_0 * qb_curr, float sumy, thread float * yl, int il) {
++    device const uint8_t * qs = qb_curr->qs + (il / 4);
++    const uint8_t b0 = qs[0];
++    const uint8_t b1 = qs[1];
++    const uint8_t b2 = qs[2];
++    const uint8_t b3 = qs[3];
++
++    // Accumulate where low bit is set (bits 0,2,4,6 of each byte)
++    float acc_lo = 0.0f;
++    acc_lo += select(0.0f, yl[ 0], bool(b0 & 0x01));
++    acc_lo += select(0.0f, yl[ 1], bool(b0 & 0x04));
++    acc_lo += select(0.0f, yl[ 2], bool(b0 & 0x10));
++    acc_lo += select(0.0f, yl[ 3], bool(b0 & 0x40));
++    acc_lo += select(0.0f, yl[ 4], bool(b1 & 0x01));
++    acc_lo += select(0.0f, yl[ 5], bool(b1 & 0x04));
++    acc_lo += select(0.0f, yl[ 6], bool(b1 & 0x10));
++    acc_lo += select(0.0f, yl[ 7], bool(b1 & 0x40));
++    acc_lo += select(0.0f, yl[ 8], bool(b2 & 0x01));
++    acc_lo += select(0.0f, yl[ 9], bool(b2 & 0x04));
++    acc_lo += select(0.0f, yl[10], bool(b2 & 0x10));
++    acc_lo += select(0.0f, yl[11], bool(b2 & 0x40));
++    acc_lo += select(0.0f, yl[12], bool(b3 & 0x01));
++    acc_lo += select(0.0f, yl[13], bool(b3 & 0x04));
++    acc_lo += select(0.0f, yl[14], bool(b3 & 0x10));
++    acc_lo += select(0.0f, yl[15], bool(b3 & 0x40));
++
++    // Accumulate where high bit is set (bits 1,3,5,7 of each byte)
++    float acc_hi = 0.0f;
++    acc_hi += select(0.0f, yl[ 0], bool(b0 & 0x02));
++    acc_hi += select(0.0f, yl[ 1], bool(b0 & 0x08));
++    acc_hi += select(0.0f, yl[ 2], bool(b0 & 0x20));
++    acc_hi += select(0.0f, yl[ 3], bool(b0 & 0x80));
++    acc_hi += select(0.0f, yl[ 4], bool(b1 & 0x02));
++    acc_hi += select(0.0f, yl[ 5], bool(b1 & 0x08));
++    acc_hi += select(0.0f, yl[ 6], bool(b1 & 0x20));
++    acc_hi += select(0.0f, yl[ 7], bool(b1 & 0x80));
++    acc_hi += select(0.0f, yl[ 8], bool(b2 & 0x02));
++    acc_hi += select(0.0f, yl[ 9], bool(b2 & 0x08));
++    acc_hi += select(0.0f, yl[10], bool(b2 & 0x20));
++    acc_hi += select(0.0f, yl[11], bool(b2 & 0x80));
++    acc_hi += select(0.0f, yl[12], bool(b3 & 0x02));
++    acc_hi += select(0.0f, yl[13], bool(b3 & 0x08));
++    acc_hi += select(0.0f, yl[14], bool(b3 & 0x20));
++    acc_hi += select(0.0f, yl[15], bool(b3 & 0x80));
++
++    return qb_curr->d * (acc_lo + 2.0f * acc_hi - sumy);
++}
++
++// function for calculate inner product between half a q4_0 block and 16 floats (yl), sumy is SUM(yl[i])
++// il indicates where the q4 quants begin (0 or QK4_0/4)
++// we assume that the yl's have been multiplied with the appropriate scale factor
++// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
++inline float block_q_n_dot_y(device const block_q4_0 * qb_curr, float sumy, thread float * yl, int il) {
++    float d = qb_curr->d;
++
++    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
++
++    device const uint16_t * qs = ((device const uint16_t *) qb_curr + 1 + il/2);
++
++    for (int i = 0; i < 8; i += 2) {
++        acc[0] += yl[i + 0] * (qs[i / 2] & 0x000F);
++        acc[1] += yl[i + 1] * (qs[i / 2] & 0x0F00);
++        acc[2] += yl[i + 8] * (qs[i / 2] & 0x00F0);
++        acc[3] += yl[i + 9] * (qs[i / 2] & 0xF000);
++    }
++
++    return d * (sumy * -8.f + acc[0] + acc[1] + acc[2] + acc[3]);
++}
++
++// function for calculate inner product between half a q4_1 block and 16 floats (yl), sumy is SUM(yl[i])
++// il indicates where the q4 quants begin (0 or QK4_0/4)
++// we assume that the yl's have been multiplied with the appropriate scale factor
++// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
++inline float block_q_n_dot_y(device const block_q4_1 * qb_curr, float sumy, thread float * yl, int il) {
++    float d = qb_curr->d;
++    float m = qb_curr->m;
++
++    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
++
++    device const uint16_t * qs = ((device const uint16_t *) qb_curr + 2 + il/2);
++
++    for (int i = 0; i < 8; i+=2) {
++        acc[0] += yl[i + 0] * (qs[i / 2] & 0x000F);
++        acc[1] += yl[i + 1] * (qs[i / 2] & 0x0F00);
++        acc[2] += yl[i + 8] * (qs[i / 2] & 0x00F0);
++        acc[3] += yl[i + 9] * (qs[i / 2] & 0xF000);
++    }
++
++    return d * (acc[0] + acc[1] + acc[2] + acc[3]) + sumy * m;
++}
++
++// function for calculate inner product between half a q5_0 block and 16 floats (yl), sumy is SUM(yl[i])
++// il indicates where the q5 quants begin (0 or QK5_0/4)
++// we assume that the yl's have been multiplied with the appropriate scale factor
++// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
++inline float block_q_n_dot_y(device const block_q5_0 * qb_curr, float sumy, thread float * yl, int il) {
++    float d = qb_curr->d;
++
++    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
++
++    device const uint16_t * qs =  ((device const uint16_t *)qb_curr + 3 + il/2);
++           const uint32_t   qh = *((device const uint32_t *)qb_curr->qh);
++
++    for (int i = 0; i < 8; i+=2) {
++        acc[0] += yl[i + 0] * ((qs[i / 2] & 0x000F) | ((qh >> (i+0+il        ) << 4 ) & 0x00010));
++        acc[1] += yl[i + 1] * ((qs[i / 2] & 0x0F00) | ((qh >> (i+1+il        ) << 12) & 0x01000));
++        acc[2] += yl[i + 8] * ((qs[i / 2] & 0x00F0) | ((qh >> (i+0+il+QK5_0/2) << 8 ) & 0x00100));
++        acc[3] += yl[i + 9] * ((qs[i / 2] & 0xF000) | ((qh >> (i+1+il+QK5_0/2) << 16) & 0x10000));
++    }
++
++    return d * (sumy * -16.f + acc[0] + acc[1] + acc[2] + acc[3]);
++}
++
++// function for calculate inner product between half a q5_1 block and 16 floats (yl), sumy is SUM(yl[i])
++// il indicates where the q5 quants begin (0 or QK5_1/4)
++// we assume that the yl's have been multiplied with the appropriate scale factor
++// that corresponds to the missing bit shifts (1, 1/16, 1/256, 1/4096)
++inline float block_q_n_dot_y(device const block_q5_1 * qb_curr, float sumy, thread float * yl, int il) {
++    float d = qb_curr->d;
++    float m = qb_curr->m;
++
++    float acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
++
++    device const uint16_t * qs =  ((device const uint16_t *)qb_curr + 4 + il/2);
++           const uint32_t   qh = *((device const uint32_t *)qb_curr->qh);
++
++    for (int i = 0; i < 8; i+=2) {
++        acc[0] += yl[i + 0] * ((qs[i / 2] & 0x000F) | ((qh >> (i+0+il        ) << 4 ) & 0x00010));
++        acc[1] += yl[i + 1] * ((qs[i / 2] & 0x0F00) | ((qh >> (i+1+il        ) << 12) & 0x01000));
++        acc[2] += yl[i + 8] * ((qs[i / 2] & 0x00F0) | ((qh >> (i+0+il+QK5_0/2) << 8 ) & 0x00100));
++        acc[3] += yl[i + 9] * ((qs[i / 2] & 0xF000) | ((qh >> (i+1+il+QK5_0/2) << 16) & 0x10000));
++    }
++
++    return d * (acc[0] + acc[1] + acc[2] + acc[3]) + sumy * m;
++}
++
++constant short FC_mul_mv_nsg   [[function_constant(FC_MUL_MV + 0)]];
++constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
++constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
++constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
++constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
++constant bool  FC_mul_mv_split [[function_constant(FC_MUL_MV + 5)]];
++
++template<typename block_q_type, short NR0, typename args_t, typename offset_t = uint64_t>
++void mul_vec_q_n_f32_impl(
++        args_t args,
++        device const char * src0,
++        device const char * src1,
++        device       char * dst,
++        threadgroup  char * shmem,
++        uint3  tgpig,
++        ushort tiisg,
++        ushort sgitg) {
++    const short NSG = FC_mul_mv_nsg;
++
++    constexpr short NW = N_SIMDWIDTH;
++    constexpr short NQ = 16;
++
++    const int nb = args.ne00/QK4_0;
++
++    const int r0 = (tgpig.x*NSG + sgitg)*NR0;
++  //const int r0 =  tgpig.x*NR0;
++    const int r1 =  tgpig.y;
++    const int im =  tgpig.z;
++
++    const uint i12 = im%FC_mul_mv_ne12;
++    const uint i13 = im/FC_mul_mv_ne12;
++
++  //const uint64_t offset0 = r0*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
++    const offset_t offset1 = offset_t(r1)*offset_t(args.nb11) + offset_t(i12)*offset_t(args.nb12) + offset_t(i13)*offset_t(args.nb13);
++
++  //device const block_q_type * x = (device const block_q_type *) (src0 + offset0);
++    device const float        * y = (device const float        *) (src1 + offset1);
++
++    // pointers to src0 rows
++    device const block_q_type * ax[NR0];
++    FOR_UNROLL (int row = 0; row < NR0; ++row) {
++        const offset_t offset0 = offset_t(r0 + row)*offset_t(args.nb01) + offset_t(i12/FC_mul_mv_r2)*offset_t(args.nb02) + offset_t(i13/FC_mul_mv_r3)*offset_t(args.nb03);
++
++        ax[row] = (device const block_q_type *) ((device char *) src0 + offset0);
++    }
++
++    float sumf[NR0] = {0.f};
++
++    const short ix = (tiisg/(NW/NQ));
++    const short il = (tiisg%(NW/NQ))*8;
++
++    //const int ib0 = sgitg*NQ + ix;
++    const int ib0 = ix;
++
++    float yl[16]; // src1 vector cache
++
++    //device const float * yb = y + ix*QK4_0 + il;
++    device const float * yb = y + ib0*QK4_0 + il;
++
++    // each thread in a SIMD group deals with half a block.
++    //for (int ib = ib0; ib < nb; ib += NSG*NQ) {
++    for (int ib = ib0; ib < nb; ib += NQ) {
++        float sumy[2] = { 0.f, 0.f };
++
++        FOR_UNROLL (short i = 0; i < 8; i += 2) {
++            sumy[0]  += yb[i +  0] + yb[i +  1];
++            yl[i + 0] = yb[i +  0];
++            yl[i + 1] = yb[i +  1]/256.f;
++
++            sumy[1]  += yb[i + 16] + yb[i + 17];
++            yl[i + 8] = yb[i + 16]/16.f;
++            yl[i + 9] = yb[i + 17]/4096.f;
++        }
++
++        FOR_UNROLL (short row = 0; row < NR0; row++) {
++            sumf[row] += block_q_n_dot_y(ax[row] + ib, sumy[0] + sumy[1], yl, il);
++        }
++
++        yb += QK4_0 * 16;
++        //yb += NSG*NQ*QK4_0;
++    }
++
++    device float * dst_f32 = (device float *) dst + im*args.ne0*args.ne1 + r1*args.ne0;
++
++    //helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem);
++
++    for (int row = 0; row < NR0; ++row) {
++        const float tot = simd_sum(sumf[row]);
++
++        if (tiisg == 0 && r0 + row < args.ne01) {
++            dst_f32[r0 + row] = tot;
++        }
++    }
++}
+diff --git a/ggml/src/ggml-metal/kernels/routed_u32.metal b/ggml/src/ggml-metal/kernels/routed_u32.metal
+new file mode 100644
+index 000000000..182e21147
+--- /dev/null
++++ b/ggml/src/ggml-metal/kernels/routed_u32.metal
+@@ -0,0 +1,75 @@
++#include "common.h"
++#include "dequantize.h"
++#include "mul_mv_q_n.h"
++
++kernel void kernel_mul_mv_id_q4_1_f32_r8_u32(
++        constant ggml_metal_kargs_mul_mv_id & args,
++        device const char * src0s,
++        device const char * src1,
++        device       char * dst,
++        device const char * ids,
++        threadgroup  char * shmem [[threadgroup(0)]],
++        uint3  tgpig[[threadgroup_position_in_grid]],
++        ushort tiitg[[thread_index_in_threadgroup]],
++        ushort tiisg[[thread_index_in_simdgroup]],
++        ushort sgitg[[simdgroup_index_in_threadgroup]],
++        ushort3 ntg [[threads_per_threadgroup]]) {
++    const int iid1 = tgpig.z/args.nei0;
++    const int idx  = tgpig.z%args.nei0;
++
++    tgpig.z = 0;
++
++    const int32_t i02 = ((device const int32_t *) (ids + iid1*args.nbi1))[idx];
++
++    const uint i11 = idx % args.ne11;
++    const uint i12 = iid1;
++
++    const uint i1 = idx;
++    const uint i2 = i12;
++
++    device char * dst_cur = dst + (i1*uint(args.ne0) + i2*uint(args.ne1)*uint(args.ne0))*uint(sizeof(float));
++
++    if (i02 == -1) {
++        device float * dst_f32 = (device float *) dst_cur;
++        const ushort nth = ntg.x*ntg.y*ntg.z;
++        for (int i0 = tiitg; i0 < args.ne0; i0 += nth) {
++            dst_f32[i0] = 0.0f;
++        }
++        return;
++    }
++
++    device const char * src0_cur = src0s + uint(i02)*uint(args.nb02);
++    device const char * src1_cur = src1 + i11*uint(args.nb11) + i12*uint(args.nb12);
++
++    ggml_metal_kargs_mul_mv args0 = {
++        /*.ne00 =*/ args.ne00,
++        /*.ne01 =*/ args.ne01,
++        /*.ne02 =*/ 1, // args.ne02,
++        /*.nb00 =*/ args.nb00,
++        /*.nb01 =*/ args.nb01,
++        /*.nb02 =*/ args.nb02,
++        /*.nb03 =*/ args.nb02, // args.ne02 == 1
++        /*.ne10 =*/ args.ne10,
++        /*.ne11 =*/ 1, // args.ne11,
++        /*.ne12 =*/ 1, // args.ne12,
++        /*.nb10 =*/ args.nb10,
++        /*.nb11 =*/ args.nb11,
++        /*.nb12 =*/ args.nb12,
++        /*.nb13 =*/ args.nb12, // ne12 == 1
++        /*.ne0  =*/ args.ne0,
++        /*.ne1  =*/ 1, // args.ne1,
++        /*.nr0  =*/ args.nr0,
++        /*.r2   =*/ 1,
++        /*.r3   =*/ 1,
++    };
++
++    mul_vec_q_n_f32_impl<block_q4_1, 8, ggml_metal_kargs_mul_mv, uint>(
++        args0,
++        /* src0 */ src0_cur,
++        /* src1 */ src1_cur,
++        /* dst  */ dst_cur,
++        shmem,
++        tgpig,
++        tiisg,
++        sgitg);
++}
+diff --git a/ggml/src/ggml-metal/kernels/routed_u32_r4.metal b/ggml/src/ggml-metal/kernels/routed_u32_r4.metal
+new file mode 100644
+index 000000000..739da5659
+--- /dev/null
++++ b/ggml/src/ggml-metal/kernels/routed_u32_r4.metal
+@@ -0,0 +1,75 @@
++#include "common.h"
++#include "dequantize.h"
++#include "mul_mv_q_n.h"
++
++kernel void kernel_mul_mv_id_q4_1_f32_r4_u32(
++        constant ggml_metal_kargs_mul_mv_id & args,
++        device const char * src0s,
++        device const char * src1,
++        device       char * dst,
++        device const char * ids,
++        threadgroup  char * shmem [[threadgroup(0)]],
++        uint3  tgpig[[threadgroup_position_in_grid]],
++        ushort tiitg[[thread_index_in_threadgroup]],
++        ushort tiisg[[thread_index_in_simdgroup]],
++        ushort sgitg[[simdgroup_index_in_threadgroup]],
++        ushort3 ntg [[threads_per_threadgroup]]) {
++    const int iid1 = tgpig.z/args.nei0;
++    const int idx  = tgpig.z%args.nei0;
++
++    tgpig.z = 0;
++
++    const int32_t i02 = ((device const int32_t *) (ids + iid1*args.nbi1))[idx];
++
++    const uint i11 = idx % args.ne11;
++    const uint i12 = iid1;
++
++    const uint i1 = idx;
++    const uint i2 = i12;
++
++    device char * dst_cur = dst + (i1*uint(args.ne0) + i2*uint(args.ne1)*uint(args.ne0))*uint(sizeof(float));
++
++    if (i02 == -1) {
++        device float * dst_f32 = (device float *) dst_cur;
++        const ushort nth = ntg.x*ntg.y*ntg.z;
++        for (int i0 = tiitg; i0 < args.ne0; i0 += nth) {
++            dst_f32[i0] = 0.0f;
++        }
++        return;
++    }
++
++    device const char * src0_cur = src0s + uint(i02)*uint(args.nb02);
++    device const char * src1_cur = src1 + i11*uint(args.nb11) + i12*uint(args.nb12);
++
++    ggml_metal_kargs_mul_mv args0 = {
++        /*.ne00 =*/ args.ne00,
++        /*.ne01 =*/ args.ne01,
++        /*.ne02 =*/ 1, // args.ne02,
++        /*.nb00 =*/ args.nb00,
++        /*.nb01 =*/ args.nb01,
++        /*.nb02 =*/ args.nb02,
++        /*.nb03 =*/ args.nb02, // args.ne02 == 1
++        /*.ne10 =*/ args.ne10,
++        /*.ne11 =*/ 1, // args.ne11,
++        /*.ne12 =*/ 1, // args.ne12,
++        /*.nb10 =*/ args.nb10,
++        /*.nb11 =*/ args.nb11,
++        /*.nb12 =*/ args.nb12,
++        /*.nb13 =*/ args.nb12, // ne12 == 1
++        /*.ne0  =*/ args.ne0,
++        /*.ne1  =*/ 1, // args.ne1,
++        /*.nr0  =*/ args.nr0,
++        /*.r2   =*/ 1,
++        /*.r3   =*/ 1,
++    };
++
++    mul_vec_q_n_f32_impl<block_q4_1, 4, ggml_metal_kargs_mul_mv, uint>(
++        args0,
++        /* src0 */ src0_cur,
++        /* src1 */ src1_cur,
++        /* dst  */ dst_cur,
++        shmem,
++        tgpig,
++        tiisg,
++        sgitg);
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 133ba2bf3..814cc8ea6 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -388,6 +388,10 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
+   llama_build_and_test(test-opt.cpp  LABEL "main behavior backend"  LINK ggml)
+ endif()
+ if (GGML_METAL AND NOT GGML_BACKEND_DL)
++    # Explicit hardware qualification, outside the default CTest roster.
++    llama_build(test-metal-routed-u32.cpp LINK ggml ggml-metal)
++    llama_test(test-metal-routed-u32 NAME metal_routed_u32_policy LABEL "main behavior backend" ARGS --policy-only)
++    target_include_directories(test-metal-routed-u32 PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
+     # calls the Metal backend's graph optimizer and fusion table directly
+     llama_build_and_test(test-metal-graph-optimize.cpp  LABEL "main behavior backend"  LINK ggml ggml-metal)
+     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 4d947c695..463123c0f 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -10530,7 +10530,12 @@ static const ggml_type other_types[] = {
+ #endif
+ 
+ // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
++#include "test-backend-portable-routed.h"
++
+ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
++    if (std::getenv("SKIPPY_TEST_PORTABLE_R8")) {
++        return make_portable_routed_cases();
++    }
+     std::vector<std::unique_ptr<test_case>> test_cases;
+     std::default_random_engine rng(0);
+ 
+diff --git a/tests/test-backend-portable-routed.h b/tests/test-backend-portable-routed.h
+new file mode 100644
+index 000000000..9df3198a1
+--- /dev/null
++++ b/tests/test-backend-portable-routed.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++// Explicit opt-in native qualification, using the backend suite's actual
++// graph construction, CPU reference, strided views and negative/repeated IDs.
++template<class Parent>
++struct test_portable_routed final : Parent {
++    using Parent::Parent;
++    std::string op_desc(ggml_tensor *) override { return "PORTABLE_ROUTED_REUSE"; }
++};
++
++static std::vector<std::unique_ptr<test_case>> make_portable_routed_cases() {
++    std::vector<std::unique_ptr<test_case>> cases;
++    for (bool broadcast : {false,true}) {
++        for (bool offset : {false,true}) for (bool masked : {false,true}) {
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 0, offset, masked));
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id_dup>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 0, offset, masked));
++        }
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 256, 8, broadcast, 2048, 16, 512, 0, true, true));
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id_dup>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 256, 8, broadcast, 2048, 16, 512, 0, true, true));
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, 16, 512, 2080, true, true));
++        for (int tokens : {8,15,17}) {
++            cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++                GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 2048, tokens, 512));
++        }
++        cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++            GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, broadcast, 512, 16, 2048));
++    }
++    for (int selected : {4,16}) cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, selected, false, 2048, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q5_1, GGML_TYPE_F32, 16, 8, false, 2048, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, false, 2032, 16, 512));
++    cases.emplace_back(new test_portable_routed<test_mul_mat_id>(
++        GGML_TYPE_Q4_1, GGML_TYPE_F32, 16, 8, false, 2048, 16, 480));
++    GGML_ASSERT(cases.size() == 35);
++    return cases;
++}
+diff --git a/tests/test-metal-graph-optimize.cpp b/tests/test-metal-graph-optimize.cpp
+index e9ebdb8df..b65d1d8bf 100644
+--- a/tests/test-metal-graph-optimize.cpp
++++ b/tests/test-metal-graph-optimize.cpp
+@@ -8,6 +8,7 @@
+ #include "ggml-metal-device.h"
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-tuning.h"
++#include "ggml-metal-routed-tuning.h"
+ 
+ #include <cstdio>
+ #include <vector>
+@@ -344,6 +345,48 @@ static int run_unary_mul_cases() {
+ 
+ int main() {
+     int preference_failures = 0;
++    using ggml_metal_routed_tuning::rows;
++    for (auto device : {GGML_METAL_DEVICE_M1_ULTRA, GGML_METAL_DEVICE_M4}) {
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 8;
++        for (int64_t tokens : {8, 15, 17, 32}) {
++            preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, tokens, 2, 4, 8) != 4;
++        }
++        for (int64_t selections : {1, 4, 16}) {
++            preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, selections) != 4;
++        }
++        preference_failures += rows(device, false, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_K, 512, 2048, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 2048, 512, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2032, 16, 2, 4, 8) != 4;
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 1, 4, 8) != 4;
++    }
++    for (auto device : {GGML_METAL_DEVICE_M1, GGML_METAL_DEVICE_M1_MAX,
++                       GGML_METAL_DEVICE_M4_PRO, GGML_METAL_DEVICE_M4_MAX, GGML_METAL_DEVICE_M3_ULTRA}) {
++        preference_failures += rows(device, true, GGML_TYPE_Q4_1, 512, 2048, 16, 2, 4, 8) != 4;
++    }
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 2048, 512, 3, 2, 4) != 8;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 512, 2048, 31, 2, 4) != 8;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, false, GGML_TYPE_Q4_1, 2048, 512, 8, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M4_MAX, true, GGML_TYPE_Q4_1, 2048, 512, 8, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 2048, 512, 2, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 2048, 512, 32, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 2048, 520, 8, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 256, 512, 8, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_1, 4352, 512, 8, 2, 4) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, false, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 1, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q5_K, 512, 2048, 2, 2, 1) != 1;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 3, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q5_K, 512, 2048, 8, 2, 1) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 768, 24, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M4_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_PRO, true, GGML_TYPE_Q4_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 256, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 514, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 2048, 512, 32, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q6_K, 2048, 512, 8, 2, 2) != 2;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 4096, 512, 31, 2, 2) != 4;
++    preference_failures += rows(GGML_METAL_DEVICE_M5_MAX, true, GGML_TYPE_Q4_K, 4352, 512, 8, 2, 2) != 2;
+     for (auto device : { GGML_METAL_DEVICE_M5_MAX, GGML_METAL_DEVICE_M5_PRO,
+                          GGML_METAL_DEVICE_M4_MAX, GGML_METAL_DEVICE_GENERIC }) {
+         for (bool shared : { false, true }) {
+diff --git a/tests/test-metal-routed-u32.cpp b/tests/test-metal-routed-u32.cpp
+new file mode 100644
+index 000000000..341ce6ca4
+--- /dev/null
++++ b/tests/test-metal-routed-u32.cpp
+@@ -0,0 +1,237 @@
++#include "ggml.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "ggml-metal-device.h"
++#include "ggml-metal-routed-offsets.h"
++
++#include <atomic>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++static void require(bool ok, const char * why) { if (!ok) throw std::runtime_error(why); }
++static std::atomic<int> compiled{0};
++static std::atomic<int> compiled_r4{0};
++static void logger(ggml_log_level level, const char * text, void *) {
++    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r8_u32'")) ++compiled;
++    if (std::strstr(text, "compiling pipeline: base = 'kernel_mul_mv_id_q4_1_f32_r4_u32'")) ++compiled_r4;
++    if (level != GGML_LOG_LEVEL_DEBUG) std::fputs(text, stderr);
++}
++struct q4 { ggml_fp16_t d, m; uint8_t qs[16]; };
++static_assert(sizeof(q4) == 20, "Q4_1 storage");
++struct storage {
++    ggml_context * ctx = ggml_init({4*1024*1024, nullptr, true});
++    ggml_backend_buffer_t buffer = nullptr;
++    ~storage() { if (buffer) ggml_backend_buffer_free(buffer); if (ctx) ggml_free(ctx); }
++};
++
++static int policy_checks() {
++    using namespace ggml_metal_routed_offsets;
++    storage s; require(s.ctx, "context");
++    auto * w = ggml_new_tensor_3d(s.ctx, GGML_TYPE_Q4_1, 512, 2048, 256);
++    auto * x = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, 16);
++    auto * ids = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, 16);
++    auto * out = ggml_mul_mat_id(s.ctx, w, x, ids);
++    const auto admitted = [&] { return eligible(out, GGML_METAL_DEVICE_M1_ULTRA, true, 8, 2); };
++    int checks = 0;
++    for (auto device : {GGML_METAL_DEVICE_M1_ULTRA, GGML_METAL_DEVICE_M4,
++                       GGML_METAL_DEVICE_M5_MAX, GGML_METAL_DEVICE_M3_ULTRA}) {
++        require(requested(nullptr,device)==(device==GGML_METAL_DEVICE_M1_ULTRA), "unqualified default"); ++checks;
++        require(!requested("0",device), "diagnostic opt-out"); ++checks;
++        require(requested("1",device), "explicit diagnostic opt-in"); ++checks;
++        require(requested_r8(nullptr,device)==(device==GGML_METAL_DEVICE_M1_ULTRA || device==GGML_METAL_DEVICE_M5_MAX), "R8 default policy"); ++checks;
++        require(!requested_r8("0",device), "R8 diagnostic opt-out"); ++checks;
++        require(requested_r8("1",device), "R8 diagnostic opt-in"); ++checks;
++
++    }
++
++    require(admitted(), "good geometry rejected"); ++checks;
++    require(!eligible(out, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2), "NR4 must remain NR4"); ++checks;
++    require(!eligible(out, GGML_METAL_DEVICE_M1_ULTRA, false, 8, 2), "private mode admitted"); ++checks;
++    require(!eligible(out, GGML_METAL_DEVICE_M1_ULTRA, true, 8, 1), "wrong SIMD groups"); ++checks;
++    require(!eligible(out, GGML_METAL_DEVICE_M3_ULTRA, true, 8, 2), "unqualified device"); ++checks;
++    for (auto * tensor : {w, x, ids, out}) {
++        auto saved = *tensor;
++        tensor->nb[1] = UINT64_MAX;
++        require(!admitted(), "overflow stride admitted"); ++checks; *tensor = saved;
++        tensor->ne[3] = 2;
++        require(!admitted(), "extra dimension admitted"); ++checks; *tensor = saved;
++    }
++    const size_t stride = ids->nb[1];
++    ids->nb[1] = 12*sizeof(int32_t);
++    require(admitted(), "padded ID rows rejected"); ++checks;
++    ids->nb[1] = stride;
++    for (int64_t tokens : {1, 3, 8, 15, 17, 32}) {
++        ids->ne[1] = tokens; require(!admitted(), "token fallback admitted"); ++checks;
++    }
++    ids->ne[1] = 16;
++    ggml_tensor boundary{}; boundary.type = GGML_TYPE_I8;
++    for (int i = 0; i < GGML_MAX_DIMS; ++i) { boundary.ne[i] = 1; boundary.nb[i] = 1; }
++    boundary.ne[0] = UINT32_MAX;
++    require(fits_u32(&boundary), "exact byte limit"); ++checks;
++    ++boundary.ne[0]; require(!fits_u32(&boundary), "limit overflow"); ++checks;
++    boundary.ne[0] = 1; boundary.ne[1] = 3; boundary.nb[1] = UINT64_MAX;
++    require(!fits_u32(&boundary), "stride overflow"); ++checks;
++    boundary.type = GGML_TYPE_Q4_1; boundary.ne[0] = 33;
++    require(!fits_u32(&boundary), "partial quant block"); ++checks;
++    for (int tokens : {1, 2, 3, 8, 15, 16, 17}) {
++        auto * xi = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, tokens);
++        auto * idi = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, tokens);
++        auto * yi = ggml_mul_mat_id(s.ctx, w, xi, idi);
++        require(eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2)==(tokens<=16), "R4 token admission"); ++checks;
++        require(!eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 8, 2), "R4 changed row geometry"); ++checks;
++        require(!eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, false, 4, 2), "R4 private allocation"); ++checks;
++        idi->nb[1]=UINT64_MAX;
++        require(eligible_r4(yi, GGML_METAL_DEVICE_M1_ULTRA, true, 4, 2)==(tokens==1), "R4 ID span bound"); ++checks;
++    }
++    for (int tokens : {1, 2, 3, 8, 15, 16, 17}) {
++        auto * xi = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, tokens);
++        auto * idi = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, tokens);
++        auto * yi = ggml_mul_mat_id(s.ctx, w, xi, idi);
++        require(eligible(yi, GGML_METAL_DEVICE_M5_MAX, true, 8, 2)==(tokens>=3 && tokens<=16), "R8 window admission"); ++checks;
++        require(!eligible(yi, GGML_METAL_DEVICE_M5_MAX, true, 4, 2), "R8 row geometry changed"); ++checks;
++        require(!eligible(yi, GGML_METAL_DEVICE_M5_MAX, false, 8, 2), "R8 private allocation"); ++checks;
++    }
++    std::printf("PASS policy_checks=%d\n", checks);
++
++
++    return checks;
++}
++
++static void old_library_check() {
++    auto device = ggml_metal_device_init(0, 1); require(device, "device");
++    auto old = ggml_metal_library_init_from_source(device,
++        "#include <metal_stdlib>\nusing namespace metal;\nkernel void kernel_mul_mv_id_q4_1_f32_r8() {}\n", false);
++    require(old, "old combined library");
++    require(ggml_metal_library_has_function(old, "kernel_mul_mv_id_q4_1_f32_r8"), "old function missing");
++    require(!ggml_metal_library_has_function(old, "kernel_mul_mv_id_q4_1_f32_r8_u32"), "old function discovery false positive");
++    require(!ggml_metal_library_has_function(old, "kernel_mul_mv_id_q4_1_f32_r8_u32"), "negative discovery cache false positive");
++    require(ggml_metal_library_has_function(old, "kernel_mul_mv_id_q4_1_f32_r8"), "positive discovery cache lost function");
++
++    storage s;
++    auto * w = ggml_new_tensor_3d(s.ctx, GGML_TYPE_Q4_1, 512, 2048, 256);
++    auto * x = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, 16);
++    auto * ids = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, 16);
++    auto * out = ggml_mul_mat_id(s.ctx, w, x, ids);
++    setenv("GGML_METAL_ROUTED_U32", "1", 1);
++    auto selected = ggml_metal_library_get_pipeline_mul_mv_id(old, out);
++    auto fallback = ggml_metal_library_get_pipeline(old, "kernel_mul_mv_id_q4_1_f32_r8_nsg=2_split=0");
++    require(selected.pipeline && selected.pipeline == fallback.pipeline && selected.nr0 == 8, "old-library fallback failed");
++    ggml_metal_library_free(old); ggml_metal_device_free(device);
++    device = ggml_metal_device_init(0, 1); require(device, "R4 fallback device");
++    old = ggml_metal_library_init_from_source(device,
++        "#include <metal_stdlib>\nusing namespace metal;\nkernel void kernel_mul_mv_id_q4_1_f32() {}\n", false);
++    require(old, "R4 old combined library");
++    require(!ggml_metal_library_has_function(old,"kernel_mul_mv_id_q4_1_f32_r4_u32"), "R4 missing function");
++    require(!ggml_metal_library_has_function(old,"kernel_mul_mv_id_q4_1_f32_r4_u32"), "R4 negative discovery cache");
++    auto * x4 = ggml_new_tensor_3d(s.ctx, GGML_TYPE_F32, 512, 8, 1);
++    auto * ids4 = ggml_new_tensor_2d(s.ctx, GGML_TYPE_I32, 8, 1);
++    auto * out4 = ggml_mul_mat_id(s.ctx,w,x4,ids4);
++    setenv("GGML_METAL_ROUTED_U32_R4", "1", 1);
++    selected = ggml_metal_library_get_pipeline_mul_mv_id(old,out4);
++    fallback = ggml_metal_library_get_pipeline(old,"kernel_mul_mv_id_q4_1_f32_nsg=2_split=0");
++    require(selected.pipeline && selected.pipeline==fallback.pipeline && selected.nr0==4,"R4 old library fallback failed");
++    ggml_metal_library_free(old); ggml_metal_device_free(device);
++    std::puts("PASS old_combined_library_fallback=1 r4_fallback=1");
++
++}
++
++static void run_case(ggml_backend_t backend, int k, int m, int experts, int tokens,
++                     int input_rows, bool id_view, bool weight_view) {
++    storage s; auto * ctx = s.ctx;
++    const int weight_rows = m + (weight_view ? 16 : 0);
++    auto * weight_root = ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_1, k, weight_rows, experts);
++    auto * weights = weight_view ? ggml_view_3d(ctx, weight_root, k, m, experts, weight_root->nb[1], weight_root->nb[2], 0) : weight_root;
++    auto * input = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, input_rows, tokens);
++    const int id_rows = id_view ? 12 : 8;
++    auto * id_root = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, id_rows, tokens);
++    auto * ids = id_view ? ggml_view_2d(ctx, id_root, 8, tokens, id_root->nb[1], sizeof(int32_t)) : id_root;
++    auto * out = ggml_mul_mat_id(ctx, weights, input, ids);
++    auto * graph = ggml_new_graph_custom(ctx, 64, false); ggml_build_forward_expand(graph, out);
++    s.buffer = ggml_backend_alloc_ctx_tensors(ctx, backend); require(s.buffer, "native buffer allocation");
++    std::vector<q4> w(ggml_nbytes(weight_root)/sizeof(q4));
++    uint32_t random = 0x4158fc17;
++    for (size_t i = 0; i < w.size(); ++i) {
++        w[i].d = ggml_fp32_to_fp16(.0013f + .000071f*(i%31));
++        w[i].m = ggml_fp32_to_fp16(-.013f + .00091f*(i%29));
++        for (auto & q : w[i].qs) { random ^= random<<13; random ^= random>>17; random ^= random<<5; q = uint8_t(random); }
++    }
++    std::vector<float> x(ggml_nelements(input));
++    for (size_t i = 0; i < x.size(); ++i) x[i] = std::sin(double(i)*.017)*.25 + std::cos(double(i)*.041)*.13;
++    ggml_backend_tensor_set(weight_root, w.data(), 0, ggml_nbytes(weight_root));
++    ggml_backend_tensor_set(input, x.data(), 0, ggml_nbytes(input));
++    for (int frame : {0, 17}) {
++        std::vector<int32_t> route(id_rows*tokens, 0);
++        for (int t = 0; t < tokens; ++t) for (int r = 0; r < 8; ++r) route[t*id_rows+r+int(id_view)] = (t*17+r*13+frame*7)%experts;
++        route[int(id_view)+7] = -1;
++        route[(tokens-1)*id_rows+int(id_view)+7] = experts-1;
++        ggml_backend_tensor_set(id_root, route.data(), 0, ggml_nbytes(id_root));
++        std::vector<float> arms[2];
++        for (int arm = 0; arm < 2; ++arm) {
++            setenv("GGML_METAL_ROUTED_U32", arm ? "1" : "0", 1);
++            setenv("GGML_METAL_ROUTED_U32_R4", arm ? "1" : "0", 1);
++
++            std::vector<float> poison(ggml_nelements(out), std::nanf(""));
++            ggml_backend_tensor_set(out, poison.data(), 0, ggml_nbytes(out));
++            require(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS, "native graph failed");
++            ggml_backend_synchronize(backend);
++            arms[arm].resize(ggml_nelements(out)); ggml_backend_tensor_get(out, arms[arm].data(), 0, ggml_nbytes(out));
++            for (float value : arms[arm]) require(std::isfinite(value), "incomplete finite output coverage");
++            double error = 0, scale = 0;
++            for (int t = 0; t < tokens; ++t) for (int r = 0; r < 8; ++r) {
++                const int expert = route[t*id_rows+r+int(id_view)];
++                if (expert == -1) { for (int row = 0; row < m; ++row) require(arms[arm][(t*8+r)*m+row] == 0, "masked nonzero"); continue; }
++                for (int row : {0, 7, 8, 15, 16, 127, m/2, m-1}) {
++                    double expected = 0;
++                    for (int col = 0; col < k; ++col) {
++                        const auto & q = w[(size_t(expert)*weight_rows+row)*(k/32)+col/32];
++                        const int code = col%32 < 16 ? q.qs[col%16]&15 : q.qs[col%16]>>4;
++                        const double value = double(ggml_fp16_to_fp32(q.d))*code + ggml_fp16_to_fp32(q.m);
++                        expected += value*x[(size_t(t)*input_rows+r%input_rows)*k+col];
++                    }
++                    const double delta = arms[arm][(t*8+r)*m+row]-expected;
++                    error += delta*delta; scale += expected*expected;
++                }
++            }
++            require(error/std::fmax(scale, 1e-30) < 1e-9, "native FP64 oracle mismatch");
++        }
++        size_t different = 0; double delta2 = 0, ref2 = 0;
++        for (size_t i = 0; i < arms[0].size(); ++i) { different += std::memcmp(&arms[0][i], &arms[1][i], sizeof(float)) != 0; const double d = double(arms[0][i])-arms[1][i]; delta2 += d*d; ref2 += double(arms[0][i])*arms[0][i]; }
++        if (different) std::fprintf(stderr,"PAIR_DIFFERENCE k=%d m=%d frame=%d entries=%zu nmse=%.15g compiles=%d\n",k,m,frame,different,delta2/std::fmax(ref2,1e-30),compiled.load());
++        require(std::memcmp(arms[0].data(), arms[1].data(), ggml_nbytes(out)) == 0, "native paired output differs");
++        std::printf("PASS native_pair k=%d m=%d experts=%d tokens=%d input_rows=%d id_view=%d weight_view=%d frame=%d bytes=%zu\n",
++            k,m,experts,tokens,input_rows,id_view,weight_view,frame,ggml_nbytes(out));
++    }
++}
++
++int main(int argc, char ** argv) {
++    try {
++        const bool policy_only = argc==2 && std::strcmp(argv[1], "--policy-only")==0;
++        require(argc==1 || policy_only, "usage: test-metal-routed-u32 [--policy-only]");
++        policy_checks(); if (policy_only) return 0;
++        ggml_log_set(logger, nullptr); old_library_check(); compiled.store(0); compiled_r4.store(0);
++        ggml_backend_load_all(); auto backend = ggml_backend_init_by_name("MTL0", nullptr); require(backend, "Metal backend missing");
++        int cases = 0;
++        for (int k : {2048, 512}) for (int experts : {128, 256}) for (int inputs : {1, 8}) for (bool view : {false, true}) {
++            run_case(backend,k,k==2048?512:2048,experts,16,inputs,view,false); ++cases;
++        }
++        for (int tokens : {3,8,15,17}) for (int inputs : {1,8}) { run_case(backend,512,2048,128,tokens,inputs,true,false); ++cases; }
++        for (int k : {2048,512}) { run_case(backend,k,k==2048?512:2048,128,16,8,true,true); ++cases; }
++        for (int tokens : {1,2}) for (int k : {2048,512}) for (int inputs : {1,8}) {
++            run_case(backend,k,k==2048?512:2048,128,tokens,inputs,true,false); ++cases;
++        }
++        for (int tokens : {3,8,15}) for (int inputs : {1,8}) {
++            run_case(backend,2048,512,128,tokens,inputs,true,false); ++cases;
++        }
++        require(compiled.load() > 0, "new R8 native pipeline never compiled");
++        require(compiled_r4.load() > 0, "new R4 native pipeline never compiled");
++
++
++        std::printf("PASS native_cases=%d paired_outputs=%d fp64_checks=%d u32_pipeline_compiles=%d r4_pipeline_compiles=%d\n",cases,2*cases,4*cases,compiled.load(),compiled_r4.load());
++        ggml_backend_free(backend); return 0;
++    } catch (const std::exception & error) { std::fprintf(stderr,"FAIL: %s\n",error.what()); return 1; }
++}

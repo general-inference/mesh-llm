@@ -101,3 +101,60 @@ generation may legitimately diverge from the baseline at a near-tie token.
 
 The default corpus path is
 `skippy/evals/corpora/kv_mixed_prompts.jsonl`.
+
+## Packaged native runtimes
+
+Build with `--features dynamic-native-runtime` to use a separately packaged
+runtime. Set `MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR` to the matching runtime bundle
+directory before invoking the benchmark. The default build retains static
+linking.
+
+For draft readout comparisons, run `--dflash` once with
+`SKIPPY_DFLASH_GPU_READOUT` unset and once with it set to `1`. JSON reports
+include `draft_backend_readout`, `draft_backend_token_rows` and
+`draft_host_fallback_rows`, so a requested backend path cannot silently be
+reported as measured offload. Keep the same corpus, token counts and draft
+window, warm up each arm, and interleave repeated runs before comparing rates.
+
+Compare feature transfers separately with `SKIPPY_DFLASH_GPU_READOUT=0` and
+`SKIPPY_DFLASH_DEVICE_FEATURES=0` versus `1`. The
+`draft_device_feature_rows` field must be positive in the device arm. These
+component rates measure forward timings. The `*_decode_wall_ms` and
+`*_wall_tokens_per_second` fields measure the complete post-prefill loop,
+including rollback and bookkeeping. Use a serving workload to establish
+request latency and concurrent throughput gains.
+
+DFlash target contexts default to `window + 1` recurrent rollback snapshots,
+matching the serving plan's draft-plus-anchor depth. The JSON report records
+`target_recurrent_rollback_tokens`. Use `--recurrent-rollback-tokens 0` only
+when deliberately measuring checkpoint fallback; undersized snapshots can
+make rollback replay dominate decode time.
+
+`--verify-reference` diagnoses target batching independently of a drafter.
+It replays the serial continuation as forced inputs, compares single-token
+sampling against `window + 1` row verification, and records the first
+divergence with the top five raw log probabilities in each path. A trace
+stops at its first mismatch because sampled verification intentionally does
+not sample a rejected suffix. It fails on a difference unless
+`--allow-mismatch` explicitly requests a diagnostic report. No throughput
+claim should use that diagnostic mode.
+
+`--verify-reference --dflash-lanes 2 --shared-verify` traces shared target
+forwards on two equal-length reference continuations without a draft model.
+Add `--dflash` to attach the draft's feature-capture graph while still never
+proposing or rolling back draft tokens. The report records `draft_attached`,
+`lane_count` and actual `shared_forwards`, so capture and multi-sequence graph
+effects can be distinguished from draft proposal or repair effects.
+
+For two concurrent DFlash lanes, provide two prompts and `--dflash-lanes 2`.
+The control verifies each lane independently; `--shared-verify` combines
+equal-length windows using native ABI `0.1.82`. Both arms include proposing,
+verification, repair, and bookkeeping in `decode_wall_ms`, and report total
+output throughput across the lanes. The report records shared versus single
+forwards and the output tokens of each lane for exact comparison. This is a
+runtime diagnostic, not a measurement of the serving scheduler.
+
+Add `--shared-draft` to combine compatible lanes' draft noise blocks too.
+`shared_draft_lane_proposals` counts lanes that actually shared draft forwards,
+so a capacity or head fallback remains visible. Hold `--shared-verify` fixed
+when comparing independent and shared drafting to isolate its contribution.

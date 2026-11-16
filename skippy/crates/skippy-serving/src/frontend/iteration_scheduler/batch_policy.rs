@@ -44,6 +44,11 @@ impl BatchPlatform {
 
     /// The first GPU the runtime reports, else its first device.
     pub(super) fn detect() -> Self {
+        // Model-free schedulers can exist before the dynamic runtime loads.
+        // Keep their fallback policy instead of calling an unbound FFI table.
+        if !skippy_runtime::native_runtime_loaded() {
+            return Self::Other;
+        }
         let Ok(devices) = skippy_runtime::backend_devices_untraced() else {
             return Self::Other;
         };

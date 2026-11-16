@@ -5,9 +5,10 @@
 //! where rows are expensive or drafts miss. This picks, per window, the length
 //! that maximises expected committed tokens per unit of measured time.
 //!
-//! Cost is learned per draft model and shared by every request on it, because
-//! it is a property of the machine. Acceptance is learned per request, seeded
-//! from the shared estimate, because it is a property of the text.
+//! Cost is learned per draft model and active lane count, so concurrent
+//! requests do not overwrite the lone-stream baseline. Single-stream acceptance
+//! is learned per request. Concurrent shared submissions use aggregate acceptance
+//! and a stable width so independent choices do not fragment verification.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,10 +29,13 @@ pub(super) const MIN_SERIAL_SAMPLES: f64 = 2.0;
 /// Weight, in windows, a request gives the shared acceptance it starts from,
 /// so its own text dominates within a few windows.
 const SEED_ACCEPTANCE_WEIGHT: f64 = 4.0;
+/// Keep a concurrent cohort on one width long enough to share verification
+/// and collect costs before selecting another width.
+const ALIGNED_WINDOWS_PER_LANE: u64 = 8;
 
 /// Whether DFlash block lengths adapt instead of using the configured maximum.
-/// On by default: on every machine measured, adaptive matched or beat the best
-/// fixed length. `SKIPPY_DFLASH_ADAPTIVE=0` pins blocks at the maximum.
+/// On by default; chooses widths from observed execution costs and acceptance.
+/// `SKIPPY_DFLASH_ADAPTIVE=0` pins blocks at the maximum.
 pub(super) fn adaptive_enabled() -> bool {
     adaptive_enabled_by(std::env::var("SKIPPY_DFLASH_ADAPTIVE").ok().as_deref())
 }
@@ -227,26 +231,57 @@ pub(super) fn choose_block(
 pub(super) struct SharedBlockModel {
     pub(super) cost: BlockCost,
     pub(super) acceptance: Acceptance,
+    windows: u64,
+    choices: HashMap<usize, (u64, usize)>,
 }
 
-fn registry() -> &'static Mutex<HashMap<PathBuf, SharedBlockModel>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, SharedBlockModel>>> = OnceLock::new();
+fn registry() -> &'static Mutex<HashMap<(PathBuf, usize), SharedBlockModel>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<(PathBuf, usize), SharedBlockModel>>> = OnceLock::new();
     REGISTRY.get_or_init(Default::default)
 }
 
 /// The current shared estimates for a draft model.
-pub(super) fn shared_model(draft_model_path: &Path) -> SharedBlockModel {
+pub(super) fn shared_model(draft_model_path: &Path, lanes: usize) -> SharedBlockModel {
     registry()
         .lock()
-        .map(|models| models.get(draft_model_path).cloned().unwrap_or_default())
+        .map(|models| {
+            models
+                .get(&(draft_model_path.to_path_buf(), lanes.max(1)))
+                .cloned()
+                .unwrap_or_default()
+        })
         .unwrap_or_default()
 }
 
+/// Concurrent lanes use aggregate acceptance and a stable decision rather
+/// than independently selecting widths the verifier cannot batch together.
+/// Cache by the caller's limit so a request tail cannot shorten its peers.
+pub(super) fn aligned_block(
+    draft_model_path: &Path,
+    lanes: usize,
+    max_drafts: usize,
+) -> Option<usize> {
+    let mut models = registry().lock().ok()?;
+    let model = models
+        .entry((draft_model_path.to_path_buf(), lanes.max(1)))
+        .or_default();
+    let interval = (lanes.max(1) as u64).saturating_mul(ALIGNED_WINDOWS_PER_LANE);
+    let epoch = model.windows / interval;
+    if let Some(&(cached_epoch, choice)) = model.choices.get(&max_drafts)
+        && cached_epoch == epoch
+    {
+        return Some(choice);
+    }
+    let choice = choose_block(&model.cost, &model.acceptance, max_drafts, epoch);
+    model.choices.insert(max_drafts, (epoch, choice));
+    Some(choice)
+}
+
 /// Folds one measured serial step into the shared estimates for a draft model.
-pub(super) fn record_shared_serial(draft_model_path: &Path, micros: f64) {
+pub(super) fn record_shared_serial(draft_model_path: &Path, lanes: usize, micros: f64) {
     if let Ok(mut models) = registry().lock() {
         models
-            .entry(draft_model_path.to_path_buf())
+            .entry((draft_model_path.to_path_buf(), lanes.max(1)))
             .or_default()
             .cost
             .observe_serial(micros);
@@ -256,6 +291,7 @@ pub(super) fn record_shared_serial(draft_model_path: &Path, micros: f64) {
 /// Folds one window into the shared estimates for a draft model.
 pub(super) fn record_shared(
     draft_model_path: &Path,
+    lanes: usize,
     verify_rows: usize,
     verify_micros: f64,
     draft_micros: f64,
@@ -263,16 +299,81 @@ pub(super) fn record_shared(
     accepted: usize,
 ) {
     if let Ok(mut models) = registry().lock() {
-        let model = models.entry(draft_model_path.to_path_buf()).or_default();
+        let model = models
+            .entry((draft_model_path.to_path_buf(), lanes.max(1)))
+            .or_default();
         model.cost.observe_verify(verify_rows, verify_micros);
         model.cost.observe_draft(draft_micros);
         model.acceptance.observe(drafts, accepted);
+        model.windows = model.windows.saturating_add(1);
+        // A serial cohort must reconsider after its next probe, rather than
+        // waiting a full interval of sparse draft observations to resume.
+        model.choices.retain(|_, (_, choice)| *choice != 0);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_costs_do_not_cross_lane_counts() {
+        let path = Path::new("/test/lane-isolation.gguf");
+        record_shared_serial(path, 1, 100.0);
+        record_shared_serial(path, 1, 100.0);
+        record_shared_serial(path, 2, 400.0);
+        record_shared_serial(path, 2, 400.0);
+        assert_eq!(shared_model(path, 1).cost.serial_micros(), Some(100.0));
+        assert_eq!(shared_model(path, 2).cost.serial_micros(), Some(400.0));
+        assert_eq!(shared_model(path, 3).cost.serial_micros(), None);
+    }
+
+    #[test]
+    fn concurrent_choices_stay_aligned_until_the_cohort_has_measured_a_width() {
+        let path = Path::new("/test/aligned-cohort.gguf");
+        assert_eq!(aligned_block(path, 2, 6), Some(6));
+        for _ in 0..15 {
+            record_shared(path, 2, 7, 20_000.0, 2_000.0, 6, 5);
+            assert_eq!(aligned_block(path, 2, 6), Some(6));
+        }
+        record_shared(path, 2, 7, 20_000.0, 2_000.0, 6, 5);
+        // Only one row count was observed; the next whole cohort explores
+        // the shorter width so the fit can learn a slope.
+        assert_eq!(aligned_block(path, 2, 6), Some(3));
+        for _ in 0..16 {
+            record_shared(path, 2, 4, 18_000.0, 2_000.0, 3, 3);
+        }
+        assert!(aligned_block(path, 2, 6).unwrap() > 0);
+        assert_eq!(aligned_block(path, 3, 6), Some(6));
+    }
+
+    #[test]
+    fn request_tails_do_not_replace_the_cohorts_full_width_decision() {
+        let path = Path::new("/test/aligned-tail.gguf");
+        assert_eq!(aligned_block(path, 2, 2), Some(2));
+        assert_eq!(aligned_block(path, 2, 6), Some(6));
+        assert_eq!(aligned_block(path, 2, 0), Some(0));
+        assert_eq!(aligned_block(path, 2, 6), Some(6));
+    }
+
+    #[test]
+    fn a_serial_cohort_reconsiders_after_a_successful_probe() {
+        let path = Path::new("/test/aligned-serial-probe.gguf");
+        let mut models = registry().lock().unwrap();
+        let mut model = SharedBlockModel {
+            cost: linear_cost(25_000.0, 4_000.0, 8_000.0),
+            acceptance: uniform_acceptance(0.0),
+            ..SharedBlockModel::default()
+        };
+        model.cost.observe_serial(29_000.0);
+        model.cost.observe_serial(29_000.0);
+        models.insert((path.to_path_buf(), 2), model);
+        drop(models);
+        assert_eq!(aligned_block(path, 2, 6), Some(0));
+        record_shared(path, 2, 7, 30_000.0, 3_000.0, 6, 6);
+        let models = registry().lock().unwrap();
+        assert!(models[&(path.to_path_buf(), 2)].choices.is_empty());
+    }
 
     #[test]
     fn adaptive_is_on_unless_turned_off() {

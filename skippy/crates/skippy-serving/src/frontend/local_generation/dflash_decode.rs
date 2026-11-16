@@ -16,8 +16,8 @@ use crate::frontend::speculative::InferenceSpeculativeStats;
 use crate::frontend::util::openai_backend_error;
 
 use super::dflash_block_size::{
-    Acceptance, BlockCost, adaptive_enabled, choose_block, record_shared, record_shared_serial,
-    shared_model,
+    Acceptance, BlockCost, adaptive_enabled, aligned_block, choose_block, record_shared,
+    record_shared_serial, shared_model,
 };
 use super::token_generation::DecodeState;
 
@@ -59,6 +59,7 @@ pub(super) struct DFlashDecodeState {
 /// Per-request state for block lengths chosen from measured cost.
 pub(in crate::frontend) struct AdaptiveBlocks {
     draft_model_path: PathBuf,
+    load: (usize, u64),
     cost: BlockCost,
     acceptance: Acceptance,
     windows: u64,
@@ -69,13 +70,19 @@ pub(in crate::frontend) struct AdaptiveBlocks {
     serial_started: Option<Instant>,
     /// Measured costs chose serial decoding and the next probe is not due.
     paused: bool,
+    /// Shared submissions optimize aggregate execution cost. Queue residence
+    /// belongs to peer work and must not distort the fit against row count.
+    service_cost: bool,
+    /// Coordinate widths only when both draft and verification can be shared.
+    align_windows: bool,
 }
 
 impl AdaptiveBlocks {
     fn new(draft_model_path: PathBuf) -> Self {
-        let shared = shared_model(&draft_model_path);
+        let shared = shared_model(&draft_model_path, 1);
         Self {
             draft_model_path,
+            load: (1, 0),
             cost: shared.cost,
             acceptance: shared.acceptance.capped(),
             windows: 0,
@@ -83,7 +90,35 @@ impl AdaptiveBlocks {
             probes: 0,
             serial_started: None,
             paused: false,
+            service_cost: false,
+            align_windows: false,
         }
+    }
+
+    fn for_local(draft_model_path: PathBuf) -> Self {
+        if !crate::frontend::iteration_scheduler::shared_drafts::enabled() {
+            return Self::new(draft_model_path);
+        }
+        let mut key = draft_model_path.into_os_string();
+        key.push("#shared-draft-service");
+        let mut blocks = Self::new(PathBuf::from(key));
+        blocks.service_cost = true;
+        blocks.align_windows = crate::frontend::iteration_scheduler::shared_verification::enabled();
+        blocks
+    }
+
+    /// Discard timings that straddle a load transition. Keep this request's
+    /// acceptance history, but learn execution costs separately per lane count.
+    fn update_load(&mut self, load: (usize, u64)) {
+        if self.load == load {
+            return;
+        }
+        self.serial_started = None;
+        self.load = load;
+        self.cost = shared_model(&self.draft_model_path, load.0).cost;
+        self.windows = 0;
+        self.serial_since_probe = 0;
+        self.paused = false;
     }
 
     /// Block lengths for stage 0 of a split DFlash target, or `None` when
@@ -97,12 +132,29 @@ impl AdaptiveBlocks {
 
     /// Times the serial step that ran since the previous call, if one did.
     pub(in crate::frontend) fn finish_serial_step(&mut self) {
+        if self.service_cost {
+            return;
+        }
         let Some(started) = self.serial_started.take() else {
             return;
         };
         let micros = started.elapsed().as_secs_f64() * 1_000_000.0;
         self.cost.observe_serial(micros);
-        record_shared_serial(&self.draft_model_path, micros);
+        record_shared_serial(&self.draft_model_path, self.load.0, micros);
+    }
+
+    pub(super) fn finish_serial_compute(&mut self, load: (usize, u64), micros: f64) {
+        if !self.service_cost {
+            return;
+        }
+        if self.load != load {
+            self.update_load(load);
+            return;
+        }
+        if self.serial_started.take().is_some() {
+            self.cost.observe_serial(micros);
+            record_shared_serial(&self.draft_model_path, self.load.0, micros);
+        }
     }
 
     /// Drafts for the next window, or 0 to decode this token serially.
@@ -127,7 +179,12 @@ impl AdaptiveBlocks {
         if self.windows > 0 && !self.cost.serial_measured() {
             return 0;
         }
-        let chosen = choose_block(&self.cost, &self.acceptance, limit, self.windows);
+        let chosen = if self.align_windows && self.load.0 > 1 {
+            aligned_block(&self.draft_model_path, self.load.0, limit)
+                .unwrap_or_else(|| choose_block(&self.cost, &self.acceptance, limit, self.windows))
+        } else {
+            choose_block(&self.cost, &self.acceptance, limit, self.windows)
+        };
         if chosen > 0 {
             self.serial_since_probe = 0;
             return chosen;
@@ -160,6 +217,7 @@ impl AdaptiveBlocks {
         self.acceptance.observe(drafts, accepted);
         record_shared(
             &self.draft_model_path,
+            self.load.0,
             verify_rows,
             verify_micros,
             draft_micros,
@@ -217,6 +275,12 @@ impl DFlashBackoff {
 }
 
 impl DFlashDecodeState {
+    pub(super) fn finish_serial_compute(&mut self, load: (usize, u64), micros: f64) {
+        if let Some(adaptive) = &mut self.adaptive {
+            adaptive.finish_serial_compute(load, micros);
+        }
+    }
+
     /// DFlash commits by token equality against rows the native verifier
     /// samples in causal order, stopping at the first mismatch, which keeps
     /// greedy and stochastic sampling exact. `speculation_admitted` excludes
@@ -232,7 +296,7 @@ impl DFlashDecodeState {
             max_draft_tokens: dflash.max_draft_tokens.unwrap_or(usize::MAX),
             backoff: DFlashBackoff::default(),
             adaptive: adaptive_enabled()
-                .then(|| AdaptiveBlocks::new(dflash.draft_model_path.clone())),
+                .then(|| AdaptiveBlocks::for_local(dflash.draft_model_path.clone())),
             stats: InferenceSpeculativeStats::default(),
         })
     }
@@ -322,6 +386,7 @@ impl StageOpenAiBackend {
             return Ok(DFlashSpanProgress::NotUsed);
         };
         if let Some(adaptive) = dflash.adaptive.as_mut() {
+            adaptive.update_load(self.generation_limit.generation_load());
             adaptive.finish_serial_step();
         }
         // The adaptive chooser already weighs misses against serial steps.
@@ -337,16 +402,37 @@ impl StageOpenAiBackend {
         if limit == 0 {
             return Ok(DFlashSpanProgress::NotUsed);
         }
+        // Prefill leaves the final prompt token undecoded.
+        let base_position = request
+            .prompt_token_ids
+            .len()
+            .saturating_sub(1)
+            .checked_add(state.decoded_tokens)
+            .and_then(|position| u64::try_from(position).ok())
+            .ok_or_else(|| InferenceError::backend("DFlash base position overflow"))?;
         let propose_started = Instant::now();
         let owned_session_id = session_id.to_string();
         let anchor = state.current;
-        let proposal =
+        let proposal = if crate::frontend::iteration_scheduler::shared_drafts::enabled() {
+            self.iteration_scheduler
+                .execute_draft_timed(
+                    crate::runtime_state::draft_batch::RuntimeDraftRequest {
+                        session_id: owned_session_id,
+                        anchor,
+                        max_tokens: limit,
+                        base_position,
+                    },
+                    request.cancellation,
+                )?
+                .value
+        } else {
             self.iteration_scheduler
                 .execute_runtime("dflash-propose", move |runtime| {
                     runtime
                         .dflash_propose(&owned_session_id, anchor, limit)
                         .map_err(openai_backend_error)
-                })?;
+                })?
+        };
         let draft_micros = propose_started.elapsed().as_secs_f64() * 1_000_000.0;
         if let Some(dflash) = state.dflash.as_mut() {
             dflash.stats.draft_propose_ms += draft_micros / 1_000.0;
@@ -355,15 +441,6 @@ impl StageOpenAiBackend {
             return Ok(DFlashSpanProgress::NotUsed);
         };
 
-        // Prefill leaves the final prompt token undecoded; see the linear
-        // proposal path for the shared position contract.
-        let base_position = request
-            .prompt_token_ids
-            .len()
-            .saturating_sub(1)
-            .checked_add(state.decoded_tokens)
-            .and_then(|position| u64::try_from(position).ok())
-            .ok_or_else(|| InferenceError::backend("DFlash base position overflow"))?;
         let mut verify_inputs = Vec::with_capacity(proposal.tokens.len() + 1);
         verify_inputs.push(state.current);
         verify_inputs.extend_from_slice(&proposal.tokens);
@@ -397,13 +474,30 @@ impl StageOpenAiBackend {
             );
             dflash.backoff.record_window(accepted);
             if let Some(adaptive) = dflash.adaptive.as_mut() {
-                adaptive.record(
-                    verify_inputs.len(),
-                    (execution.verification_elapsed_us + execution.repair_elapsed_us) as f64,
-                    draft_micros,
-                    proposal.tokens.len(),
-                    accepted,
-                );
+                let load = self.generation_limit.generation_load();
+                if adaptive.load == load {
+                    let (verify_cost, draft_cost) = if adaptive.service_cost {
+                        (
+                            execution.compute_share_us as f64,
+                            proposal.proposal_compute_us as f64,
+                        )
+                    } else {
+                        (
+                            (execution.verification_elapsed_us + execution.repair_elapsed_us)
+                                as f64,
+                            draft_micros,
+                        )
+                    };
+                    adaptive.record(
+                        verify_inputs.len(),
+                        verify_cost,
+                        draft_cost,
+                        proposal.tokens.len(),
+                        accepted,
+                    );
+                } else {
+                    adaptive.update_load(load);
+                }
             }
         }
         apply_committed_tokens(state, &execution)?;
@@ -445,8 +539,85 @@ fn apply_committed_tokens(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_service_costs_use_measured_compute_and_discard_load_transitions() {
+        let mut blocks = super::AdaptiveBlocks::new("/test/shared-service-costs.gguf".into());
+        blocks.service_cost = true;
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_step();
+        assert!(
+            blocks.serial_started.is_some(),
+            "wall time must not consume a service sample"
+        );
+        blocks.finish_serial_compute((1, 0), 100.0);
+        assert!(blocks.serial_started.is_none());
+        assert!(!blocks.cost.serial_measured());
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_compute((1, 0), 100.0);
+        assert!(blocks.cost.serial_measured());
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.finish_serial_compute((2, 1), 5000.0);
+        assert!(blocks.serial_started.is_none());
+        assert!(
+            !blocks.cost.serial_measured(),
+            "a sample spanning a load change must not enter the new bucket"
+        );
+    }
+
+    #[test]
+    fn changing_load_discards_pending_serial_timing_and_reloads_costs() {
+        let path = std::path::PathBuf::from("/test/dflash-load-transition.gguf");
+        let mut blocks = super::AdaptiveBlocks::new(path.clone());
+        blocks.update_load((1, 1));
+        blocks.record(3, 30_000.0, 1_000.0, 2, 2);
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.update_load((2, 2));
+        assert!(blocks.serial_started.is_none());
+        assert_eq!(blocks.windows, 0);
+        assert!(!blocks.cost.serial_measured());
+        blocks.finish_serial_step();
+        assert!(!super::shared_model(&path, 2).cost.serial_measured());
+        // The count returning to one is still a new measurement interval.
+        blocks.serial_started = Some(std::time::Instant::now());
+        blocks.update_load((1, 3));
+        assert!(blocks.serial_started.is_none());
+    }
+
     use super::*;
     use crate::frontend::NativeMtpVerifyWindowDecision;
+
+    #[test]
+    fn concurrent_alignment_does_not_replace_single_lane_or_unshared_choices() {
+        let path = PathBuf::from("/test/concurrent-width-policy.gguf");
+        let make = |accepted| {
+            let mut blocks = AdaptiveBlocks::new(path.clone());
+            for rows in [3, 5, 7] {
+                blocks
+                    .cost
+                    .observe_verify(rows, 20_000.0 + rows as f64 * 1_000.0);
+            }
+            blocks.cost.observe_draft(2_000.0);
+            blocks.cost.observe_serial(30_000.0);
+            blocks.cost.observe_serial(30_000.0);
+            for _ in 0..20 {
+                blocks.acceptance.observe(6, accepted);
+            }
+            blocks
+        };
+        let mut good = make(6);
+        let mut poor = make(0);
+        good.align_windows = true;
+        poor.align_windows = true;
+        assert_ne!(good.next_drafts(6), poor.next_drafts(6));
+        good.load.0 = 2;
+        poor.load.0 = 2;
+        assert_eq!(good.next_drafts(6), poor.next_drafts(6));
+        assert_eq!(poor.next_drafts(2), 2);
+        assert_eq!(good.next_drafts(6), 6);
+        good.align_windows = false;
+        poor.align_windows = false;
+        assert_ne!(good.next_drafts(6), poor.next_drafts(6));
+    }
 
     #[test]
     fn serial_choices_pause_drafting_until_a_probe_is_due() {
@@ -558,6 +729,7 @@ mod tests {
             repair_elapsed_us: 0,
             runtime_lock_wait_us: 0,
             runtime_lock_hold_us: 0,
+            compute_share_us: 0,
             runtime_lock_acquires: 1,
         }
     }

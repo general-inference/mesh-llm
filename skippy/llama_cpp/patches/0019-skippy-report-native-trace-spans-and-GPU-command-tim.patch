@@ -1,8 +1,7 @@
-From 8708741d22b3c4a08af2193573542c449e1cf29b Mon Sep 17 00:00:00 2001
+From 574ea3235d9ad1817ceb8a557bbfa0b6d25758f5 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Mon, 2 Nov 2026 09:00:00 +1100
-Subject: [PATCH 19/35] skippy: report native trace spans and GPU command
- timing
+Subject: [PATCH] skippy: report native trace spans and GPU command timing
 
 skippy/tracing.h reports where time goes inside a native call, for a
 caller that already times the call itself. skippy_set_native_span_callback
@@ -71,6 +70,44 @@ built without this patch simply reports no native spans.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/include/ggml-backend.h               | 105 +++++
+ ggml/src/ggml-metal/CMakeLists.txt        |   1 +
+ ggml/src/ggml-metal/ggml-metal-context.m  | 129 ++++++
+ ggml/src/ggml-metal/ggml-metal-device.m   |  24 +
+ ggml/src/ggml-metal/ggml-metal-timing.cpp | 529 ++++++++++++++++++++++
+ ggml/src/ggml-metal/ggml-metal-timing.h   | 102 +++++
+ ggml/src/ggml-metal/ggml-metal.cpp        |  10 +
+ include/skippy.h                          |   1 +
+ include/skippy/common.h                   |   2 +
+ include/skippy/tracing.h                  | 197 ++++++++
+ src/CMakeLists.txt                        |   1 +
+ src/llama-context.cpp                     |  52 ++-
+ src/llama-kv-cache.cpp                    |  10 +
+ src/llama-memory-recurrent.cpp            |   8 +
+ src/llama-model.cpp                       |   3 +
+ src/llama-sampler.cpp                     |   7 +
+ src/llama-vocab.cpp                       |   2 +
+ src/llama.cpp                             |   8 +
+ src/skippy/abi.cpp                        |   1 +
+ src/skippy/activation.cpp                 |   3 +
+ src/skippy/execution-batch.cpp            |   6 +
+ src/skippy/model_loading.cpp              |  17 +
+ src/skippy/sampling.cpp                   |   2 +
+ src/skippy/speculative_decoding.cpp       |   2 +
+ src/skippy/trace_scope.h                  |  61 +++
+ src/skippy/tracing.cpp                    | 272 +++++++++++
+ tests/CMakeLists.txt                      |   4 +
+ tests/test-skippy-tracing-metal.cpp       | 157 +++++++
+ tests/test-skippy-tracing.cpp             | 306 +++++++++++++
+ 29 files changed, 2020 insertions(+), 2 deletions(-)
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.cpp
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.h
+ create mode 100644 include/skippy/tracing.h
+ create mode 100644 src/skippy/trace_scope.h
+ create mode 100644 src/skippy/tracing.cpp
+ create mode 100644 tests/test-skippy-tracing-metal.cpp
+ create mode 100644 tests/test-skippy-tracing.cpp
 
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
 index 0427fda49..f326769a3 100644
@@ -212,7 +249,7 @@ index e12c55a39..f89c8ebe6 100644
  
  #import <Foundation/Foundation.h>
  
-@@ -79,6 +80,11 @@ struct ggml_metal {
+@@ -79,6 +80,11 @@
      ggml_abort_callback abort_callback;
      void *              abort_callback_data;
  
@@ -237,7 +274,7 @@ index e12c55a39..f89c8ebe6 100644
          res->cmd_bufs_ext = [[NSMutableArray alloc] init];
          res->buf_refs     = [[NSMutableArray alloc] init];
  
-@@ -254,6 +266,7 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
+@@ -254,6 +266,7 @@ void ggml_metal_free(ggml_metal_t ctx) {
  void ggml_metal_synchronize(ggml_metal_t ctx) {
      // wait for any backend operations to finish
      if (ctx->cmd_buf_last) {
@@ -482,7 +519,7 @@ index 8c21125d5..7c42724af 100644
  #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
      if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
          MTLResidencySetDescriptor * desc = [[MTLResidencySetDescriptor alloc] init];
-@@ -2364,6 +2375,10 @@ static void * ggml_metal_host_malloc(size_t n) {
+@@ -2364,6 +2375,10 @@ static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
  }
  
  ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size, bool shared) {
@@ -2524,10 +2561,10 @@ index b8b159025..638e84e37 100644
  llama_build(test-chat-analysis.cpp)
 diff --git a/tests/test-skippy-tracing-metal.cpp b/tests/test-skippy-tracing-metal.cpp
 new file mode 100644
-index 000000000..365052e0e
+index 000000000..59ae25603
 --- /dev/null
 +++ b/tests/test-skippy-tracing-metal.cpp
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,157 @@
 +// skippy native tracing on the real Metal backend: library initialisation
 +// that ran before the install is still reported, and a tagged graph compute
 +// reports the pipelines it compiled and the command buffers that ran, in
@@ -2656,7 +2693,9 @@ index 000000000..365052e0e
 +    uint32_t other_nodes = 0;
 +    for (const auto & t : received) {
 +        other_nodes += t.other_nodes;
-+        CHECK(std::strcmp(t.op_class, "other") == 0);
++        // Empty command buffers have no operation class. Nonempty buffers
++        // contain only the two elementwise nodes constructed above.
++        CHECK(std::strcmp(t.op_class, t.other_nodes == 0 ? "mixed" : "other") == 0);
 +        CHECK(t.attention_nodes == 0 && t.matmul_nodes == 0 && t.recurrent_nodes == 0 && t.kv_write_nodes == 0);
 +        CHECK(t.layer == -1);
 +    }
@@ -2995,3 +3034,6 @@ index 000000000..804c2f7e0
 +    std::printf("ok\n");
 +    return 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

@@ -404,6 +404,12 @@ pub enum llama_model_kv_override_type {
     Bool = 2,
     Str = 3,
 }
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_process_type {
+    Encode = 0,
+    Decode = 1,
+}
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct llama_model_kv_override {
@@ -533,11 +539,19 @@ pub struct llama_logit_bias {
     pub token: llama_token,
     pub bias: f32,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_sampler_chain_params {
+    pub no_perf: bool,
+}
 unsafe extern "C" {
     pub fn llama_model_default_params() -> llama_model_params;
 }
 unsafe extern "C" {
     pub fn llama_context_default_params() -> llama_context_params;
+}
+unsafe extern "C" {
+    pub fn llama_sampler_chain_default_params() -> llama_sampler_chain_params;
 }
 unsafe extern "C" {
     pub fn llama_model_quantize_default_params() -> llama_model_quantize_params;
@@ -625,6 +639,41 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn llama_decode(ctx: *mut llama_context, batch: llama_batch) -> i32;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct llama_batch_ext {
+    _unused: [u8; 0],
+}
+unsafe extern "C" {
+    pub fn llama_batch_ext_init(ctx: *mut llama_context) -> *mut llama_batch_ext;
+}
+unsafe extern "C" {
+    pub fn llama_batch_ext_free(batch: *mut llama_batch_ext);
+}
+unsafe extern "C" {
+    pub fn llama_batch_ext_clear(batch: *mut llama_batch_ext);
+}
+unsafe extern "C" {
+    pub fn llama_batch_ext_set_output_logits(
+        batch: *mut llama_batch_ext,
+        idx: i32,
+        value: bool,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn llama_batch_ext_set_pos(
+        batch: *mut llama_batch_ext,
+        idx: i32,
+        pos: *const llama_pos,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn llama_process(
+        ctx: *mut llama_context,
+        type_: llama_process_type,
+        batch: *mut llama_batch_ext,
+    ) -> i32;
+}
 unsafe extern "C" {
     pub fn llama_set_embeddings(ctx: *mut llama_context, embeddings: bool);
 }
@@ -632,10 +681,16 @@ unsafe extern "C" {
     pub fn llama_set_causal_attn(ctx: *mut llama_context, causal_attn: bool);
 }
 unsafe extern "C" {
+    pub fn llama_synchronize(ctx: *mut llama_context);
+}
+unsafe extern "C" {
     pub fn llama_get_logits_ith(ctx: *mut llama_context, i: i32) -> *mut f32;
 }
 unsafe extern "C" {
     pub fn llama_get_embeddings_ith(ctx: *mut llama_context, i: i32) -> *mut f32;
+}
+unsafe extern "C" {
+    pub fn llama_get_sampled_token_ith(ctx: *mut llama_context, i: i32) -> llama_token;
 }
 unsafe extern "C" {
     pub fn llama_vocab_mask(vocab: *const llama_vocab) -> llama_token;
@@ -699,6 +754,25 @@ pub struct llama_sampler_i {
 pub struct llama_sampler {
     pub iface: *mut llama_sampler_i,
     pub ctx: llama_sampler_context_t,
+}
+unsafe extern "C" {
+    pub fn llama_set_sampler(
+        ctx: *mut llama_context,
+        seq_id: llama_seq_id,
+        smpl: *mut llama_sampler,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn llama_sampler_free(smpl: *mut llama_sampler);
+}
+unsafe extern "C" {
+    pub fn llama_sampler_chain_init(params: llama_sampler_chain_params) -> *mut llama_sampler;
+}
+unsafe extern "C" {
+    pub fn llama_sampler_chain_add(chain: *mut llama_sampler, smpl: *mut llama_sampler);
+}
+unsafe extern "C" {
+    pub fn llama_sampler_init_greedy() -> *mut llama_sampler;
 }
 unsafe extern "C" {
     pub fn llama_log_set(log_callback: ggml_log_callback, user_data: *mut ::std::os::raw::c_void);

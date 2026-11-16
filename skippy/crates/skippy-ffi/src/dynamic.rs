@@ -238,6 +238,7 @@ dynamic_symbols! {
     skippy_session_free(session: *mut Session, out_error: *mut *mut Error) -> Status;
     skippy_prefill_chunk(session: *mut Session, token_ids: *const i32, token_count: usize, input_activations: *const c_void, input_activation_bytes: usize, output_activations: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_verify_tokens(session: *mut Session, token_ids: *const i32, token_count: usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_verify_batch_sampled(requests: *const crate::bindings::skippy::skippy_verify_request, request_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_decode_step_sampled(session: *mut Session, token_id: i32, sampling: *const SamplingConfig, input_activation: *const c_void, input_activation_bytes: usize, output_activation: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
     skippy_decode_batch_sampled(sessions: *const *mut Session, token_ids: *const i32, sampling: *const *const SamplingConfig, request_count: usize, out_predicted_tokens: *mut i32, predicted_token_capacity: usize, out_error: *mut *mut Error) -> Status;
     skippy_iteration_batch_sampled(requests: *const IterationRequest, request_count: usize, output_descs: *mut ActivationDesc, output_payloads: *const *mut c_void, output_payload_capacities: *const usize, out_output_payload_bytes: *mut usize, out_sampled_request_indexes: *mut usize, out_predicted_tokens: *mut i32, sampled_output_capacity: usize, out_sampled_output_count: *mut usize, out_error: *mut *mut Error) -> Status;
@@ -549,6 +550,41 @@ pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
         .get_or_init(|| {
             let symbols = symbols();
             Some(LlamaDraftApi {
+                device_features: (|| {
+                    Some(crate::llama_draft::LlamaDraftDeviceApi {
+                        set_capture: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z34llama_set_embeddings_layer_inp_devP13llama_contextb\0",
+                            msvc: b"?llama_set_embeddings_layer_inp_dev@@YAXPEAUllama_context@@_N@Z\0",
+                        })?,
+                        supports_rows: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z23llama_supports_embd_rowPK13llama_context\0",
+                            msvc: b"?llama_supports_embd_row@@YA_NPEBUllama_context@@@Z\0",
+                        })?,
+                        add_row: symbols.lookup_cpp(CppEntryPoint {
+                            itanium: b"_Z28llama_batch_ext_add_embd_rowP15llama_batch_extii\0",
+                            msvc: b"?llama_batch_ext_add_embd_row@@YAHPEAUllama_batch_ext@@HH@Z\0",
+                        })?,
+                        batch_init: symbols.lookup_optional(b"llama_batch_ext_init\0")?,
+                        batch_free: symbols.lookup_optional(b"llama_batch_ext_free\0")?,
+                        batch_clear: symbols.lookup_optional(b"llama_batch_ext_clear\0")?,
+                        set_pos: symbols.lookup_optional(b"llama_batch_ext_set_pos\0")?,
+                        set_output: symbols.lookup_optional(b"llama_batch_ext_set_output_logits\0")?,
+                        process: symbols.lookup_optional(b"llama_process\0")?,
+                        synchronize: symbols.lookup_optional(b"llama_synchronize\0")?,
+                    })
+                })(),
+                sampling: (|| {
+                    Some(crate::llama_draft::LlamaDraftSamplingApi {
+                        chain_default_params: symbols
+                            .lookup_optional(b"llama_sampler_chain_default_params\0")?,
+                        chain_init: symbols.lookup_optional(b"llama_sampler_chain_init\0")?,
+                        chain_add: symbols.lookup_optional(b"llama_sampler_chain_add\0")?,
+                        init_greedy: symbols.lookup_optional(b"llama_sampler_init_greedy\0")?,
+                        free: symbols.lookup_optional(b"llama_sampler_free\0")?,
+                        set_sampler: symbols.lookup_optional(b"llama_set_sampler\0")?,
+                        get_token: symbols.lookup_optional(b"llama_get_sampled_token_ith\0")?,
+                    })
+                })(),
                 model_default_params: symbols.lookup_optional(b"llama_model_default_params\0")?,
                 context_default_params: symbols
                     .lookup_optional(b"llama_context_default_params\0")?,

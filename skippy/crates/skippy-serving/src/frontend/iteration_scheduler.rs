@@ -7,6 +7,10 @@ mod direct_batch;
 mod direct_execution;
 mod direct_reply;
 pub(crate) mod readout;
+pub(crate) mod shared_drafts;
+pub(crate) mod shared_verification;
+use shared_drafts::DraftOperation;
+use shared_verification::VerificationOperation;
 mod step_telemetry;
 
 use self::batch_policy::{
@@ -355,6 +359,9 @@ where
 }
 
 enum SchedulerCommand {
+    Draft(DraftOperation),
+    Verify(VerificationOperation),
+    ExecuteLaneRuntime(String, RuntimeOperation),
     Submit(ScheduledRequest),
     ExecuteIteration(Box<DirectIteration>),
     ExecuteRuntime(RuntimeOperation),
@@ -394,6 +401,9 @@ struct SchedulerWorker {
     scheduler: Scheduler,
     requests: BTreeMap<String, RequestState>,
     direct_iterations: VecDeque<DirectIteration>,
+    verifications: VecDeque<VerificationOperation>,
+    drafts: VecDeque<DraftOperation>,
+    max_verify_iteration_tokens: usize,
     cache_runtime_queue: CacheRuntimeQueue,
     commands: std_mpsc::Receiver<SchedulerCommand>,
     kv_capacity_tokens: usize,
@@ -529,6 +539,9 @@ impl IterationScheduler {
             ]),
         );
         let (commands, receiver) = std_mpsc::sync_channel(command_queue_capacity);
+        let max_verify_iteration_tokens = (config.n_ubatch.unwrap_or(512) as usize)
+            .min(max_direct_iteration_tokens)
+            .min(config.ctx_size as usize);
         // The worker outlives whatever constructs it, so its span hangs off
         // the process root rather than the setup section that starts it.
         let scheduler_span = ActiveSpan::start_under_process(
@@ -547,6 +560,9 @@ impl IterationScheduler {
                     scheduler,
                     requests: BTreeMap::new(),
                     direct_iterations: VecDeque::new(),
+                    verifications: VecDeque::new(),
+                    drafts: VecDeque::new(),
+                    max_verify_iteration_tokens,
                     cache_runtime_queue,
                     commands: receiver,
                     kv_capacity_tokens,
@@ -858,6 +874,21 @@ impl IterationScheduler {
         })?
     }
 
+    /// Runs a mutation confined to one session, after that session's queued
+    /// verification. Work on other lanes may still join a shared forward.
+    pub(crate) fn execute_lane_runtime_timed<T: Send + 'static>(
+        &self,
+        session_id: String,
+        label: &'static str,
+        operation: impl FnOnce(&mut RuntimeState) -> InferenceResult<T> + Send + 'static,
+    ) -> InferenceResult<SchedulerRuntimeOutcome<T>> {
+        let (operation, result) = runtime_operation(label, operation);
+        self.enqueue_command(SchedulerCommand::ExecuteLaneRuntime(session_id, operation))?;
+        result.recv().map_err(|error| {
+            InferenceError::backend(format!("iteration scheduler stopped: {error}"))
+        })?
+    }
+
     fn enqueue_command(&self, command: SchedulerCommand) -> InferenceResult<()> {
         self.shared
             .commands
@@ -943,6 +974,8 @@ impl SchedulerWorker {
         loop {
             if self.requests.is_empty()
                 && self.direct_iterations.is_empty()
+                && self.verifications.is_empty()
+                && self.drafts.is_empty()
                 && self.cache_runtime_queue.is_empty()
                 && !self.wait_idle()
             {
@@ -959,8 +992,18 @@ impl SchedulerWorker {
                     Err(std_mpsc::TryRecvError::Disconnected) => return,
                 }
             }
+            if !self.coalesce_drafts() {
+                return;
+            }
+            self.run_draft_batch();
+            if !self.coalesce_verifications() {
+                return;
+            }
+            self.run_verification_batch();
             if self.requests.is_empty()
                 && self.direct_iterations.is_empty()
+                && self.verifications.is_empty()
+                && self.drafts.is_empty()
                 && self.cache_runtime_queue.is_empty()
             {
                 continue;
@@ -997,11 +1040,32 @@ impl SchedulerWorker {
 
     fn handle_command(&mut self, command: SchedulerCommand) {
         match command {
+            SchedulerCommand::ExecuteLaneRuntime(session_id, operation) => {
+                while self.has_draft_for(&session_id) {
+                    self.run_draft_batch();
+                }
+                while self.has_verification_for(&session_id) {
+                    self.run_verification_batch();
+                }
+                self.run_runtime_operation(operation, None);
+            }
+            SchedulerCommand::Verify(operation) => self.verifications.push_back(operation),
+            SchedulerCommand::Draft(operation) => self.drafts.push_back(operation),
             SchedulerCommand::Submit(request) => self.submit(request),
             SchedulerCommand::ExecuteIteration(request) => {
                 self.direct_iterations.push_back(*request);
             }
             SchedulerCommand::ExecuteRuntime(operation) => {
+                // Draft proposals do not change target positions. Other
+                // mutations remain barriers after admitted verification.
+                if operation.label != "dflash-propose" {
+                    while !self.drafts.is_empty() {
+                        self.run_draft_batch();
+                    }
+                    while !self.verifications.is_empty() {
+                        self.run_verification_batch();
+                    }
+                }
                 self.run_runtime_operation(operation, None);
             }
             SchedulerCommand::ExecuteCacheAwareRuntime(
@@ -1532,6 +1596,8 @@ impl SchedulerWorker {
     }
 
     fn fail_all(&mut self, error: InferenceError) {
+        self.fail_verifications(&error);
+        self.fail_drafts(&error);
         let ids = self.requests.keys().cloned().collect::<Vec<_>>();
         for id in &ids {
             self.scheduler.cancel(id);

@@ -24,6 +24,49 @@ use crate::{
 
 pub use crate::bindings::skippy::*;
 
+/// # Safety
+/// Parameters must come from this runtime's sampler defaults.
+pub unsafe extern "C" fn llama_draft_sampler_chain_init(
+    params: crate::llama_draft::LlamaSamplerChainParams,
+) -> *mut Opaque {
+    unsafe { llama::llama_sampler_chain_init(params).cast() }
+}
+
+/// # Safety
+/// Both handles must be live; the chain takes ownership of the sampler.
+pub unsafe extern "C" fn llama_draft_sampler_chain_add(chain: *mut Opaque, sampler: *mut Opaque) {
+    unsafe { llama::llama_sampler_chain_add(chain.cast(), sampler.cast()) }
+}
+
+/// # Safety
+/// Free the returned handle with the same runtime's sampler free function.
+pub unsafe extern "C" fn llama_draft_sampler_init_greedy() -> *mut Opaque {
+    unsafe { llama::llama_sampler_init_greedy().cast() }
+}
+
+/// # Safety
+/// The sampler must be detached from any live context before freeing it.
+pub unsafe extern "C" fn llama_draft_sampler_free(sampler: *mut Opaque) {
+    unsafe { llama::llama_sampler_free(sampler.cast()) }
+}
+
+/// # Safety
+/// Context and optional sampler must belong to this runtime. The caller retains
+/// sampler ownership and must keep it live until it is detached.
+pub unsafe extern "C" fn llama_draft_set_sampler(
+    ctx: *mut Opaque,
+    seq: i32,
+    sampler: *mut Opaque,
+) -> bool {
+    unsafe { llama::llama_set_sampler(ctx.cast(), seq, sampler.cast()) }
+}
+
+/// # Safety
+/// The context must have decoded this output row with a backend sampler.
+pub unsafe extern "C" fn llama_draft_get_sampled_token(ctx: *mut Opaque, row: i32) -> i32 {
+    unsafe { llama::llama_get_sampled_token_ith(ctx.cast(), row) }
+}
+
 pub use llama::{
     ggml_log_set, llama_log_set, llama_model_is_diffusion, llama_model_is_hybrid,
     llama_model_is_recurrent, llama_model_meta_val_str, llama_model_quantize,

@@ -1,0 +1,105 @@
+From 668114cbfc3537e02d6a676de29a15510d9a4bc4 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 15 Nov 2026 21:45:46 +1100
+Subject: [PATCH] metal: process decode convolution channels across SIMD lanes
+
+---
+ ggml/src/ggml-metal/ggml-metal-ops.cpp |  5 ++++-
+ ggml/src/ggml-metal/kernels/ssm.metal  | 10 ++++++++--
+ tests/test-backend-ops.cpp             |  3 +++
+ tests/test-backend-ssm-conv-channels.h | 18 ++++++++++++++++++
+ 4 files changed, 33 insertions(+), 3 deletions(-)
+ create mode 100644 tests/test-backend-ssm-conv-channels.h
+
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 70aedecb6..c08fff34e 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -1900,7 +1900,10 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
+         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+         ggml_metal_encoder_set_buffer(enc, bid_dst, 3);
+ 
+-        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne1, ne02, 1, 1, 1);
++        // Each SIMD lane computes an independent channel.
++        constexpr int channels_per_group = 32;
++        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + channels_per_group - 1)/channels_per_group,
++                ne1, ne02, channels_per_group, 1, 1);
+     }
+ 
+     if (n_fuse > 1 && ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
+diff --git a/ggml/src/ggml-metal/kernels/ssm.metal b/ggml/src/ggml-metal/kernels/ssm.metal
+index b21c53b74..882be2b0f 100644
+--- a/ggml/src/ggml-metal/kernels/ssm.metal
++++ b/ggml/src/ggml-metal/kernels/ssm.metal
+@@ -12,7 +12,10 @@ kernel void kernel_ssm_conv_f32_f32(
+         uint3 tgpig[[threadgroup_position_in_grid]],
+         uint3 tpitg[[thread_position_in_threadgroup]],
+         uint3   ntg[[threads_per_threadgroup]]) {
+-    const int64_t ir = tgpig.x;
++    const int64_t ir = tgpig.x*ntg.x + tpitg.x;
++    if (ir >= args.ne01) {
++        return;
++    }
+     const int64_t i2 = tgpig.y;
+     const int64_t i3 = tgpig.z;
+ 
+@@ -43,7 +46,10 @@ kernel void kernel_ssm_conv_f32_f32_4(
+         uint3 tgpig[[threadgroup_position_in_grid]],
+         uint3 tpitg[[thread_position_in_threadgroup]],
+         uint3   ntg[[threads_per_threadgroup]]) {
+-    const int64_t ir = tgpig.x;
++    const int64_t ir = tgpig.x*ntg.x + tpitg.x;
++    if (ir >= args.ne01) {
++        return;
++    }
+     const int64_t i2 = tgpig.y;
+     const int64_t i3 = tgpig.z;
+ 
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 463123c0f..a7435a252 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -4862,6 +4862,8 @@ struct test_ssm_conv_bias_silu : public test_case {
+     }
+ };
+ 
++#include "test-backend-ssm-conv-channels.h"
++
+ // GGML_OP_SSM_SCAN
+ struct test_ssm_scan : public test_case {
+     const ggml_type type;
+@@ -10537,6 +10539,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+         return make_portable_routed_cases();
+     }
+     std::vector<std::unique_ptr<test_case>> test_cases;
++    append_ssm_conv_channel_cases(test_cases);
+     std::default_random_engine rng(0);
+ 
+     // unary ops
+diff --git a/tests/test-backend-ssm-conv-channels.h b/tests/test-backend-ssm-conv-channels.h
+new file mode 100644
+index 000000000..6f4f90d56
+--- /dev/null
++++ b/tests/test-backend-ssm-conv-channels.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++// Included after the SSM convolution test classes in test-backend-ops.cpp.
++// Exercise partial channel groups, scalar/float4 kernel widths, sequences,
++// and the fused/non-fused SiLU paths against the CPU reference.
++static void append_ssm_conv_channel_cases(std::vector<std::unique_ptr<test_case>> & cases) {
++    for (int64_t channels : { 1, 7, 31, 32, 33, 127, 129, 8192, 12288 }) {
++        for (int64_t width : { 3, 4, 5, 8 }) {
++            for (int64_t sequences : { 1, 3 }) {
++                const std::array<int64_t, 4> input = { width, channels, sequences, 1 };
++                const std::array<int64_t, 4> kernel = { width, channels, 1, 1 };
++                cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, input, kernel));
++                cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, input, kernel, false));
++                cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, input, kernel, true));
++            }
++        }
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+

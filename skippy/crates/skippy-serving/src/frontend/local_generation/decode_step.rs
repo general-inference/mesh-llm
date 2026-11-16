@@ -100,6 +100,12 @@ impl StageOpenAiBackend {
             )
         };
         state.current = predicted;
+        if let Some(dflash) = state.dflash.as_mut() {
+            dflash.finish_serial_compute(
+                self.generation_limit.generation_load(),
+                token_runtime_lock_hold_ms * 1000.0 / token_batch_size.max(1) as f64,
+            );
+        }
         if native_mtp_draft
             .as_ref()
             .is_some_and(|draft: &NativeMtpDraft| {

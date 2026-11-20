@@ -139,7 +139,8 @@ curl -s http://localhost:9337/v1/chat/completions \
 
 When one node cannot fit the model, use Skippy layer splits — same mesh
 mechanics plus `--split` and a layer-package model on every serving node. See
-`skippy/docs/SKIPPY_SPLITS.md`; diagnose readiness with `mesh-llm doctor split`.
+the layer-split guidance in the Skippy repository pinned in root `Cargo.toml`;
+diagnose Mesh readiness with `mesh-llm doctor split`.
 
 ## Ownership / trust (private deployments)
 

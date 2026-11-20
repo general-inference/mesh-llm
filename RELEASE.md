@@ -24,8 +24,13 @@ An entry is removed in the same change that closes it.
 
 - **Windows inference.** The packaged Windows host is version-checked but not
   run against a model.
-- **Host import policy.** Only the Linux glibc floor is checked. The
-  per-platform allowed-imports report is gone.
+- **Host import check.** `scripts/check-host-imports.sh` refuses a host that
+  links CUDA, ROCm, Vulkan, Metal, ggml or llama, or that needs a newer glibc
+  than the Linux floor, and writes `host-imports.json` into the archive with
+  the SHA-256 of the signed host. A report exists only for a host that passed,
+  so its `rejected_imports` is always empty. Its macOS branch has run on a real host. The
+  Linux branch has run only against stubbed tools. Nothing has run on Windows,
+  including the call from `package-release.ps1`.
 - **Docker images and npm.** The handoff to `Mesh-LLM/mesh-packaging` is off.
   That repository reads `native-runtimes.json` and the GPU archives from the
   MeshLLM release, which no longer has them. Its identity-bound dispatch and
@@ -62,8 +67,10 @@ just release v0.81.0 --canary   # rehearsal: builds, packages and smokes; pushes
 2. **Builds each platform.** It downloads that platform's default runtime with
    MeshLLM's own installer, builds the host with `just release-build`, signs
    and packages it with `just release-bundle`, then unpacks the archive it will
-   publish and checks the signature, the signed commit and target, the Linux
-   glibc floor, and (except on Windows) a real inference request.
+   publish and checks the signature, the signed commit and target, that the
+   host links no inference backend and stays within the Linux glibc floor,
+   that `host-imports.json` in the archive describes that exact host, and
+   (except on Windows) a real inference request.
 3. **Builds the SDKs**, each in its own job: the Swift XCFramework and
    `Package.swift`, the Kotlin native library for three targets, and the Node
    addon for four.

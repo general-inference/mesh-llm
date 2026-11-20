@@ -233,6 +233,7 @@ resolve_release_target() {
             ;;
     esac
 
+    HOST_TARGET_TRIPLE="$TARGET_TRIPLE"
     STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
     TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
@@ -247,7 +248,7 @@ versioned_asset_name() {
 }
 
 release_attestation() {
-    (cd "$REPO_ROOT" && cargo run --locked --quiet -p mesh-llm-release-footer --bin mesh-llm-release-attestation -- "$@")
+    (cd "$REPO_ROOT" && cargo run --locked --quiet -p mesh-llm-release-attestation -- "$@")
 }
 
 stamp_bundle_binary() {
@@ -265,7 +266,11 @@ stamp_bundle_binary() {
         echo "Release attestation: key file empty or missing; packaged binary left unstamped" >&2
         return 0
     fi
-    release_attestation stamp --binary "$binary_path" --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" >/dev/null
+    # A signed stamp must name the commit it was built from. MESH_RELEASE_COMMIT
+    # overrides the checkout's HEAD; an unknown commit is refused, not invented.
+    local stamp_args=(--binary "$binary_path" --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" --require-source-commit --target-triple "$HOST_TARGET_TRIPLE")
+    [[ -z "${MESH_RELEASE_COMMIT:-}" ]] || stamp_args+=(--commit "$MESH_RELEASE_COMMIT")
+    release_attestation stamp "${stamp_args[@]}" >/dev/null
     local status
     status="$(release_attestation inspect --binary "$binary_path" --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" --json | jq -r '.status')"
     if [[ "$status" != "valid" ]]; then

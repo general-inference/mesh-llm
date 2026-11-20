@@ -23,7 +23,7 @@ Examples here are for solo serving — don't read this in isolation:
 - `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
 - `mesh/docs/USAGE.md` — install details, service mode, model storage
 - `mesh/docs/CLI.md` — full command and model-ref reference
-- `skippy/docs/SKIPPY_SPLITS.md` — splitting big models across nodes
+- The Skippy repository pinned in root `Cargo.toml` — native layer-split guidance
 
 ## The one rule that matters most
 

@@ -1,10 +1,3 @@
-# Build the local product, then exercise the embedded console against a real
-# isolated mesh-llm process. The harness owns and verifies its cleanup.
-[unix]
-qa-logging-console-e2e:
-    @just build
-    @scripts/qa-logging-console-e2e.sh --current-binary ./target/debug/mesh-llm
-
 [unix]
 bootstrap-build-tools:
     @scripts/bootstrap-build-tools
@@ -40,44 +33,25 @@ with-lld *COMMAND:
     exit $LASTEXITCODE
 
 
-# Build both local products for the current platform: Skippy, then MeshLLM.
-# The MeshLLM host stays backend-neutral beside Skippy's packaged runtime.
-[macos]
-build backend="" cuda_arch="" rocm_arch="":
-    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
+# Build the MeshLLM host and console. Skippy is external: link a checkout with
+# scripts/skippy-source.sh and supply its packaged runtime at run time.
+[unix]
+build:
+    @scripts/build-host.sh --profile debug
 
-# Fast local iteration build: dynamic host + adjacent native runtime + UI.
-[macos]
+# Fast local iteration build.
+[unix]
 build-dev:
-    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev
+    @scripts/build-host.sh --profile dev
 
-# Linux overrides:
-#   just build backend=cpu
-#   just build backend=cuda cuda_arch='120;86'
-#   just build backend=rocm rocm_arch='gfx942;gfx90a'
-# just build backend=vulkan
-[linux]
-build backend="" cuda_arch="" rocm_arch="":
-    @just automation-run ci-ops build-cache build -- scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
-
-# Fast local iteration build: dynamic host + adjacent native runtime + UI.
-[linux]
-build-dev backend="" cuda_arch="" rocm_arch="":
-    @just automation-run ci-ops build-cache build -- env MESH_LLM_BUILD_PROFILE=dev scripts/build-development-product.sh --profile dev --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
-
-# Windows overrides:
-#   just build backend=cpu
-#   just build backend=cuda cuda_arch='120;86'
-#   just build backend=rocm rocm_arch='gfx942;gfx90a'
-# just build backend=vulkan
 [windows]
-build backend="" cuda_arch="" rocm_arch="":
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -CudaArch "{{ cuda_arch }}" -RocmArch "{{ rocm_arch }}" -DynamicHost
+build:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
-# Fast local iteration build: dynamic host + adjacent native runtime + UI.
+# Fast local iteration build.
 [windows]
-build-dev backend="" cuda_arch="" rocm_arch="":
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:MESH_LLM_BUILD_PROFILE='dev'; & './scripts/build-windows.ps1' -Backend '{{ backend }}' -CudaArch '{{ cuda_arch }}' -RocmArch '{{ rocm_arch }}' -DynamicHost"
+build-dev:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -BuildProfile dev
 
 # Build the installable host-private OpenAI lifecycle observer exemplar.
 build-openai-exchange-exemplar message_format="human":
